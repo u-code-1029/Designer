@@ -4,6 +4,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       xmlns:converters="clr-namespace:DrillFlow.Desktop.Converters"
+      xmlns:behaviors="clr-namespace:DrillFlow.Desktop.Behaviors"
       xmlns:workflow="clr-namespace:DrillFlow.Core.Workflows;assembly=DrillFlow.Core"
       Background="{StaticResource DrillCanvasBrush}"
       ShowsNavigationUI="False"
@@ -56,6 +57,9 @@
                                  Margin="8,0,0,0"
                                  IsEnabled="{Binding IsEditingEnabled}"
                                  Text="{Binding Condition.Value, UpdateSourceTrigger=PropertyChanged}"
+                                 behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
+                                 behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                 behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
                                  GotKeyboardFocus="Parameter_GotKeyboardFocus" />
                     </Grid>
 
@@ -63,6 +67,9 @@
                                   ItemTemplate="{DynamicResource WorkflowActionTemplate}" />
                     <Border Style="{StaticResource InsertionMarkerStyle}"
                             Tag="{Binding Children}"
+                            MouseEnter="InsertionMarker_MouseEnter"
+                            MouseLeave="InsertionMarker_MouseLeave"
+                            MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
                             DragEnter="DropZone_DragEnter"
                             DragOver="DropZone_DragOver"
                             DragLeave="DropZone_DragLeave"
@@ -80,22 +87,80 @@
             <StackPanel>
                 <Border Style="{StaticResource InsertionMarkerStyle}"
                         Tag="{Binding}"
+                        MouseEnter="InsertionMarker_MouseEnter"
+                        MouseLeave="InsertionMarker_MouseLeave"
+                        MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
                         DragEnter="DropZone_DragEnter"
                         DragOver="DropZone_DragOver"
                         DragLeave="DropZone_DragLeave"
                         Drop="DropZone_Drop" />
 
                 <Border Style="{StaticResource ActionCardBorderStyle}"
+                        Focusable="True"
                         MouseLeftButtonDown="ActionCard_MouseLeftButtonDown">
+                    <Border.ContextMenu>
+                        <ContextMenu Opened="ActionContextMenu_Opened">
+                            <MenuItem Header="{DynamicResource RunOnlyAction}"
+                                      Command="{Binding RunSelectedCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Play20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="{DynamicResource ResponseTest}"
+                                      Command="{Binding TestResponseCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="DocumentArrowDown20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <Separator />
+                            <MenuItem Header="{DynamicResource CopyAction}"
+                                      InputGestureText="Ctrl+C"
+                                      Command="{Binding CopySelectedCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Copy20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="{DynamicResource CutAction}"
+                                      InputGestureText="Ctrl+X"
+                                      Command="{Binding CutSelectedCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Cut20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="{DynamicResource PasteAction}"
+                                      InputGestureText="Ctrl+V"
+                                      Command="{Binding PasteCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="ClipboardPaste20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <Separator />
+                            <MenuItem Header="{DynamicResource DeleteAction}"
+                                      InputGestureText="Delete"
+                                      Command="{Binding DeleteSelectedCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Delete20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <Separator />
+                            <MenuItem Header="{DynamicResource ActionEnabled}"
+                                      IsCheckable="True"
+                                      IsChecked="{Binding SelectedAction.IsNodeEnabled, Mode=OneWay}"
+                                      Command="{Binding ToggleEnabledCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="CheckmarkCircle20" /></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="{DynamicResource Breakpoint}"
+                                      InputGestureText="F9"
+                                      IsCheckable="True"
+                                      IsChecked="{Binding SelectedAction.HasBreakpoint, Mode=OneWay}"
+                                      Command="{Binding ToggleBreakpointCommand}">
+                                <MenuItem.Icon><ui:SymbolIcon Symbol="Record20" /></MenuItem.Icon>
+                            </MenuItem>
+                        </ContextMenu>
+                    </Border.ContextMenu>
                     <StackPanel>
                         <Grid>
                             <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="22" />
                                 <ColumnDefinition Width="28" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0"
+                            <ui:SymbolIcon Grid.Column="0"
+                                           Symbol="Record20"
+                                           HorizontalAlignment="Left"
+                                           Foreground="{StaticResource DrillDangerBrush}"
+                                           Visibility="{Binding HasBreakpoint, Converter={StaticResource BoolToVisibility}}"
+                                           ToolTip="{DynamicResource Breakpoint}" />
+                            <Border Grid.Column="1"
                                     Background="Transparent"
                                     IsEnabled="{Binding IsEditingEnabled}"
                                     Cursor="SizeAll"
@@ -107,20 +172,15 @@
                                                Foreground="{StaticResource DrillAccentBrush}"
                                                IsHitTestVisible="False" />
                             </Border>
-                            <StackPanel Grid.Column="1">
+                            <StackPanel Grid.Column="2">
                                 <TextBlock Text="{Binding Alias}" FontWeight="SemiBold" Foreground="{StaticResource DrillTextBrush}" />
                                 <TextBlock Text="{Binding Title}" Style="{StaticResource CaptionTextStyle}" />
                             </StackPanel>
-                            <TextBlock Grid.Column="2"
+                            <TextBlock Grid.Column="3"
                                        Text="{Binding RuntimeStateText}"
                                        VerticalAlignment="Center"
                                        Foreground="{StaticResource DrillSecondaryTextBrush}"
                                        Margin="8,0" />
-                            <ui:SymbolIcon Grid.Column="3"
-                                           Symbol="Record20"
-                                           Foreground="{StaticResource DrillDangerBrush}"
-                                           Visibility="{Binding HasBreakpoint, Converter={StaticResource BoolToVisibility}}"
-                                           ToolTip="{DynamicResource Breakpoint}" />
                         </Grid>
 
                         <Border x:Name="RepeatBody"
@@ -135,6 +195,9 @@
                                               ItemTemplate="{DynamicResource WorkflowActionTemplate}" />
                                 <Border Style="{StaticResource InsertionMarkerStyle}"
                                         Tag="{Binding Children}"
+                                        MouseEnter="InsertionMarker_MouseEnter"
+                                        MouseLeave="InsertionMarker_MouseLeave"
+                                        MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
                                         DragEnter="DropZone_DragEnter"
                                         DragOver="DropZone_DragOver"
                                         DragLeave="DropZone_DragLeave"
@@ -164,6 +227,9 @@
                 <TextBlock Text="{Binding Label}" Style="{StaticResource FieldLabelStyle}" />
                 <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
                          IsEnabled="{Binding IsEditingEnabled}"
+                         behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
+                         behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                         behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
                          GotKeyboardFocus="Parameter_GotKeyboardFocus" />
                 <TextBlock Text="{Binding ValidationMessage}"
                            Foreground="{StaticResource DrillDangerBrush}"
@@ -182,22 +248,43 @@
                     Padding="10"
                     Margin="0,0,0,8">
                 <StackPanel>
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,0,8">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{DynamicResource ResultIteration}" FontWeight="SemiBold" />
-                            <TextBlock Text=": " FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding IterationPath}" FontWeight="SemiBold" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <TextBlock Text="{Binding IndexExpressionPath}" Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text=" (" Style="{StaticResource CaptionTextStyle}" />
                             <TextBlock Text="{DynamicResource ResultCorrelation}" Style="{StaticResource CaptionTextStyle}" />
-                            <TextBlock Text=": " Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text="): " Style="{StaticResource CaptionTextStyle}" />
                             <TextBlock Text="{Binding CorrelationId}" Style="{StaticResource CaptionTextStyle}" />
                         </StackPanel>
-                    </Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding IterationPathExpressionPath}" FontWeight="SemiBold" />
+                            <TextBlock Text=" (" FontWeight="SemiBold" />
+                            <TextBlock Text="{DynamicResource ResultIteration}" FontWeight="SemiBold" />
+                            <TextBlock Text="): " FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding IterationPath}" FontWeight="SemiBold" />
+                        </StackPanel>
+                    </StackPanel>
+                    <ItemsControl ItemsSource="{Binding Fields}" Margin="0,0,0,8">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,0,0,8">
+                                    <TextBlock Text="{Binding Label}"
+                                               Style="{StaticResource FieldLabelStyle}"
+                                               TextWrapping="Wrap" />
+                                    <TextBox Text="{Binding Value}"
+                                             IsReadOnly="True"
+                                             FontFamily="Consolas"
+                                             FontSize="11"
+                                             TextWrapping="Wrap"
+                                             MaxHeight="100"
+                                             VerticalScrollBarVisibility="Auto"
+                                             HorizontalScrollBarVisibility="Auto" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{DynamicResource ResultValues}"
+                               Style="{StaticResource FieldLabelStyle}" />
                     <TextBox Text="{Binding ValuesJson}"
                              IsReadOnly="True"
                              FontFamily="Consolas"
@@ -273,8 +360,12 @@
                         <ui:Button Command="{Binding ToggleBreakpointCommand}" ToolTip="{DynamicResource ToggleBreakpoint}" Margin="0,0,4,0">
                             <ui:Button.Icon><ui:SymbolIcon Symbol="Record24" /></ui:Button.Icon>
                         </ui:Button>
-                        <ui:Button Command="{Binding ClearBreakpointsCommand}" ToolTip="{DynamicResource ClearBreakpoints}">
+                        <ui:Button Command="{Binding ClearBreakpointsCommand}" ToolTip="{DynamicResource ClearBreakpoints}" Margin="0,0,4,0">
                             <ui:Button.Icon><ui:SymbolIcon Symbol="DeleteDismiss24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <ui:Button Command="{Binding TestResponseCommand}" ToolTip="{DynamicResource ResponseTest}">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentArrowDown20" /></ui:Button.Icon>
                         </ui:Button>
                     </StackPanel>
                 </ScrollViewer>
@@ -334,18 +425,22 @@
                                     </StackPanel>
                                 </Border>
 
-                                <Border Style="{StaticResource InsertionMarkerStyle}"
-                                        Tag="{Binding Actions}"
+                                <Border Tag="{Binding Actions}"
+                                        MinHeight="180"
+                                        Margin="4,10"
+                                        Padding="20"
+                                        AllowDrop="True"
+                                        Background="Transparent"
+                                        BorderBrush="{StaticResource DrillBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
                                         DragEnter="DropZone_DragEnter"
                                         DragOver="DropZone_DragOver"
-                                        DragLeave="DropZone_DragLeave"
-                                        Drop="DropZone_Drop" />
-
-                                <TextBlock Text="{DynamicResource EmptyWorkflow}"
-                                           TextAlignment="Center"
-                                           Margin="20">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                                        DragLeave="EmptyDropSurface_DragLeave"
+                                        Drop="DropZone_Drop">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Actions.Count}" Value="0">
@@ -353,13 +448,26 @@
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
+                                    </Border.Style>
+                                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="ArrowDownload24"
+                                                       FontSize="26"
+                                                       Foreground="{StaticResource DrillAccentBrush}"
+                                                       HorizontalAlignment="Center"
+                                                       Margin="0,0,0,8" />
+                                        <TextBlock Text="{DynamicResource EmptyWorkflow}"
+                                                   Style="{StaticResource CaptionTextStyle}"
+                                                   TextAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
 
                                 <ItemsControl ItemsSource="{Binding Actions}" ItemTemplate="{StaticResource WorkflowActionTemplate}" />
 
                                 <Border Style="{StaticResource InsertionMarkerStyle}"
                                         Tag="{Binding Actions}"
+                                        MouseEnter="InsertionMarker_MouseEnter"
+                                        MouseLeave="InsertionMarker_MouseLeave"
+                                        MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
                                         DragEnter="DropZone_DragEnter"
                                         DragOver="DropZone_DragOver"
                                         DragLeave="DropZone_DragLeave"
@@ -396,7 +504,9 @@
                         <ScrollViewer VerticalScrollBarVisibility="Auto"
                                       Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
                             <StackPanel DataContext="{Binding SelectedAction}">
-                                <TextBlock Text="{DynamicResource Parameters}" Style="{StaticResource SectionTitleStyle}" />
+                                <TextBlock Text="{Binding ParameterObjectLabel}"
+                                           Style="{StaticResource SectionTitleStyle}"
+                                           TextWrapping="Wrap" />
                                 <TextBlock Text="{DynamicResource Alias}" Style="{StaticResource FieldLabelStyle}" />
                                 <TextBox Text="{Binding Alias, UpdateSourceTrigger=PropertyChanged}"
                                          IsEnabled="{Binding IsEditingEnabled}"
@@ -448,7 +558,10 @@
                                    VerticalAlignment="Center"
                                    Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
                         <DockPanel Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
-                            <TextBlock DockPanel.Dock="Top" Text="{DynamicResource Results}" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock DockPanel.Dock="Top"
+                                       Text="{Binding SelectedAction.ResultObjectLabel}"
+                                       Style="{StaticResource SectionTitleStyle}"
+                                       TextWrapping="Wrap" />
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel>
                                     <TextBlock Text="{DynamicResource NoResults}"

@@ -33,7 +33,9 @@ public sealed class ActionParameterViewModel : ObservableObject
 
     public string LabelKey { get; }
 
-    public string Label => _localization[LabelKey];
+    public string Description => _localization[LabelKey];
+
+    public string Label => Name + " (" + Description + ")";
 
     public string Value
     {

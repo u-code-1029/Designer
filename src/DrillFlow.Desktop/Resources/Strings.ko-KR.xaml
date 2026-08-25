@@ -34,10 +34,18 @@
     <system:String x:Key="NoResults">현재 Run의 결과가 없습니다.</system:String>
     <system:String x:Key="Alias">별칭</system:String>
     <system:String x:Key="Value">값 또는 Expression</system:String>
-    <system:String x:Key="ExpressionHint">'='로 시작하면 이전 Action의 값을 참조하는 Expression입니다.</system:String>
+    <system:String x:Key="ExpressionHint">'='로 시작하면 이전 Action의 값을 참조하는 Expression입니다. 입력 중 Ctrl+Space를 누르면 사용 가능한 객체와 멤버를 볼 수 있습니다.</system:String>
     <system:String x:Key="Breakpoint">브레이크포인트</system:String>
     <system:String x:Key="ActionEnabled">활성화</system:String>
     <system:String x:Key="DeleteAction">Action 삭제</system:String>
+    <system:String x:Key="RunOnlyAction">이 Action만 실행</system:String>
+    <system:String x:Key="CopyAction">Action 복사</system:String>
+    <system:String x:Key="CutAction">Action 잘라내기</system:String>
+    <system:String x:Key="PasteAction">선택한 위치에 붙여넣기</system:String>
+    <system:String x:Key="SelectInsertionPosition">클릭하여 붙여넣을 위치 선택</system:String>
+    <system:String x:Key="ActionCopied">{0}을(를) 복사했습니다.</system:String>
+    <system:String x:Key="ActionPasted">{0}을(를) 붙여넣었습니다.</system:String>
+    <system:String x:Key="ClipboardInvalid">복사한 Action 데이터를 읽을 수 없습니다.</system:String>
     <system:String x:Key="AddElseIf">Else if 추가</system:String>
     <system:String x:Key="AddElse">Else 추가</system:String>
     <system:String x:Key="RuntimeStatus">실행 상태</system:String>
@@ -113,6 +121,11 @@
     <system:String x:Key="ResultIteration">반복 경로</system:String>
     <system:String x:Key="ResultCorrelation">Correlation ID</system:String>
     <system:String x:Key="ResultValues">결과 값</system:String>
+    <system:String x:Key="ResultCommandDescription">장비 응답 명령</system:String>
+    <system:String x:Key="ResultPositionXDescription">동작 후 X 위치 (m)</system:String>
+    <system:String x:Key="ResultPositionYDescription">동작 후 Y 위치 (m)</system:String>
+    <system:String x:Key="ResultMeasuredDistanceDescription">측정된 철판과 드릴 헤드 사이 거리 (m)</system:String>
+    <system:String x:Key="ResultValueDescription">장비가 반환한 결과 값</system:String>
     <system:String x:Key="RequestJson">Request JSON</system:String>
     <system:String x:Key="ResponseJson">Response JSON</system:String>
     <system:String x:Key="Browse">찾아보기</system:String>
@@ -121,4 +134,17 @@
     <system:String x:Key="UnsavedChangesPrompt">변경 내용을 저장하시겠습니까?&#10;예: 저장 / 아니요: 버리기 / 취소: 돌아가기</system:String>
     <system:String x:Key="ValidationIssueSummary">유효성 오류 {0}개: {1}</system:String>
     <system:String x:Key="SettingsBusy">워크플로 실행 중에는 통신 설정을 변경할 수 없습니다.</system:String>
+    <system:String x:Key="ResponseTest">Response 테스트</system:String>
+    <system:String x:Key="ResponseTestTitle">장비 Response 파일 테스트</system:String>
+    <system:String x:Key="ResponseTestPublish">Response 생성</system:String>
+    <system:String x:Key="ResponseTestAction">선택 Action</system:String>
+    <system:String x:Key="ResponseTestActiveRequest">감지된 Request 파일</system:String>
+    <system:String x:Key="ResponseTestActiveRequestValue">Index {0}, command: {1}</system:String>
+    <system:String x:Key="ResponseTestNoActiveRequest">Request 파일이 감지되지 않았습니다 — 아래 index를 직접 확인하세요.</system:String>
+    <system:String x:Key="ResponseTestFormat">데이터 형식</system:String>
+    <system:String x:Key="ResponseTestDestination">생성할 Response 파일</system:String>
+    <system:String x:Key="ResponseTestPayload">Response 내용 (index와 동적 결과값을 편집할 수 있습니다)</system:String>
+    <system:String x:Key="ResponseTestPublished">Response 테스트 파일을 생성했습니다.</system:String>
+    <system:String x:Key="ResponseTestFailed">Response 테스트 파일을 생성하지 못했습니다.</system:String>
+    <system:String x:Key="ForceStopping">실행을 즉시 강제 종료하고 있습니다.</system:String>
 </ResourceDictionary>

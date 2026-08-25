@@ -34,10 +34,18 @@
     <system:String x:Key="NoResults">No result is available for the current run.</system:String>
     <system:String x:Key="Alias">Alias</system:String>
     <system:String x:Key="Value">Value or expression</system:String>
-    <system:String x:Key="ExpressionHint">A value beginning with '=' references a previous Action.</system:String>
+    <system:String x:Key="ExpressionHint">A value beginning with '=' references a previous Action. Press Ctrl+Space while editing to list available objects and members.</system:String>
     <system:String x:Key="Breakpoint">Breakpoint</system:String>
     <system:String x:Key="ActionEnabled">Enabled</system:String>
     <system:String x:Key="DeleteAction">Delete Action</system:String>
+    <system:String x:Key="RunOnlyAction">Run only this Action</system:String>
+    <system:String x:Key="CopyAction">Copy Action</system:String>
+    <system:String x:Key="CutAction">Cut Action</system:String>
+    <system:String x:Key="PasteAction">Paste at selected position</system:String>
+    <system:String x:Key="SelectInsertionPosition">Click to select the paste position</system:String>
+    <system:String x:Key="ActionCopied">Copied {0}.</system:String>
+    <system:String x:Key="ActionPasted">Pasted {0}.</system:String>
+    <system:String x:Key="ClipboardInvalid">The copied Action data cannot be read.</system:String>
     <system:String x:Key="AddElseIf">Add else if</system:String>
     <system:String x:Key="AddElse">Add else</system:String>
     <system:String x:Key="RuntimeStatus">Runtime status</system:String>
@@ -113,6 +121,11 @@
     <system:String x:Key="ResultIteration">Iteration path</system:String>
     <system:String x:Key="ResultCorrelation">Correlation ID</system:String>
     <system:String x:Key="ResultValues">Result values</system:String>
+    <system:String x:Key="ResultCommandDescription">Equipment response command</system:String>
+    <system:String x:Key="ResultPositionXDescription">X position after the action (m)</system:String>
+    <system:String x:Key="ResultPositionYDescription">Y position after the action (m)</system:String>
+    <system:String x:Key="ResultMeasuredDistanceDescription">Measured plate-to-drill-head distance (m)</system:String>
+    <system:String x:Key="ResultValueDescription">Value returned by the equipment</system:String>
     <system:String x:Key="RequestJson">Request JSON</system:String>
     <system:String x:Key="ResponseJson">Response JSON</system:String>
     <system:String x:Key="Browse">Browse</system:String>
@@ -121,4 +134,17 @@
     <system:String x:Key="UnsavedChangesPrompt">Save your changes?&#10;Yes: Save / No: Discard / Cancel: Go back</system:String>
     <system:String x:Key="ValidationIssueSummary">{0} validation error(s): {1}</system:String>
     <system:String x:Key="SettingsBusy">Communication settings cannot be changed while a workflow is running.</system:String>
+    <system:String x:Key="ResponseTest">Test response</system:String>
+    <system:String x:Key="ResponseTestTitle">Test equipment response file</system:String>
+    <system:String x:Key="ResponseTestPublish">Publish response</system:String>
+    <system:String x:Key="ResponseTestAction">Selected action</system:String>
+    <system:String x:Key="ResponseTestActiveRequest">Detected request file</system:String>
+    <system:String x:Key="ResponseTestActiveRequestValue">Index {0}, command: {1}</system:String>
+    <system:String x:Key="ResponseTestNoActiveRequest">No request file was detected — verify the index below manually.</system:String>
+    <system:String x:Key="ResponseTestFormat">Payload format</system:String>
+    <system:String x:Key="ResponseTestDestination">Response file to publish</system:String>
+    <system:String x:Key="ResponseTestPayload">Response payload (you can edit the index and dynamic result values)</system:String>
+    <system:String x:Key="ResponseTestPublished">The simulated response file was published.</system:String>
+    <system:String x:Key="ResponseTestFailed">The simulated response file could not be published.</system:String>
+    <system:String x:Key="ForceStopping">Force-stopping the workflow now.</system:String>
 </ResourceDictionary>

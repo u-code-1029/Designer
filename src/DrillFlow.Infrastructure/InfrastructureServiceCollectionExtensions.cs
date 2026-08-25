@@ -75,6 +75,7 @@ public static class InfrastructureServiceCollectionExtensions
             CorrelationIdStoreOptionsValidator>();
         services.AddSingleton<ICorrelationIdProvider, PersistentCorrelationIdProvider>();
         services.AddSingleton<IEquipmentFileTransport, FileEquipmentTransport>();
+        services.AddSingleton<IEquipmentResponseSimulator, JsonEquipmentResponseSimulator>();
         services.AddSingleton<IWorkflowDocumentSerializer, JsonWorkflowDocumentSerializer>();
         return services;
     }

@@ -18,6 +18,7 @@ public sealed class WorkflowRunner : IWorkflowRunner
     private const int CooperativeYieldInterval = 256;
 
     private readonly object _sync = new object();
+    private readonly object _stateTransitionSync = new object();
     private readonly IEquipmentFileTransport _transport;
     private readonly ICorrelationIdProvider _correlationIds;
     private readonly ExpressionEngine _expressions;
@@ -267,16 +268,16 @@ public sealed class WorkflowRunner : IWorkflowRunner
             forceStopSource = _forceStopSource;
         }
 
+        // Publish Stopping before cancellation can complete the run. ChangeState serializes
+        // state notifications and refuses a terminal-to-Stopping regression if normal completion
+        // won the race.
+        ChangeState(WorkflowRunState.Stopping, "Force-stopping workflow.");
+
         // Cancel outside the runner lock. Cancellation callbacks are allowed to execute
         // synchronously and may themselves query runner state.
-        localStopSource?.Cancel();
-        forceStopSource?.Cancel();
+        TryCancel(localStopSource);
+        TryCancel(forceStopSource);
         pauseSource?.TrySetCanceled();
-
-        if (State != WorkflowRunState.Stopping)
-        {
-            ChangeState(WorkflowRunState.Stopping, "Force-stopping workflow.");
-        }
     }
 
     private async Task<SequenceOutcome> ExecuteSequenceAsync(
@@ -834,21 +835,26 @@ public sealed class WorkflowRunner : IWorkflowRunner
 
     private void ChangeState(WorkflowRunState state, string? message = null, Exception? exception = null)
     {
-        WorkflowRunState previous;
-        lock (_sync)
+        lock (_stateTransitionSync)
         {
-            previous = _state;
-            if (previous == state)
+            WorkflowRunState previous;
+            lock (_sync)
             {
-                return;
+                previous = _state;
+                if (previous == state
+                    || (state == WorkflowRunState.Stopping
+                        && (!_runActive || IsTerminal(previous))))
+                {
+                    return;
+                }
+
+                _state = state;
             }
 
-            _state = state;
+            RunStateChanged?.Invoke(
+                this,
+                new WorkflowRunStateChangedEventArgs(previous, state, CurrentRunId, message, exception));
         }
-
-        RunStateChanged?.Invoke(
-            this,
-            new WorkflowRunStateChangedEventArgs(previous, state, CurrentRunId, message, exception));
     }
 
     private void RaiseNodeState(
@@ -879,6 +885,19 @@ public sealed class WorkflowRunner : IWorkflowRunner
     private static IReadOnlyDictionary<string, object?> EmptyParameters()
     {
         return new Dictionary<string, object?>();
+    }
+
+    private static void TryCancel(CancellationTokenSource? source)
+    {
+        try
+        {
+            source?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Natural completion can win immediately after ForceStop captures the source. The
+            // terminal state already represents the desired outcome in that race.
+        }
     }
 
     private enum SequenceOutcome

@@ -14,6 +14,7 @@ public partial class MainPage : Page
 {
     private const string DragFormat = "DrillFlow.WorkflowDragPayload";
     private Point _dragStart;
+    private Border? _selectedInsertionMarker;
 
     public MainPage(MainPageViewModel viewModel)
     {
@@ -108,8 +109,22 @@ public partial class MainPage : Page
             return;
         }
 
-        var data = new DataObject(DragFormat, new WorkflowDragPayload(action));
-        DragDrop.DoDragDrop(element, data, DragDropEffects.Move);
+        var copyRequested = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        var data = new DataObject(DragFormat, new WorkflowDragPayload(action, copyRequested));
+        DragDrop.DoDragDrop(element, data, DragDropEffects.Copy | DragDropEffects.Move);
+    }
+
+    private void ActionContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu
+            || menu.PlacementTarget is not FrameworkElement target
+            || target.DataContext is not WorkflowActionViewModel action)
+        {
+            return;
+        }
+
+        ViewModel.SelectAction(action);
+        menu.DataContext = ViewModel;
     }
 
     private static WorkflowActionViewModel? FindNearestAction(DependencyObject? origin)
@@ -183,9 +198,20 @@ public partial class MainPage : Page
 
         if (payload.ExistingAction is not null)
         {
-            e.Effects = ViewModel.MoveAction(payload.ExistingAction, destination, index)
-                ? DragDropEffects.Move
-                : DragDropEffects.None;
+            var copyRequested = payload.CopyRequested
+                                || (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
+            if (copyRequested)
+            {
+                e.Effects = ViewModel.CopyActionTo(payload.ExistingAction, destination, index)
+                    ? DragDropEffects.Copy
+                    : DragDropEffects.None;
+            }
+            else
+            {
+                e.Effects = ViewModel.MoveAction(payload.ExistingAction, destination, index)
+                    ? DragDropEffects.Move
+                    : DragDropEffects.None;
+            }
         }
         else if (payload.Kind is not null)
         {
@@ -200,29 +226,107 @@ public partial class MainPage : Page
 
     private void UpdateDropZone(object sender, DragEventArgs e)
     {
+        var copyRequested = false;
         if (!ViewModel.IsWorkflowEditingEnabled
             || sender is not Border border
             || !TryGetPayload(e, out var payload)
             || !ViewModel.TryResolveDropTarget(border.Tag, out var destination, out _)
-            || (payload.ExistingAction is not null && !ViewModel.CanMoveAction(payload.ExistingAction, destination)))
+            || (payload.ExistingAction is not null
+                && !(copyRequested = payload.CopyRequested
+                    || (e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+                && !ViewModel.CanMoveAction(payload.ExistingAction, destination)))
         {
             e.Effects = DragDropEffects.None;
             return;
         }
 
-        e.Effects = payload.ExistingAction is null ? DragDropEffects.Copy : DragDropEffects.Move;
-        border.Height = 22;
+        e.Effects = payload.ExistingAction is null || copyRequested
+            ? DragDropEffects.Copy
+            : DragDropEffects.Move;
+        if (border.MinHeight < 100)
+        {
+            border.Height = 18;
+        }
+
         border.Background = (Brush)FindResource("DrillAccentSoftBrush");
         border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
-        border.BorderThickness = new Thickness(1);
+        border.BorderThickness = border.MinHeight >= 100
+            ? new Thickness(2)
+            : new Thickness(0, 2, 0, 0);
         e.Handled = true;
     }
 
-    private static void ResetDropZone(Border border)
+    private void ResetDropZone(Border border)
     {
-        border.Height = 12;
+        if (ReferenceEquals(border, _selectedInsertionMarker))
+        {
+            ShowSelectedInsertionMarker(border);
+            return;
+        }
+
+        border.Height = border.MinHeight >= 100 ? double.NaN : 12;
         border.Background = Brushes.Transparent;
-        border.BorderThickness = new Thickness(0);
+        border.BorderBrush = border.MinHeight >= 100
+            ? (Brush)FindResource("DrillBorderBrush")
+            : Brushes.Transparent;
+        border.BorderThickness = border.MinHeight >= 100
+            ? new Thickness(1)
+            : new Thickness(0, 2, 0, 0);
+    }
+
+    private void EmptyDropSurface_DragLeave(object sender, DragEventArgs e)
+    {
+        if (sender is Border border)
+        {
+            ResetDropZone(border);
+        }
+    }
+
+    private void InsertionMarker_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is Border border && !ReferenceEquals(border, _selectedInsertionMarker))
+        {
+            border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
+            border.BorderThickness = new Thickness(0, 2, 0, 0);
+        }
+    }
+
+    private void InsertionMarker_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is Border border && !ReferenceEquals(border, _selectedInsertionMarker))
+        {
+            border.BorderBrush = Brushes.Transparent;
+            border.BorderThickness = new Thickness(0, 2, 0, 0);
+        }
+    }
+
+    private void InsertionMarker_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border border || !ViewModel.SetPasteTarget(border.Tag))
+        {
+            return;
+        }
+
+        if (_selectedInsertionMarker is not null && !ReferenceEquals(_selectedInsertionMarker, border))
+        {
+            ResetDropZone(_selectedInsertionMarker);
+        }
+
+        _selectedInsertionMarker = border;
+        ShowSelectedInsertionMarker(border);
+        e.Handled = true;
+    }
+
+    private void ShowSelectedInsertionMarker(Border border)
+    {
+        border.Height = border.MinHeight >= 100 ? double.NaN : 12;
+        border.Background = border.MinHeight >= 100
+            ? (Brush)FindResource("DrillAccentSoftBrush")
+            : Brushes.Transparent;
+        border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
+        border.BorderThickness = border.MinHeight >= 100
+            ? new Thickness(2)
+            : new Thickness(0, 3, 0, 0);
     }
 
     private static bool TryGetPayload(DragEventArgs e, out WorkflowDragPayload payload)
@@ -245,11 +349,18 @@ public partial class MainPage : Page
 
     private void Parameter_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
+        if (sender is DependencyObject dependencyObject
+            && FindNearestAction(dependencyObject) is { } ownerAction)
+        {
+            ViewModel.SelectAction(ownerAction);
+        }
+
         ViewModel.CaptureUndoCheckpoint();
     }
 
     private void Page_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        var isTextEditorFocused = Keyboard.FocusedElement is TextBoxBase;
         if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S && ViewModel.SaveCommand.CanExecute(null))
         {
             ViewModel.SaveCommand.Execute(null);
@@ -265,7 +376,33 @@ public partial class MainPage : Page
             ViewModel.RedoCommand.Execute(null);
             e.Handled = true;
         }
-        else if (e.Key == Key.Delete && ViewModel.DeleteSelectedCommand.CanExecute(null))
+        else if (!isTextEditorFocused
+                 && Keyboard.Modifiers == ModifierKeys.Control
+                 && e.Key == Key.C
+                 && ViewModel.CopySelectedCommand.CanExecute(null))
+        {
+            ViewModel.CopySelectedCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && Keyboard.Modifiers == ModifierKeys.Control
+                 && e.Key == Key.X
+                 && ViewModel.CutSelectedCommand.CanExecute(null))
+        {
+            ViewModel.CutSelectedCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && Keyboard.Modifiers == ModifierKeys.Control
+                 && e.Key == Key.V
+                 && ViewModel.PasteCommand.CanExecute(null))
+        {
+            ViewModel.PasteCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && e.Key == Key.Delete
+                 && ViewModel.DeleteSelectedCommand.CanExecute(null))
         {
             ViewModel.DeleteSelectedCommand.Execute(null);
             e.Handled = true;
@@ -294,13 +431,16 @@ public partial class MainPage : Page
             Kind = kind;
         }
 
-        public WorkflowDragPayload(WorkflowActionViewModel action)
+        public WorkflowDragPayload(WorkflowActionViewModel action, bool copyRequested)
         {
             ExistingAction = action;
+            CopyRequested = copyRequested;
         }
 
         public WorkflowNodeKind? Kind { get; }
 
         public WorkflowActionViewModel? ExistingAction { get; }
+
+        public bool CopyRequested { get; }
     }
 }

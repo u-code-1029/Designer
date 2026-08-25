@@ -28,6 +28,8 @@
                            Grid.Row="1"
                            HorizontalAlignment="Stretch"
                            VerticalAlignment="Stretch"
+                           HorizontalContentAlignment="Stretch"
+                           VerticalContentAlignment="Stretch"
                            PaneDisplayMode="Left"
                            IsPaneOpen="False"
                            OpenPaneLength="220"
@@ -56,6 +58,7 @@
         </ui:NavigationView>
 
         <ui:ContentDialogHost x:Name="RootContentDialogHost"
+                              IsDisableSiblingsEnabled="True"
                               Grid.RowSpan="2"
                               Panel.ZIndex="100" />
     </Grid>

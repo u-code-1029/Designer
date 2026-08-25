@@ -9,6 +9,7 @@ using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DrillFlow.Application.Execution;
+using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Validation;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Desktop.Services;
@@ -17,13 +18,15 @@ using Wpf.Ui.Controls;
 
 namespace DrillFlow.Desktop.ViewModels;
 
-public sealed class MainPageViewModel : ObservableObject
+public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionSource
 {
     private readonly ILocalizationService _localization;
     private readonly IWorkflowDocumentService _documentService;
     private readonly IWorkflowExecutionFacade _execution;
     private readonly IFileDialogService _fileDialogs;
+    private readonly IResponseSimulationDialogService _responseSimulationDialogs;
     private readonly WorkflowValidator _workflowValidator;
+    private readonly ExpressionCompletionProvider _expressionCompletions = new();
     private readonly ILogger<MainPageViewModel> _logger;
     private readonly Stack<string> _undo = new();
     private readonly Stack<string> _redo = new();
@@ -36,12 +39,16 @@ public sealed class MainPageViewModel : ObservableObject
     private string _statusMessage = string.Empty;
     private bool _statusIsError;
     private TaskCompletionSource<bool>? _terminalStateWaiter;
+    private string? _clipboardSnapshot;
+    private ObservableCollection<WorkflowActionViewModel>? _pasteDestination;
+    private int _pasteIndex;
 
     public MainPageViewModel(
         ILocalizationService localization,
         IWorkflowDocumentService documentService,
         IWorkflowExecutionFacade execution,
         IFileDialogService fileDialogs,
+        IResponseSimulationDialogService responseSimulationDialogs,
         WorkflowValidator workflowValidator,
         ILogger<MainPageViewModel> logger)
     {
@@ -49,6 +56,7 @@ public sealed class MainPageViewModel : ObservableObject
         _documentService = documentService;
         _execution = execution;
         _fileDialogs = fileDialogs;
+        _responseSimulationDialogs = responseSimulationDialogs;
         _workflowValidator = workflowValidator;
         _logger = logger;
 
@@ -77,12 +85,26 @@ public sealed class MainPageViewModel : ObservableObject
         RedoCommand = new RelayCommand(Redo, () => _redo.Count > 0 && IsWorkflowEditingEnabled);
         ValidateCommand = new RelayCommand(() => ValidateWorkflow(true), () => !IsExecutionBusy);
         RunCommand = new AsyncRelayCommand(RunAsync, () => Actions.Count > 0 && IsWorkflowEditingEnabled);
+        RunSelectedCommand = new AsyncRelayCommand(
+            RunSelectedAsync,
+            () => SelectedAction is { IsNodeEnabled: true } && IsWorkflowEditingEnabled);
+        TestResponseCommand = new AsyncRelayCommand(
+            TestResponseAsync,
+            () => SelectedAction is not null && IsEquipmentAction(SelectedAction.Kind));
         ContinueCommand = new RelayCommand(Continue, () => RunState == WorkflowRunState.Paused);
         StepCommand = new RelayCommand(Step, () => RunState == WorkflowRunState.Paused);
-        StopCommand = new RelayCommand(Stop, () => RunState is WorkflowRunState.Running or WorkflowRunState.Paused);
+        StopCommand = new RelayCommand(
+            Stop,
+            () => RunState is WorkflowRunState.Running or WorkflowRunState.Paused or WorkflowRunState.Stopping);
         ToggleBreakpointCommand = new RelayCommand(ToggleBreakpoint, () => SelectedAction is not null && IsWorkflowEditingEnabled);
         ClearBreakpointsCommand = new RelayCommand(ClearBreakpoints, () => EnumerateActions().Any(action => action.HasBreakpoint) && IsWorkflowEditingEnabled);
         DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedAction is not null && IsWorkflowEditingEnabled);
+        CopySelectedCommand = new RelayCommand(CopySelected, () => SelectedAction is not null);
+        CutSelectedCommand = new RelayCommand(CutSelected, () => SelectedAction is not null && IsWorkflowEditingEnabled);
+        PasteCommand = new RelayCommand(Paste, () => _clipboardSnapshot is not null && IsWorkflowEditingEnabled);
+        ToggleEnabledCommand = new RelayCommand(
+            ToggleEnabled,
+            () => SelectedAction is not null && IsWorkflowEditingEnabled);
         AddToolboxItemCommand = new RelayCommand<ToolboxItemViewModel>(AppendToolboxItem, item => item is not null && IsWorkflowEditingEnabled);
         AddElseIfCommand = new RelayCommand(AddElseIf, CanAddElseIf);
         AddElseCommand = new RelayCommand(AddElse, CanAddElse);
@@ -116,6 +138,10 @@ public sealed class MainPageViewModel : ObservableObject
 
     public IAsyncRelayCommand RunCommand { get; }
 
+    public IAsyncRelayCommand RunSelectedCommand { get; }
+
+    public IAsyncRelayCommand TestResponseCommand { get; }
+
     public IRelayCommand ContinueCommand { get; }
 
     public IRelayCommand StepCommand { get; }
@@ -127,6 +153,14 @@ public sealed class MainPageViewModel : ObservableObject
     public IRelayCommand ClearBreakpointsCommand { get; }
 
     public IRelayCommand DeleteSelectedCommand { get; }
+
+    public IRelayCommand CopySelectedCommand { get; }
+
+    public IRelayCommand CutSelectedCommand { get; }
+
+    public IRelayCommand PasteCommand { get; }
+
+    public IRelayCommand ToggleEnabledCommand { get; }
 
     public IRelayCommand<ToolboxItemViewModel> AddToolboxItemCommand { get; }
 
@@ -215,6 +249,8 @@ public sealed class MainPageViewModel : ObservableObject
 
     public bool IsWorkflowEditingEnabled => !IsExecutionBusy && !IsBusyState(_execution.State);
 
+    public bool CanCompleteExpressions => IsWorkflowEditingEnabled;
+
     public string StatusMessage
     {
         get => _statusMessage;
@@ -228,6 +264,38 @@ public sealed class MainPageViewModel : ObservableObject
     }
 
     public void SelectAction(WorkflowActionViewModel? action) => SelectedAction = action;
+
+    public ExpressionCompletionResult GetExpressionCompletions(
+        Guid ownerNodeId,
+        string rawText,
+        int caretIndex)
+    {
+        if (!CanCompleteExpressions)
+        {
+            return ExpressionCompletionResult.Empty(caretIndex);
+        }
+
+        var observedResultMembers = new Dictionary<Guid, IReadOnlyCollection<string>>();
+        foreach (var node in _document.EnumerateNodesDepthFirst())
+        {
+            var names = _execution.Results
+                .GetAll(node.Id)
+                .SelectMany(result => result.Values.Keys)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (names.Length > 0)
+            {
+                observedResultMembers[node.Id] = names;
+            }
+        }
+
+        return _expressionCompletions.GetCompletions(
+            _document,
+            ownerNodeId,
+            rawText,
+            caretIndex,
+            observedResultMembers);
+    }
 
     public async Task<bool> PrepareForCloseAsync()
     {
@@ -358,6 +426,45 @@ public sealed class MainPageViewModel : ObservableObject
         destination = Actions;
         index = Actions.Count;
         return target is null;
+    }
+
+    public bool SetPasteTarget(object? target)
+    {
+        if (!TryResolveDropTarget(target, out var destination, out var index))
+        {
+            return false;
+        }
+
+        _pasteDestination = destination;
+        _pasteIndex = index;
+        NotifyCommandStates();
+        return true;
+    }
+
+    public bool CopyActionTo(
+        WorkflowActionViewModel action,
+        ObservableCollection<WorkflowActionViewModel> destination,
+        int index)
+    {
+        if (!IsWorkflowEditingEnabled
+            || FindCollectionContaining(action) is null
+            || !IsKnownCollection(destination))
+        {
+            return false;
+        }
+
+        CaptureUndoCheckpoint();
+        var clonedNode = WorkflowNodeCopy.CloneForInsertion(
+            action.Model,
+            EnumerateActions().Select(candidate => candidate.Alias));
+        var clone = new WorkflowActionViewModel(clonedNode, _localization);
+        AttachAction(clone);
+        destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), clone);
+        SelectAction(clone);
+        _pasteDestination = destination;
+        _pasteIndex = destination.IndexOf(clone) + 1;
+        IsDirty = true;
+        return true;
     }
 
     private async Task NewAsync()
@@ -614,16 +721,112 @@ public sealed class MainPageViewModel : ObservableObject
         }
     }
 
+    private async Task RunSelectedAsync()
+    {
+        var selected = SelectedAction;
+        if (selected is null || !selected.IsNodeEnabled || !IsWorkflowEditingEnabled)
+        {
+            return;
+        }
+
+        if (!selected.Validate())
+        {
+            StatusMessage = _localization["ValidationFailed"];
+            StatusIsError = true;
+            return;
+        }
+
+        try
+        {
+            // Preserve node ids so execution events and results continue to light up the
+            // cards being inspected, while isolating the runner from editor mutations.
+            var selectionDocument = new WorkflowDocument
+            {
+                Name = selected.Alias,
+                Nodes = new List<WorkflowNode> { selected.Model }
+            };
+            var executionDocument = _documentService.Deserialize(
+                _documentService.Serialize(selectionDocument));
+            foreach (var node in executionDocument.EnumerateNodesDepthFirst())
+            {
+                // "Run only this Action" is an explicit command and must not immediately
+                // stop at an authored breakpoint on the same subtree.
+                node.HasBreakpoint = false;
+            }
+
+            var validation = _workflowValidator.Validate(executionDocument);
+            if (!validation.IsValid)
+            {
+                var issue = validation.Issues.FirstOrDefault(candidate =>
+                    candidate.Severity == ValidationSeverity.Error);
+                StatusMessage = issue is null
+                    ? _localization["ValidationFailed"]
+                    : string.Format(
+                        _localization["ValidationIssueSummary"],
+                        validation.Issues.Count(candidate => candidate.Severity == ValidationSeverity.Error),
+                        FormatValidationDetail(issue));
+                StatusIsError = true;
+                return;
+            }
+
+            foreach (var action in Actions)
+            {
+                action.ClearRuntime();
+            }
+
+            await _execution.RunAsync(executionDocument);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Selected workflow action run failed");
+            StatusMessage = exception.Message;
+            StatusIsError = true;
+            RunState = WorkflowRunState.Faulted;
+        }
+    }
+
     private void Continue() => _execution.Continue();
 
     private void Step() => _execution.Step();
 
     private void Stop()
     {
+        if (RunState == WorkflowRunState.Stopping)
+        {
+            _execution.ForceStop();
+            StatusMessage = _localization["ForceStopping"];
+            StatusIsError = false;
+            return;
+        }
+
         _execution.RequestStop();
         RunState = WorkflowRunState.Stopping;
         StatusMessage = _localization["StatusStopping"];
         StatusIsError = false;
+    }
+
+    private async Task TestResponseAsync()
+    {
+        var selected = SelectedAction;
+        if (selected is null || !IsEquipmentAction(selected.Kind))
+        {
+            return;
+        }
+
+        try
+        {
+            if (await _responseSimulationDialogs.ShowAsync(selected))
+            {
+                StatusMessage = _localization["ResponseTestPublished"];
+                StatusIsError = false;
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Response simulation failed for action {ActionKey}", selected.Alias);
+            StatusMessage = _localization["ResponseTestFailed"] + " " + exception.Message;
+            StatusIsError = true;
+        }
     }
 
     private void ToggleBreakpoint()
@@ -652,6 +855,115 @@ public sealed class MainPageViewModel : ObservableObject
             action.HasBreakpoint = false;
         }
 
+        IsDirty = true;
+        NotifyCommandStates();
+    }
+
+    private void CopySelected()
+    {
+        if (SelectedAction is null)
+        {
+            return;
+        }
+
+        var clipboardDocument = new WorkflowDocument
+        {
+            Name = "Clipboard",
+            Nodes = new List<WorkflowNode> { SelectedAction.Model }
+        };
+        _clipboardSnapshot = _documentService.Serialize(clipboardDocument);
+        StatusMessage = string.Format(_localization["ActionCopied"], SelectedAction.Alias);
+        StatusIsError = false;
+        NotifyCommandStates();
+    }
+
+    private void CutSelected()
+    {
+        if (SelectedAction is null || !IsWorkflowEditingEnabled)
+        {
+            return;
+        }
+
+        CopySelected();
+        DeleteSelected();
+    }
+
+    private void Paste()
+    {
+        if (_clipboardSnapshot is null || !IsWorkflowEditingEnabled)
+        {
+            return;
+        }
+
+        ObservableCollection<WorkflowActionViewModel> destination;
+        int index;
+        if (_pasteDestination is not null && IsKnownCollection(_pasteDestination))
+        {
+            destination = _pasteDestination;
+            index = _pasteIndex;
+        }
+        else if (SelectedAction is not null
+                 && FindCollectionContaining(SelectedAction) is { } selectedParent)
+        {
+            destination = selectedParent;
+            index = selectedParent.IndexOf(SelectedAction) + 1;
+        }
+        else
+        {
+            destination = Actions;
+            index = Actions.Count;
+        }
+
+        WorkflowDocument clipboardDocument;
+        try
+        {
+            clipboardDocument = _documentService.Deserialize(_clipboardSnapshot);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "The in-memory Action clipboard could not be read");
+            _clipboardSnapshot = null;
+            StatusMessage = _localization["ClipboardInvalid"];
+            StatusIsError = true;
+            NotifyCommandStates();
+            return;
+        }
+
+        var source = clipboardDocument.Nodes?.SingleOrDefault();
+        if (source is null)
+        {
+            _clipboardSnapshot = null;
+            StatusMessage = _localization["ClipboardInvalid"];
+            StatusIsError = true;
+            NotifyCommandStates();
+            return;
+        }
+
+        CaptureUndoCheckpoint();
+        var clonedNode = WorkflowNodeCopy.CloneForInsertion(
+            source,
+            EnumerateActions().Select(candidate => candidate.Alias));
+        var clone = new WorkflowActionViewModel(clonedNode, _localization);
+        AttachAction(clone);
+        index = Math.Max(0, Math.Min(index, destination.Count));
+        destination.Insert(index, clone);
+        _pasteDestination = destination;
+        _pasteIndex = index + 1;
+        SelectAction(clone);
+        IsDirty = true;
+        StatusMessage = string.Format(_localization["ActionPasted"], clone.Alias);
+        StatusIsError = false;
+    }
+
+    private void ToggleEnabled()
+    {
+        if (SelectedAction is null || !IsWorkflowEditingEnabled)
+        {
+            return;
+        }
+
+        CaptureUndoCheckpoint();
+        SelectedAction.IsNodeEnabled = !SelectedAction.IsNodeEnabled;
         IsDirty = true;
         NotifyCommandStates();
     }
@@ -753,6 +1065,8 @@ public sealed class MainPageViewModel : ObservableObject
         }
 
         SelectedAction = null;
+        _pasteDestination = null;
+        _pasteIndex = 0;
         IsDirty = dirty;
         OnPropertyChanged(nameof(DocumentName));
         OnPropertyChanged(nameof(DocumentDisplayName));
@@ -769,6 +1083,7 @@ public sealed class MainPageViewModel : ObservableObject
                 or nameof(WorkflowActionViewModel.IsNodeEnabled))
             {
                 IsDirty = true;
+                NotifyCommandStates();
             }
         };
 
@@ -935,6 +1250,28 @@ public sealed class MainPageViewModel : ObservableObject
                || action.Branches.SelectMany(branch => branch.Children).Any(child => IsCollectionInside(child, collection));
     }
 
+    private bool IsKnownCollection(ObservableCollection<WorkflowActionViewModel> collection)
+    {
+        return ReferenceEquals(Actions, collection)
+               || Actions.Any(action => ContainsCollection(action, collection));
+    }
+
+    private static bool ContainsCollection(
+        WorkflowActionViewModel action,
+        ObservableCollection<WorkflowActionViewModel> collection)
+    {
+        if (ReferenceEquals(action.Children, collection)
+            || action.Branches.Any(branch => ReferenceEquals(branch.Children, collection)))
+        {
+            return true;
+        }
+
+        return action.Children.Any(child => ContainsCollection(child, collection))
+               || action.Branches
+                   .SelectMany(branch => branch.Children)
+                   .Any(child => ContainsCollection(child, collection));
+    }
+
     private void NotifyCommandStates()
     {
         NewCommand.NotifyCanExecuteChanged();
@@ -945,12 +1282,18 @@ public sealed class MainPageViewModel : ObservableObject
         RedoCommand.NotifyCanExecuteChanged();
         ValidateCommand.NotifyCanExecuteChanged();
         RunCommand.NotifyCanExecuteChanged();
+        RunSelectedCommand.NotifyCanExecuteChanged();
+        TestResponseCommand.NotifyCanExecuteChanged();
         ContinueCommand.NotifyCanExecuteChanged();
         StepCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
         ToggleBreakpointCommand.NotifyCanExecuteChanged();
         ClearBreakpointsCommand.NotifyCanExecuteChanged();
         DeleteSelectedCommand.NotifyCanExecuteChanged();
+        CopySelectedCommand.NotifyCanExecuteChanged();
+        CutSelectedCommand.NotifyCanExecuteChanged();
+        PasteCommand.NotifyCanExecuteChanged();
+        ToggleEnabledCommand.NotifyCanExecuteChanged();
         AddToolboxItemCommand.NotifyCanExecuteChanged();
         AddElseIfCommand.NotifyCanExecuteChanged();
         AddElseCommand.NotifyCanExecuteChanged();
@@ -969,6 +1312,12 @@ public sealed class MainPageViewModel : ObservableObject
             or WorkflowRunState.Running
             or WorkflowRunState.Paused
             or WorkflowRunState.Stopping;
+
+    private static bool IsEquipmentAction(WorkflowNodeKind kind) =>
+        kind is WorkflowNodeKind.Move
+            or WorkflowNodeKind.Measure
+            or WorkflowNodeKind.Drill
+            or WorkflowNodeKind.Abort;
 
     private string FormatValidationDetail(ValidationIssue issue)
     {

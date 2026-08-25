@@ -108,6 +108,7 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<IWorkflowDocumentService, WorkflowDocumentService>();
                     services.AddSingleton<IWorkflowExecutionFacade, WorkflowExecutionFacade>();
                     services.AddSingleton<IFileDialogService, FileDialogService>();
+                    services.AddSingleton<IResponseSimulationDialogService, ResponseSimulationDialogService>();
 
                     services.AddSingleton<MainWindowViewModel>();
                     services.AddSingleton<MainPageViewModel>();

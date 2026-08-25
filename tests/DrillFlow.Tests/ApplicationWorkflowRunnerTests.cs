@@ -139,6 +139,20 @@ public sealed class ApplicationWorkflowRunnerTests
     }
 
     [Fact]
+    public async Task ForceStop_AfterTerminalState_DoesNotRegressStateToStopping()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+
+        await runner.RunAsync(Document(new MoveNode { Key = "move_1" }));
+        Assert.Equal(WorkflowRunState.Completed, runner.State);
+
+        runner.ForceStop();
+
+        Assert.Equal(WorkflowRunState.Completed, runner.State);
+    }
+
+    [Fact]
     public async Task Breakpoint_PausesBeforePublishingUntilContinue()
     {
         var transport = new FakeTransport(request => Task.FromResult(Response(request)));

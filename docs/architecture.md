@@ -32,6 +32,8 @@ The runner moves through `Idle`, `Running`, `Paused`, `Stopping`, and a terminal
 
 Toolbar Stop never sends an equipment abort. It prevents the next node from starting. If an equipment request is already in flight, the runner remains `Stopping`, receives and records that response, and then becomes `Stopped`. The explicit Abort workflow node still publishes `command: "abort"` and terminates the sequence.
 
+Pressing Stop again while the runner is already `Stopping` force-cancels the local wait immediately. This second press still never publishes `abort`; a request that was already published remains owned by the equipment, while temporary app files and the exchange lock are released. The terminal state cannot regress back to `Stopping` if natural completion wins the race.
+
 ## File lifecycle
 
 The exchange directory may be local or UNC. Request and response filenames are separate, configurable leaf filenames including their extensions.
@@ -49,6 +51,8 @@ Response modes:
 Publishing uses a complete temporary file followed by a same-directory replace/move. The transport holds the fixed `.drillflow.exchange.lock` sidecar open with `FileShare.None` for the entire request/response exchange. Windows and SMB therefore serialize separate app processes or workstations that point at the same directory; lock acquisition is cancellable and bounded by the configured response timeout, and it never publishes a request on timeout. Response observation uses stable-file polling and retries transient sharing violations. Only a parseable response whose `index` matches the in-flight request and whose `command` equals `return` is accepted. Additional top-level response fields are retained dynamically.
 
 Timeout retry is disabled by default. If enabled, the app republishes byte-identical JSON with the same correlation `index`. This is an at-least-once protocol unless the equipment durably remembers processed indices and returns the prior result without repeating the physical command. Correlation matching alone is not an equipment-side idempotency guarantee.
+
+For commissioning, the designer can create an editable test response for the selected equipment Action in a WPF-UI ContentDialog. It uses a detected request's correlation index, atomically publishes the response, and in equipment-delete mode removes only a request with the same index. This simulator does not acquire the exchange lock because the real transport intentionally holds it while waiting for that response.
 
 ## Persistence and diagnostics
 

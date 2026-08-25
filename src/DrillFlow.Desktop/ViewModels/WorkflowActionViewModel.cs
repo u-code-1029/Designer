@@ -65,6 +65,8 @@ public sealed class WorkflowActionViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(Title));
             OnPropertyChanged(nameof(RuntimeStateText));
+            OnPropertyChanged(nameof(ParameterObjectLabel));
+            OnPropertyChanged(nameof(ResultObjectLabel));
         };
     }
 
@@ -113,9 +115,23 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
             Model.Key = value ?? string.Empty;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(ParameterObjectLabel));
+            OnPropertyChanged(nameof(ResultObjectLabel));
+            foreach (var result in Results)
+            {
+                result.UpdateActionAlias(Model.Key);
+            }
+
             ValidateAlias();
         }
     }
+
+    public string ParameterObjectLabel =>
+        Alias + ".parameters (" + _localization["Parameters"] + ")";
+
+    public string ResultObjectLabel =>
+        Alias + ".result / " + Alias + ".results / " + Alias + ".last ("
+        + _localization["Results"] + ")";
 
     public bool HasBreakpoint
     {
@@ -291,7 +307,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
     public void AddResult(ActionExecutionResult result)
     {
-        Results.Add(new RuntimeResultViewModel(result));
+        Results.Add(new RuntimeResultViewModel(result, Alias, _localization));
         OnPropertyChanged(nameof(Results));
     }
 

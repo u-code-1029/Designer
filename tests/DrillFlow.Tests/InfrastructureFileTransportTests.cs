@@ -284,6 +284,21 @@ public sealed class InfrastructureFileTransportTests
             () => transport.ExchangeAsync(
                 new EquipmentRequestMessage(104, "abort"),
                 cancellation.Token));
+
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
+
+        // Cancellation must release both the in-process semaphore and the cross-process lock so
+        // an immediate next exchange can publish normally.
+        var nextExchange = transport.ExchangeAsync(
+            new EquipmentRequestMessage(105, "abort"),
+            CancellationToken.None);
+        await WaitForTextContainingAsync(
+            Path.Combine(directory.Path, options.RequestFileName),
+            "\"index\": 105");
+        await WriteReplacingAsync(
+            Path.Combine(directory.Path, options.ResponseFileName),
+            "{\"index\":105,\"command\":\"return\"}");
+        Assert.Equal(105, (await nextExchange).Index);
     }
 
     [Fact]

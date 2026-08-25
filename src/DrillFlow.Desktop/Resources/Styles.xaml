@@ -81,6 +81,9 @@
                 <Setter Property="BorderBrush" Value="{StaticResource DrillSuccessBrush}" />
                 <Setter Property="BorderThickness" Value="2" />
             </DataTrigger>
+            <DataTrigger Binding="{Binding IsNodeEnabled}" Value="False">
+                <Setter Property="Opacity" Value="0.55" />
+            </DataTrigger>
         </Style.Triggers>
     </Style>
 
@@ -88,8 +91,12 @@
         <Setter Property="Height" Value="12" />
         <Setter Property="Margin" Value="8,1" />
         <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0,2,0,0" />
         <Setter Property="CornerRadius" Value="3" />
         <Setter Property="AllowDrop" Value="True" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="ToolTip" Value="{DynamicResource SelectInsertionPosition}" />
     </Style>
 
     <Style x:Key="ToolbarSeparatorStyle" TargetType="Separator">
