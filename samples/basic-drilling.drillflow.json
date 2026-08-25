@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "11111111-1111-1111-1111-111111111111",
+  "name": "Basic drilling example",
+  "description": "Move 3 mm, measure, then drill using a referenced value.",
+  "nodes": [
+    {
+      "type": "move",
+      "moveMode": {
+        "rawText": "relative"
+      },
+      "moveX": {
+        "rawText": "3E-3"
+      },
+      "moveY": {
+        "rawText": "0E0"
+      },
+      "id": "22222222-2222-2222-2222-222222222222",
+      "key": "move_1",
+      "displayName": "Move drill head",
+      "isEnabled": true,
+      "hasBreakpoint": false
+    },
+    {
+      "type": "measure",
+      "thickness": {
+        "rawText": "1E-3"
+      },
+      "id": "33333333-3333-3333-3333-333333333333",
+      "key": "measure_1",
+      "displayName": "Measure distance",
+      "isEnabled": true,
+      "hasBreakpoint": false
+    },
+    {
+      "type": "drill",
+      "thickness": {
+        "rawText": "=measure_1.parameters.thickness"
+      },
+      "drillResultPath": {
+        "rawText": "C:\\DrillFlow\\Results\\drill.csv"
+      },
+      "id": "44444444-4444-4444-4444-444444444444",
+      "key": "drill_1",
+      "displayName": "Drill",
+      "isEnabled": true,
+      "hasBreakpoint": false
+    }
+  ]
+}

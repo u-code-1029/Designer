@@ -1,0 +1,483 @@
+<Page x:Class="DrillFlow.Desktop.Views.MainPage"
+      x:Name="DesignerPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:converters="clr-namespace:DrillFlow.Desktop.Converters"
+      xmlns:workflow="clr-namespace:DrillFlow.Core.Workflows;assembly=DrillFlow.Core"
+      Background="{StaticResource DrillCanvasBrush}"
+      ShowsNavigationUI="False"
+      PreviewKeyDown="Page_PreviewKeyDown">
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+        <converters:NullToVisibilityConverter x:Key="NullToVisibility" />
+        <converters:NullToVisibilityConverter x:Key="NullToVisibilityInverted" Invert="True" />
+        <converters:StringToVisibilityConverter x:Key="StringToVisibility" />
+
+        <DataTemplate x:Key="ToolboxItemTemplate">
+            <Border Style="{StaticResource ToolboxItemStyle}"
+                    IsEnabled="{Binding DataContext.IsWorkflowEditingEnabled, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                    PreviewMouseLeftButtonDown="ToolboxItem_PreviewMouseLeftButtonDown"
+                    PreviewMouseMove="ToolboxItem_PreviewMouseMove"
+                    MouseLeftButtonDown="ToolboxItem_MouseLeftButtonDown">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="32" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ui:SymbolIcon Grid.Column="0" Symbol="{Binding Icon}" FontSize="20" Foreground="{StaticResource DrillAccentBrush}" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="{StaticResource DrillTextBrush}" />
+                        <TextBlock Text="{Binding Description}" Style="{StaticResource CaptionTextStyle}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- DynamicResource breaks the intentional recursive Action/Branch template cycle. -->
+        <DataTemplate x:Key="WorkflowBranchTemplate">
+            <Border Margin="16,6,0,2"
+                    Padding="10"
+                    Background="{StaticResource DrillSubtleBrush}"
+                    BorderBrush="{StaticResource DrillBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <StackPanel>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Background="{StaticResource DrillAccentBrush}" CornerRadius="4" Padding="7,3">
+                            <TextBlock Text="{Binding Title}" Foreground="White" FontWeight="SemiBold" />
+                        </Border>
+                        <TextBox x:Name="ConditionEditor"
+                                 Grid.Column="1"
+                                 Margin="8,0,0,0"
+                                 IsEnabled="{Binding IsEditingEnabled}"
+                                 Text="{Binding Condition.Value, UpdateSourceTrigger=PropertyChanged}"
+                                 GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                    </Grid>
+
+                    <ItemsControl ItemsSource="{Binding Children}"
+                                  ItemTemplate="{DynamicResource WorkflowActionTemplate}" />
+                    <Border Style="{StaticResource InsertionMarkerStyle}"
+                            Tag="{Binding Children}"
+                            DragEnter="DropZone_DragEnter"
+                            DragOver="DropZone_DragOver"
+                            DragLeave="DropZone_DragLeave"
+                            Drop="DropZone_Drop" />
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Kind}" Value="{x:Static workflow:ConditionalBranchKind.Else}">
+                    <Setter TargetName="ConditionEditor" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <DataTemplate x:Key="WorkflowActionTemplate">
+            <StackPanel>
+                <Border Style="{StaticResource InsertionMarkerStyle}"
+                        Tag="{Binding}"
+                        DragEnter="DropZone_DragEnter"
+                        DragOver="DropZone_DragOver"
+                        DragLeave="DropZone_DragLeave"
+                        Drop="DropZone_Drop" />
+
+                <Border Style="{StaticResource ActionCardBorderStyle}"
+                        MouseLeftButtonDown="ActionCard_MouseLeftButtonDown">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0"
+                                    Background="Transparent"
+                                    IsEnabled="{Binding IsEditingEnabled}"
+                                    Cursor="SizeAll"
+                                    ToolTip="{DynamicResource DragAction}"
+                                    PreviewMouseLeftButtonDown="DragHandle_PreviewMouseLeftButtonDown"
+                                    PreviewMouseMove="DragHandle_PreviewMouseMove">
+                                <ui:SymbolIcon Symbol="{Binding Icon}"
+                                               FontSize="18"
+                                               Foreground="{StaticResource DrillAccentBrush}"
+                                               IsHitTestVisible="False" />
+                            </Border>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="{Binding Alias}" FontWeight="SemiBold" Foreground="{StaticResource DrillTextBrush}" />
+                                <TextBlock Text="{Binding Title}" Style="{StaticResource CaptionTextStyle}" />
+                            </StackPanel>
+                            <TextBlock Grid.Column="2"
+                                       Text="{Binding RuntimeStateText}"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource DrillSecondaryTextBrush}"
+                                       Margin="8,0" />
+                            <ui:SymbolIcon Grid.Column="3"
+                                           Symbol="Record20"
+                                           Foreground="{StaticResource DrillDangerBrush}"
+                                           Visibility="{Binding HasBreakpoint, Converter={StaticResource BoolToVisibility}}"
+                                           ToolTip="{DynamicResource Breakpoint}" />
+                        </Grid>
+
+                        <Border x:Name="RepeatBody"
+                                Margin="0,10,0,0"
+                                Padding="8"
+                                BorderBrush="{StaticResource DrillBorderBrush}"
+                                BorderThickness="1,1,1,0"
+                                CornerRadius="6"
+                                Visibility="Collapsed">
+                            <StackPanel>
+                                <ItemsControl ItemsSource="{Binding Children}"
+                                              ItemTemplate="{DynamicResource WorkflowActionTemplate}" />
+                                <Border Style="{StaticResource InsertionMarkerStyle}"
+                                        Tag="{Binding Children}"
+                                        DragEnter="DropZone_DragEnter"
+                                        DragOver="DropZone_DragOver"
+                                        DragLeave="DropZone_DragLeave"
+                                        Drop="DropZone_Drop" />
+                            </StackPanel>
+                        </Border>
+
+                        <ItemsControl x:Name="BranchesBody"
+                                      ItemsSource="{Binding Branches}"
+                                      ItemTemplate="{StaticResource WorkflowBranchTemplate}"
+                                      Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasChildrenContainer}" Value="True">
+                    <Setter TargetName="RepeatBody" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasBranches}" Value="True">
+                    <Setter TargetName="BranchesBody" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ParameterTemplate">
+            <StackPanel Margin="0,0,0,12">
+                <TextBlock Text="{Binding Label}" Style="{StaticResource FieldLabelStyle}" />
+                <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                         IsEnabled="{Binding IsEditingEnabled}"
+                         GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                <TextBlock Text="{Binding ValidationMessage}"
+                           Foreground="{StaticResource DrillDangerBrush}"
+                           FontSize="11"
+                           Margin="0,3,0,0"
+                           TextWrapping="Wrap"
+                           Visibility="{Binding ValidationMessage, Converter={StaticResource StringToVisibility}}" />
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="RuntimeResultTemplate">
+            <Border Background="{StaticResource DrillSubtleBrush}"
+                    BorderBrush="{StaticResource DrillBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="10"
+                    Margin="0,0,0,8">
+                <StackPanel>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{DynamicResource ResultIteration}" FontWeight="SemiBold" />
+                            <TextBlock Text=": " FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding IterationPath}" FontWeight="SemiBold" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <TextBlock Text="{DynamicResource ResultCorrelation}" Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text=": " Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text="{Binding CorrelationId}" Style="{StaticResource CaptionTextStyle}" />
+                        </StackPanel>
+                    </Grid>
+                    <TextBox Text="{Binding ValuesJson}"
+                             IsReadOnly="True"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             TextWrapping="NoWrap"
+                             MaxHeight="160"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="12" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="10" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource PanelBorderStyle}" Padding="10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding DocumentDisplayName}" FontWeight="SemiBold" FontSize="15" />
+                    <TextBlock Text="{Binding DocumentPath}" Style="{StaticResource CaptionTextStyle}" MaxWidth="250" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+
+                <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button Command="{Binding NewCommand}" ToolTip="{DynamicResource New}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentAdd24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding OpenCommand}" ToolTip="{DynamicResource Open}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding SaveCommand}" ToolTip="{DynamicResource Save}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="Save24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding SaveAsCommand}" ToolTip="{DynamicResource SaveAs}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="SaveCopy24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <ui:Button Command="{Binding UndoCommand}" ToolTip="{DynamicResource Undo}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowUndo24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding RedoCommand}" ToolTip="{DynamicResource Redo}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowRedo24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding ValidateCommand}" ToolTip="{DynamicResource Validate}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="CheckmarkCircle24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <ui:Button Command="{Binding RunCommand}" ToolTip="{DynamicResource Run}" Appearance="Primary" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="Play24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding ContinueCommand}" ToolTip="{DynamicResource Continue}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="PlayCircle24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding StepCommand}" ToolTip="{DynamicResource Step}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowStepOver20" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding StopCommand}" ToolTip="{DynamicResource Stop}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="Stop24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <ui:Button Command="{Binding ToggleBreakpointCommand}" ToolTip="{DynamicResource ToggleBreakpoint}" Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="Record24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding ClearBreakpointsCommand}" ToolTip="{DynamicResource ClearBreakpoints}">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="DeleteDismiss24" /></ui:Button.Icon>
+                        </ui:Button>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" MinWidth="190" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="*" MinWidth="390" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="350" MinWidth="290" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="{DynamicResource Toolbox}" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="{DynamicResource DoubleClickHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
+                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource EquipmentActions}" FontWeight="SemiBold" Margin="0,4,0,8" />
+                            <ItemsControl ItemsSource="{Binding EquipmentToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
+                            <TextBlock Text="{DynamicResource FlowActions}" FontWeight="SemiBold" Margin="0,14,0,8" />
+                            <ItemsControl ItemsSource="{Binding FlowToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
+
+            <Border Grid.Column="2" Style="{StaticResource PanelBorderStyle}" Padding="0" Background="{StaticResource DrillCanvasBrush}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0" Background="{StaticResource DrillSurfaceBrush}" Padding="14" BorderBrush="{StaticResource DrillBorderBrush}" BorderThickness="0,0,0,1">
+                        <TextBlock Text="{DynamicResource Workflow}" FontSize="16" FontWeight="SemiBold" />
+                    </Border>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                        <Grid MinWidth="350" Margin="28,18">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="36" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Width="3" Margin="16,24,0,24" Background="{StaticResource DrillBorderBrush}" />
+                            <StackPanel Grid.Column="1">
+                                <Border Background="{StaticResource DrillSuccessBrush}" CornerRadius="14" Padding="12,5" HorizontalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Play20" Foreground="White" Margin="0,0,6,0" />
+                                        <TextBlock Text="{DynamicResource Start}" Foreground="White" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource InsertionMarkerStyle}"
+                                        Tag="{Binding Actions}"
+                                        DragEnter="DropZone_DragEnter"
+                                        DragOver="DropZone_DragOver"
+                                        DragLeave="DropZone_DragLeave"
+                                        Drop="DropZone_Drop" />
+
+                                <TextBlock Text="{DynamicResource EmptyWorkflow}"
+                                           TextAlignment="Center"
+                                           Margin="20">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Actions.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+
+                                <ItemsControl ItemsSource="{Binding Actions}" ItemTemplate="{StaticResource WorkflowActionTemplate}" />
+
+                                <Border Style="{StaticResource InsertionMarkerStyle}"
+                                        Tag="{Binding Actions}"
+                                        DragEnter="DropZone_DragEnter"
+                                        DragOver="DropZone_DragOver"
+                                        DragLeave="DropZone_DragLeave"
+                                        Drop="DropZone_Drop" />
+
+                                <Border Background="{StaticResource DrillSecondaryTextBrush}" CornerRadius="14" Padding="12,5" HorizontalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="Stop20" Foreground="White" Margin="0,0,6,0" />
+                                        <TextBlock Text="{DynamicResource End}" Foreground="White" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
+
+            <Grid Grid.Column="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" MinHeight="240" />
+                    <RowDefinition Height="6" />
+                    <RowDefinition Height="*" MinHeight="190" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
+                    <Grid>
+                        <TextBlock Text="{DynamicResource NoSelection}"
+                                   Style="{StaticResource CaptionTextStyle}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
+                            <StackPanel DataContext="{Binding SelectedAction}">
+                                <TextBlock Text="{DynamicResource Parameters}" Style="{StaticResource SectionTitleStyle}" />
+                                <TextBlock Text="{DynamicResource Alias}" Style="{StaticResource FieldLabelStyle}" />
+                                <TextBox Text="{Binding Alias, UpdateSourceTrigger=PropertyChanged}"
+                                         IsEnabled="{Binding IsEditingEnabled}"
+                                         GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                                <TextBlock Text="{Binding AliasValidationMessage}"
+                                           Foreground="{StaticResource DrillDangerBrush}"
+                                           FontSize="11"
+                                           Margin="0,3,0,10"
+                                           Visibility="{Binding AliasValidationMessage, Converter={StaticResource StringToVisibility}}" />
+
+                                <CheckBox Content="{DynamicResource Breakpoint}"
+                                          IsChecked="{Binding HasBreakpoint}"
+                                          IsEnabled="{Binding IsEditingEnabled}"
+                                          Margin="0,4,0,12" />
+
+                                <CheckBox Content="{DynamicResource ActionEnabled}"
+                                          IsChecked="{Binding IsNodeEnabled}"
+                                          IsEnabled="{Binding IsEditingEnabled}"
+                                          Margin="0,0,0,12" />
+
+                                <ItemsControl ItemsSource="{Binding Parameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
+                                <TextBlock Text="{DynamicResource ExpressionHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
+
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:Button Content="{DynamicResource AddElseIf}"
+                                               Command="{Binding DataContext.AddElseIfCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                               Margin="0,0,6,0" />
+                                    <ui:Button Content="{DynamicResource AddElse}"
+                                               Command="{Binding DataContext.AddElseCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                               Margin="0,0,6,0" />
+                                    <ui:Button Content="{DynamicResource DeleteAction}"
+                                               Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                               Appearance="Danger">
+                                        <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
+                                    </ui:Button>
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+                <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" />
+
+                <Border Grid.Row="2" Style="{StaticResource PanelBorderStyle}" Padding="12">
+                    <Grid>
+                        <TextBlock Text="{DynamicResource NoSelection}"
+                                   Style="{StaticResource CaptionTextStyle}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
+                        <DockPanel Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
+                            <TextBlock DockPanel.Dock="Top" Text="{DynamicResource Results}" Style="{StaticResource SectionTitleStyle}" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
+                                    <TextBlock Text="{DynamicResource NoResults}"
+                                               TextAlignment="Center"
+                                               Margin="12">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedAction.Results.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <ItemsControl ItemsSource="{Binding SelectedAction.Results}" ItemTemplate="{StaticResource RuntimeResultTemplate}" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <ui:InfoBar Grid.Row="4"
+                    IsOpen="True"
+                    IsClosable="False"
+                    Title="{Binding RuntimeStatusText}"
+                    Message="{Binding StatusMessage}" />
+    </Grid>
+</Page>
