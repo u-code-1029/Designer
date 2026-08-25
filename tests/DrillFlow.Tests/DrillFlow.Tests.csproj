@@ -6,6 +6,7 @@
     <RootNamespace>DrillFlow.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.Net.Http" />
     <ProjectReference Include="..\..\src\DrillFlow.Core\DrillFlow.Core.csproj" />
     <ProjectReference Include="..\..\src\DrillFlow.Application\DrillFlow.Application.csproj" />
     <ProjectReference Include="..\..\src\DrillFlow.Infrastructure\DrillFlow.Infrastructure.csproj" />

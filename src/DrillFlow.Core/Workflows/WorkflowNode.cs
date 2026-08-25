@@ -9,6 +9,7 @@ namespace DrillFlow.Core.Workflows
         Measure,
         Drill,
         Abort,
+        Http,
         Delay,
         Repeat,
         Conditional

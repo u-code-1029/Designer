@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Desktop.Services;
+using Newtonsoft.Json.Linq;
 
 namespace DrillFlow.Desktop.ViewModels;
 
@@ -136,6 +137,43 @@ public sealed class ActionParameterViewModel : ObservableObject
                     : string.Empty;
                 break;
 
+            case "method":
+                ValidationMessage = string.Equals(raw, "GET", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(raw, "POST", StringComparison.OrdinalIgnoreCase)
+                        ? string.Empty
+                        : Localized("GET 또는 POST를 입력하세요.", "Enter GET or POST.");
+                break;
+
+            case "url":
+                ValidationMessage = IsAbsoluteHttpUrl(raw)
+                    ? string.Empty
+                    : Localized(
+                        "http 또는 https 절대 URL을 입력하세요.",
+                        "Enter an absolute http or https URL.");
+                break;
+
+            case "headers":
+                ValidationMessage = IsJsonObjectOrEmpty(raw)
+                    ? string.Empty
+                    : Localized(
+                        "헤더를 JSON 객체로 입력하세요. 예: {\"Accept\":\"application/json\"}",
+                        "Enter headers as a JSON object, for example {\"Accept\":\"application/json\"}.");
+                break;
+
+            case "body":
+                ValidationMessage = string.Empty;
+                break;
+
+            case "timeout_ms":
+                ValidationMessage = int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var timeout)
+                    && timeout >= 1
+                    && timeout <= 300000
+                        ? string.Empty
+                        : Localized(
+                            "1 이상 300,000 이하의 정수를 입력하세요.",
+                            "Enter an integer from 1 through 300,000.");
+                break;
+
             case "condition":
                 ValidationMessage = bool.TryParse(raw, out _)
                     ? string.Empty
@@ -166,4 +204,29 @@ public sealed class ActionParameterViewModel : ObservableObject
         double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
         && !double.IsNaN(value)
         && !double.IsInfinity(value);
+
+    private static bool IsAbsoluteHttpUrl(string raw)
+    {
+        return Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+               && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsJsonObjectOrEmpty(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return true;
+        }
+
+        try
+        {
+            JObject.Parse(raw);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

@@ -41,6 +41,29 @@ public sealed class InfrastructureResponseSimulatorTests
     }
 
     [Fact]
+    public async Task CreateDraft_UsesCurrentExchangeDirectoryAndResponseFileName()
+    {
+        using var initialDirectory = new InfrastructureTestDirectory();
+        using var currentDirectory = new InfrastructureTestDirectory();
+        var options = CreateOptions(initialDirectory.Path);
+        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+
+        // The settings page updates the live options instance. A newly opened dialog must use
+        // the values that are current when its draft is created, not the startup values.
+        options.ExchangeDirectory = currentDirectory.Path;
+        options.ResponseFileName = "current.response.json";
+
+        var draft = await simulator.CreateDraftAsync(
+            new MeasureNode(),
+            7,
+            CancellationToken.None);
+
+        Assert.Equal(
+            Path.Combine(currentDirectory.Path, "current.response.json"),
+            draft.ResponsePath);
+    }
+
+    [Fact]
     public async Task CreateDraft_ProvidesTemplatesForEveryEquipmentAction()
     {
         using var directory = new InfrastructureTestDirectory();

@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Application.Execution;
+using DrillFlow.Application.Http;
 using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Core.Validation;
@@ -329,15 +330,149 @@ public sealed class ApplicationWorkflowRunnerTests
         Assert.Equal(WorkflowRunState.Completed, runner.State);
     }
 
-    private static WorkflowRunner CreateRunner(IEquipmentFileTransport transport)
+    [Fact]
+    public async Task HttpActions_RunInsideDesignerAndExposeNestedJsonToLaterExpressions()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var requests = new List<HttpActionRequest>();
+        var http = new FakeHttpActionExecutor((request, _) =>
+        {
+            requests.Add(request);
+            if (requests.Count == 1)
+            {
+                return Task.FromResult(new HttpActionResponse(
+                    202,
+                    "Accepted",
+                    new Dictionary<string, string[]> { ["X-Request-Id"] = new[] { "abc" } },
+                    "{\"job\":{\"accepted\":true},\"next_url\":\"https://example.test/next\",\"headers\":{\"Authorization\":\"Bearer token\"},\"payload\":{\"ids\":[3,5]}}",
+                    "application/json",
+                    new Dictionary<string, object?>
+                    {
+                        ["job"] = new Dictionary<string, object?> { ["accepted"] = true },
+                        ["next_url"] = "https://example.test/next",
+                        ["headers"] = new Dictionary<string, object?> { ["Authorization"] = "Bearer token" },
+                        ["payload"] = new Dictionary<string, object?> { ["ids"] = new object[] { 3d, 5d } }
+                    }));
+            }
+
+            return Task.FromResult(new HttpActionResponse(
+                200,
+                "OK",
+                new Dictionary<string, string[]>(),
+                "{\"done\":true}",
+                "application/json",
+                new Dictionary<string, object?> { ["done"] = true }));
+        });
+        var runner = CreateRunner(transport, http);
+        var first = new HttpActionNode
+        {
+            Key = "http_start",
+            Url = ParameterBinding.Literal("https://example.test/start")
+        };
+        var second = new HttpActionNode
+        {
+            Key = "http_next",
+            Method = ParameterBinding.Literal("POST"),
+            Url = ParameterBinding.Expression("http_start.result.json.next_url"),
+            Headers = ParameterBinding.Expression("http_start.result.json.headers"),
+            Body = ParameterBinding.Expression("http_start.result.json.payload"),
+            TimeoutMilliseconds = ParameterBinding.Literal("45000")
+        };
+
+        await runner.RunAsync(Document(first, second));
+
+        Assert.Empty(transport.Requests);
+        Assert.Equal(2, requests.Count);
+        Assert.Equal("https://example.test/next", requests[1].Url);
+        Assert.Equal("POST", requests[1].Method);
+        Assert.Equal(TimeSpan.FromSeconds(45), requests[1].Timeout);
+        var secondHeaders = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(requests[1].Headers);
+        Assert.Equal("Bearer token", secondHeaders["Authorization"]);
+        var firstResult = runner.Results.GetLatest(first.Id)!;
+        Assert.Equal(202, firstResult.Values["status_code"]);
+        Assert.Equal(true, firstResult.Values["is_success"]);
+        Assert.NotNull(firstResult.Values["json"]);
+        Assert.Equal(WorkflowRunState.Completed, runner.State);
+    }
+
+    [Fact]
+    public async Task RequestStop_CancelsCurrentDesignerHttpActionOnceWithoutEquipmentTraffic()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new FakeHttpActionExecutor(async (_, cancellationToken) =>
+        {
+            started.TrySetResult(true);
+            var never = new TaskCompletionSource<HttpActionResponse>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() =>
+                   {
+                       cancellationSeen.TrySetResult(true);
+                       never.TrySetCanceled();
+                   }))
+            {
+                return await never.Task.ConfigureAwait(false);
+            }
+        });
+        var runner = CreateRunner(transport, http);
+        var node = new HttpActionNode
+        {
+            Key = "http_wait",
+            Url = ParameterBinding.Literal("https://example.test/wait")
+        };
+        var stoppedEvents = 0;
+        runner.NodeStateChanged += (_, args) =>
+        {
+            if (args.Node.Id == node.Id && args.State == WorkflowNodeExecutionState.Stopped)
+            {
+                Interlocked.Increment(ref stoppedEvents);
+            }
+        };
+
+        var run = runner.RunAsync(Document(node));
+        await started.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+        runner.RequestStop();
+
+        await cancellationSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+        await run.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(WorkflowRunState.Stopped, runner.State);
+        Assert.Equal(1, stoppedEvents);
+        Assert.Empty(transport.Requests);
+        Assert.Null(runner.Results.GetLatest(node.Id));
+    }
+
+    private static WorkflowRunner CreateRunner(
+        IEquipmentFileTransport transport,
+        IHttpActionExecutor? httpActions = null)
     {
         return new WorkflowRunner(
             transport,
+            httpActions ?? new FakeHttpActionExecutor((_, _) =>
+                throw new InvalidOperationException("Unexpected HTTP action.")),
             new IncrementingCorrelationProvider(),
             new ExpressionEngine(),
             new WorkflowValidator(),
             new RunResultStore(),
             NullLogger<WorkflowRunner>.Instance);
+    }
+
+    private sealed class FakeHttpActionExecutor : IHttpActionExecutor
+    {
+        private readonly Func<HttpActionRequest, CancellationToken, Task<HttpActionResponse>> _execute;
+
+        public FakeHttpActionExecutor(
+            Func<HttpActionRequest, CancellationToken, Task<HttpActionResponse>> execute)
+        {
+            _execute = execute;
+        }
+
+        public Task<HttpActionResponse> ExecuteAsync(
+            HttpActionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return _execute(request, cancellationToken);
+        }
     }
 
     private static WorkflowDocument Document(params WorkflowNode[] nodes)

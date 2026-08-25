@@ -293,6 +293,13 @@ namespace DrillFlow.Core.Validation
                         ValidateValue(drill.Thickness, node, "thickness", available, path + ".thickness", ParameterValueValidator.GetThickness);
                         ValidateValue(drill.DrillResultPath, node, "drill_result_path", available, path + ".drillResultPath", value => ParameterValueValidator.GetNonEmptyString(value, "Drill result path"));
                         break;
+                    case HttpActionNode http:
+                        ValidateValue(http.Method, node, "method", available, path + ".method", ParameterValueValidator.GetHttpMethod);
+                        ValidateValue(http.Url, node, "url", available, path + ".url", ParameterValueValidator.GetHttpUrl);
+                        ValidateValue(http.Headers, node, "headers", available, path + ".headers", ParameterValueValidator.GetHttpHeaders);
+                        ValidateValue(http.Body, node, "body", available, path + ".body", ParameterValueValidator.GetHttpBody);
+                        ValidateValue(http.TimeoutMilliseconds, node, "timeout_ms", available, path + ".timeoutMilliseconds", ParameterValueValidator.GetHttpTimeoutMilliseconds);
+                        break;
                     case DelayNode delay:
                         ValidateValue(delay.DurationMilliseconds, node, "milliseconds", available, path + ".durationMilliseconds", ParameterValueValidator.GetDelayMilliseconds);
                         break;

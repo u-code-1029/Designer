@@ -77,6 +77,17 @@ namespace DrillFlow.Core.Workflows
                     target = new AbortNode();
                     break;
 
+                case HttpActionNode http:
+                    target = new HttpActionNode
+                    {
+                        Method = CloneBinding(http.Method),
+                        Url = CloneBinding(http.Url),
+                        Headers = CloneBinding(http.Headers),
+                        Body = CloneBinding(http.Body),
+                        TimeoutMilliseconds = CloneBinding(http.TimeoutMilliseconds)
+                    };
+                    break;
+
                 case DelayNode delay:
                     target = new DelayNode
                     {

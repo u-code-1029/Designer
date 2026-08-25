@@ -15,6 +15,13 @@ Control-flow nodes execute locally:
 - Repeat: evaluates its count once, then runs its nested body
 - Conditional: executes the first true If/Else-if branch, otherwise Else
 
+Designer-owned HTTP nodes also bypass the equipment file transport. HTTP supports GET and POST,
+evaluated URL/header/body/timeout parameters, and records status, headers, raw body, plus a
+dynamically parsed JSON object/array under `result.json`. Non-JSON bodies remain available through
+`result.body_text`; non-success HTTP status codes are results, while transport failures and timeouts
+fault the run. A normal Stop cancels an in-flight HTTP request because it is a designer operation,
+not an already-issued physical equipment action.
+
 Each persisted node has a stable GUID, a unique expression key, a user-facing name, enabled state and optional breakpoint. Runtime results are not part of the workflow document.
 
 ## Validation

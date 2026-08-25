@@ -727,12 +727,34 @@ namespace DrillFlow.Core.Expressions
             public override ExpressionValue Evaluate(ExpressionContext context)
             {
                 var target = _target.Evaluate(context);
-                if (target.Kind != ExpressionValueKind.Array)
+                var indexValue = _index.Evaluate(context);
+                if (target.Kind == ExpressionValueKind.Object)
                 {
-                    throw new ExpressionEvaluationException("Only arrays can be indexed.", Position);
+                    if (indexValue.Kind != ExpressionValueKind.String)
+                    {
+                        throw new ExpressionEvaluationException(
+                            "An object member index must be a string.",
+                            Position);
+                    }
+
+                    var member = indexValue.AsString();
+                    if (!target.AsObject().TryGetValue(member, out var memberValue))
+                    {
+                        throw new ExpressionEvaluationException(
+                            $"Object has no member '{member}'.",
+                            Position);
+                    }
+
+                    return memberValue;
                 }
 
-                var indexValue = _index.Evaluate(context);
+                if (target.Kind != ExpressionValueKind.Array)
+                {
+                    throw new ExpressionEvaluationException(
+                        "Only arrays and objects can be indexed.",
+                        Position);
+                }
+
                 if (indexValue.Kind != ExpressionValueKind.Number)
                 {
                     throw new ExpressionEvaluationException("An array index must be a number.", Position);

@@ -264,6 +264,15 @@ namespace DrillFlow.Core.Expressions
                 case WorkflowNodeKind.Abort:
                     members.Add("command");
                     break;
+                case WorkflowNodeKind.Http:
+                    members.Add("status_code");
+                    members.Add("is_success");
+                    members.Add("reason_phrase");
+                    members.Add("headers");
+                    members.Add("body_text");
+                    members.Add("content_type");
+                    members.Add("json");
+                    break;
                 case WorkflowNodeKind.Delay:
                     members.Add("elapsed_milliseconds");
                     break;

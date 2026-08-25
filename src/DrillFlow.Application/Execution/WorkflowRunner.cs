@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
+using DrillFlow.Application.Http;
 using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Core.Validation;
@@ -20,6 +21,7 @@ public sealed class WorkflowRunner : IWorkflowRunner
     private readonly object _sync = new object();
     private readonly object _stateTransitionSync = new object();
     private readonly IEquipmentFileTransport _transport;
+    private readonly IHttpActionExecutor _httpActions;
     private readonly ICorrelationIdProvider _correlationIds;
     private readonly ExpressionEngine _expressions;
     private readonly WorkflowValidator _validator;
@@ -41,6 +43,7 @@ public sealed class WorkflowRunner : IWorkflowRunner
 
     public WorkflowRunner(
         IEquipmentFileTransport transport,
+        IHttpActionExecutor httpActions,
         ICorrelationIdProvider correlationIds,
         ExpressionEngine expressions,
         WorkflowValidator validator,
@@ -48,6 +51,7 @@ public sealed class WorkflowRunner : IWorkflowRunner
         ILogger<WorkflowRunner> logger)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _httpActions = httpActions ?? throw new ArgumentNullException(nameof(httpActions));
         _correlationIds = correlationIds ?? throw new ArgumentNullException(nameof(correlationIds));
         _expressions = expressions ?? throw new ArgumentNullException(nameof(expressions));
         _validator = validator ?? throw new ArgumentNullException(nameof(validator));
@@ -385,6 +389,10 @@ public sealed class WorkflowRunner : IWorkflowRunner
                     .ConfigureAwait(false);
                 return SequenceOutcome.Abort;
 
+            case HttpActionNode http:
+                return await ExecuteHttpActionAsync(http, iterationPath, cancellationToken)
+                    .ConfigureAwait(false);
+
             case DelayNode delay:
                 return await ExecuteDelayAsync(delay, iterationPath, cancellationToken).ConfigureAwait(false);
 
@@ -468,6 +476,74 @@ public sealed class WorkflowRunner : IWorkflowRunner
         RaiseNodeState(node, WorkflowNodeExecutionState.Completed, FormatPath(iterationPath), result);
         MarkStepComplete();
         return SequenceOutcome.Continue;
+    }
+
+    private async Task<SequenceOutcome> ExecuteHttpActionAsync(
+        HttpActionNode node,
+        List<int> iterationPath,
+        CancellationToken cancellationToken)
+    {
+        var context = CreateExpressionContext();
+        var method = ParameterValueValidator.GetHttpMethod(_expressions.Evaluate(node.Method, context));
+        var url = ParameterValueValidator.GetHttpUrl(_expressions.Evaluate(node.Url, context));
+        var headers = ParameterValueValidator.GetHttpHeaders(_expressions.Evaluate(node.Headers, context));
+        var body = ParameterValueValidator.GetHttpBody(_expressions.Evaluate(node.Body, context));
+        var timeoutMilliseconds = ParameterValueValidator.GetHttpTimeoutMilliseconds(
+            _expressions.Evaluate(node.TimeoutMilliseconds, context));
+        var parameters = new Dictionary<string, object?>
+        {
+            ["method"] = method,
+            ["url"] = url,
+            ["headers"] = headers,
+            ["body"] = body,
+            ["timeout_ms"] = timeoutMilliseconds
+        };
+        RememberParameters(node, parameters);
+
+        CancellationToken localStopToken;
+        lock (_sync)
+        {
+            localStopToken = _localStopSource?.Token ?? CancellationToken.None;
+        }
+
+        using (var httpCancellation =
+               CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, localStopToken))
+        {
+            HttpActionResponse response;
+            try
+            {
+                response = await _httpActions.ExecuteAsync(
+                        new HttpActionRequest(
+                            method,
+                            url,
+                            headers,
+                            body,
+                            TimeSpan.FromMilliseconds(timeoutMilliseconds)),
+                        httpCancellation.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                localStopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                RaiseNodeState(node, WorkflowNodeExecutionState.Stopped, FormatPath(iterationPath));
+                return SequenceOutcome.Stop;
+            }
+
+            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["status_code"] = response.StatusCode,
+                ["is_success"] = response.IsSuccessStatusCode,
+                ["reason_phrase"] = response.ReasonPhrase,
+                ["headers"] = response.Headers,
+                ["body_text"] = response.Body,
+                ["content_type"] = response.ContentType,
+                ["json"] = response.Json
+            };
+            var result = RecordResult(node, 0, iterationPath, values);
+            RaiseNodeState(node, WorkflowNodeExecutionState.Completed, FormatPath(iterationPath), result);
+            MarkStepComplete();
+            return SequenceOutcome.Continue;
+        }
     }
 
     private async Task<SequenceOutcome> ExecuteRepeatAsync(

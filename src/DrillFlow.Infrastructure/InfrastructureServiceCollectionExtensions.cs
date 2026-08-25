@@ -1,7 +1,11 @@
 using System;
+using System.Net.Http;
+using System.Threading;
 using DrillFlow.Application.Communication;
+using DrillFlow.Application.Http;
 using DrillFlow.Application.Persistence;
 using DrillFlow.Infrastructure.Communication;
+using DrillFlow.Infrastructure.Http;
 using DrillFlow.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -76,6 +80,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ICorrelationIdProvider, PersistentCorrelationIdProvider>();
         services.AddSingleton<IEquipmentFileTransport, FileEquipmentTransport>();
         services.AddSingleton<IEquipmentResponseSimulator, JsonEquipmentResponseSimulator>();
+        services.AddSingleton(_ => new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
+        services.AddSingleton<IHttpActionExecutor, HttpActionExecutor>();
         services.AddSingleton<IWorkflowDocumentSerializer, JsonWorkflowDocumentSerializer>();
         return services;
     }

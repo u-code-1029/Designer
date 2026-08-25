@@ -281,6 +281,54 @@ namespace DrillFlow.Tests
             Assert.Throws<ParameterValidationException>(() => ParameterValueValidator.GetMoveCoordinate(ExpressionValue.Number(-0.5), "x"));
         }
 
+        [Fact]
+        public void AcceptsHttpDesignerActionAndPreviousDynamicResultReferences()
+        {
+            var first = new HttpActionNode
+            {
+                Key = "http_first",
+                Method = ParameterBinding.Literal("GET"),
+                Url = ParameterBinding.Literal("https://example.test/api"),
+                Headers = ParameterBinding.Literal("{\"Accept\":\"application/json\"}"),
+                Body = ParameterBinding.Literal(string.Empty),
+                TimeoutMilliseconds = ParameterBinding.Literal("300000")
+            };
+            var second = new HttpActionNode
+            {
+                Key = "http_second",
+                Method = ParameterBinding.Literal("POST"),
+                Url = ParameterBinding.Expression("http_first.result.json.links.next"),
+                Headers = ParameterBinding.Expression("http_first.result.json.forward_headers"),
+                Body = ParameterBinding.Expression("http_first.result.json.payload"),
+                TimeoutMilliseconds = ParameterBinding.Literal("1")
+            };
+
+            var result = _validator.Validate(Document(first, second));
+
+            Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Issues.Select(x => x.Message)));
+        }
+
+        [Fact]
+        public void RejectsInvalidHttpMethodUrlHeaderTypeAndTimeout()
+        {
+            var node = new HttpActionNode
+            {
+                Key = "http_bad",
+                Method = ParameterBinding.Literal("PUT"),
+                Url = ParameterBinding.Literal("file:///not-http"),
+                Headers = ParameterBinding.Literal("42"),
+                TimeoutMilliseconds = ParameterBinding.Literal("300001")
+            };
+
+            var result = _validator.Validate(Document(node));
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Issues, x => x.Path.EndsWith(".method") && x.Code == "parameter.range_or_type");
+            Assert.Contains(result.Issues, x => x.Path.EndsWith(".url") && x.Code == "parameter.range_or_type");
+            Assert.Contains(result.Issues, x => x.Path.EndsWith(".headers") && x.Code == "parameter.range_or_type");
+            Assert.Contains(result.Issues, x => x.Path.EndsWith(".timeoutMilliseconds") && x.Code == "parameter.range_or_type");
+        }
+
         private static WorkflowDocument Document(params WorkflowNode[] nodes)
         {
             var document = new WorkflowDocument { Name = "Test workflow" };

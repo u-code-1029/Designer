@@ -46,10 +46,13 @@ Parameters retain their authored text, including scientific notation. Text begin
 
 Arbitrary C# execution is never used. Runtime results exist only for the current run and are cleared before the next run. Repeat iterations remain addressable through `results[index]`, `results.last`, and the latest-result shortcut `result`.
 
+Designer-owned Delay, Repeat, Conditional, and HTTP Actions never use the equipment exchange files. HTTP supports GET/POST and exposes status, headers, raw text, and dynamically parsed JSON through paths such as `http_1.result.json.items[0].id`.
+
 In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support a grouped right-click menu, `Ctrl+C/X/V`, Ctrl-drag deep copy, and mouse-selected insertion bars; copied nested workflows receive fresh IDs and unique aliases.
 
 See [contract.md](contract.md) for the current equipment request/response contract and format-change map,
 [docs/architecture.md](docs/architecture.md) for the agreed behavior and safety boundaries,
+[docs/product-and-implementation.md](docs/product-and-implementation.md) for the complete Korean product, event-flow, and implementation guide,
 and [docs/deployment.md](docs/deployment.md) for the Windows 7 release checklist.
 
 An importable example is available at [samples/basic-drilling.drillflow.json](samples/basic-drilling.drillflow.json).

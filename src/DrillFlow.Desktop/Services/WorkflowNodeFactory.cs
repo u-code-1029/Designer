@@ -18,6 +18,7 @@ public static class WorkflowNodeFactory
                 DrillResultPath = ParameterBinding.Literal(@"C:\DrillFlow\Results\result.csv")
             },
             WorkflowNodeKind.Abort => new AbortNode(),
+            WorkflowNodeKind.Http => new HttpActionNode(),
             WorkflowNodeKind.Delay => new DelayNode(),
             WorkflowNodeKind.Repeat => new RepeatNode { Count = ParameterBinding.Literal("2") },
             WorkflowNodeKind.Conditional => CreateConditional(),

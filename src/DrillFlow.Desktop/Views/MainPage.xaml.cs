@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Desktop.ViewModels;
 
@@ -14,7 +16,10 @@ public partial class MainPage : Page
 {
     private const string DragFormat = "DrillFlow.WorkflowDragPayload";
     private Point _dragStart;
-    private Border? _selectedInsertionMarker;
+    private readonly Dictionary<Border, long> _insertionFlashVersions = new();
+    private FrameworkElement? _actionDragSource;
+    private WorkflowActionViewModel? _actionBeingDragged;
+    private long _nextInsertionFlashVersion;
 
     public MainPage(MainPageViewModel viewModel)
     {
@@ -84,21 +89,33 @@ public partial class MainPage : Page
     {
         if (ViewModel.IsWorkflowEditingEnabled
             && sender is FrameworkElement element
-            && element.DataContext is WorkflowActionViewModel action)
+            && element.DataContext is WorkflowActionViewModel action
+            && FindNearestAction(e.OriginalSource as DependencyObject) == action)
         {
+            ClearPendingActionDrag();
             _dragStart = e.GetPosition(this);
+            _actionDragSource = element;
+            _actionBeingDragged = action;
             ViewModel.SelectAction(action);
+            element.Focus();
+            Mouse.Capture(element);
             e.Handled = true;
         }
     }
 
     private void DragHandle_PreviewMouseMove(object sender, MouseEventArgs e)
     {
-        if (!ViewModel.IsWorkflowEditingEnabled
-            || e.LeftButton != MouseButtonState.Pressed
-            || sender is not FrameworkElement element
-            || element.DataContext is not WorkflowActionViewModel action)
+        if (sender is not FrameworkElement element
+            || element.DataContext is not WorkflowActionViewModel action
+            || !ReferenceEquals(element, _actionDragSource)
+            || !ReferenceEquals(action, _actionBeingDragged))
         {
+            return;
+        }
+
+        if (!ViewModel.IsWorkflowEditingEnabled || e.LeftButton != MouseButtonState.Pressed)
+        {
+            ClearPendingActionDrag();
             return;
         }
 
@@ -111,7 +128,29 @@ public partial class MainPage : Page
 
         var copyRequested = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
         var data = new DataObject(DragFormat, new WorkflowDragPayload(action, copyRequested));
+        ClearPendingActionDrag();
         DragDrop.DoDragDrop(element, data, DragDropEffects.Copy | DragDropEffects.Move);
+        e.Handled = true;
+    }
+
+    private void DragHandle_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (ReferenceEquals(sender, _actionDragSource))
+        {
+            ClearPendingActionDrag();
+            e.Handled = true;
+        }
+    }
+
+    private void ClearPendingActionDrag()
+    {
+        var source = _actionDragSource;
+        _actionDragSource = null;
+        _actionBeingDragged = null;
+        if (source?.IsMouseCaptured == true)
+        {
+            source.ReleaseMouseCapture();
+        }
     }
 
     private void ActionContextMenu_Opened(object sender, RoutedEventArgs e)
@@ -243,6 +282,7 @@ public partial class MainPage : Page
         e.Effects = payload.ExistingAction is null || copyRequested
             ? DragDropEffects.Copy
             : DragDropEffects.Move;
+        CancelInsertionFlash(border);
         if (border.MinHeight < 100)
         {
             border.Height = 18;
@@ -258,9 +298,8 @@ public partial class MainPage : Page
 
     private void ResetDropZone(Border border)
     {
-        if (ReferenceEquals(border, _selectedInsertionMarker))
+        if (_insertionFlashVersions.ContainsKey(border))
         {
-            ShowSelectedInsertionMarker(border);
             return;
         }
 
@@ -284,7 +323,7 @@ public partial class MainPage : Page
 
     private void InsertionMarker_MouseEnter(object sender, MouseEventArgs e)
     {
-        if (sender is Border border && !ReferenceEquals(border, _selectedInsertionMarker))
+        if (sender is Border border && !_insertionFlashVersions.ContainsKey(border))
         {
             border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
             border.BorderThickness = new Thickness(0, 2, 0, 0);
@@ -293,10 +332,9 @@ public partial class MainPage : Page
 
     private void InsertionMarker_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (sender is Border border && !ReferenceEquals(border, _selectedInsertionMarker))
+        if (sender is Border border && !_insertionFlashVersions.ContainsKey(border))
         {
-            border.BorderBrush = Brushes.Transparent;
-            border.BorderThickness = new Thickness(0, 2, 0, 0);
+            ResetDropZone(border);
         }
     }
 
@@ -307,17 +345,49 @@ public partial class MainPage : Page
             return;
         }
 
-        if (_selectedInsertionMarker is not null && !ReferenceEquals(_selectedInsertionMarker, border))
-        {
-            ResetDropZone(_selectedInsertionMarker);
-        }
-
-        _selectedInsertionMarker = border;
-        ShowSelectedInsertionMarker(border);
+        FlashInsertionMarker(border);
         e.Handled = true;
     }
 
-    private void ShowSelectedInsertionMarker(Border border)
+    private void FlashInsertionMarker(Border border)
+    {
+        CancelInsertionFlash(border);
+        var version = ++_nextInsertionFlashVersion;
+        _insertionFlashVersions[border] = version;
+        ShowInsertionHighlight(border);
+
+        var flash = new DoubleAnimation
+        {
+            From = 1.0,
+            To = 0.25,
+            Duration = TimeSpan.FromMilliseconds(140),
+            AutoReverse = true,
+            FillBehavior = FillBehavior.Stop
+        };
+        flash.Completed += (_, _) =>
+        {
+            if (!_insertionFlashVersions.TryGetValue(border, out var currentVersion)
+                || currentVersion != version)
+            {
+                return;
+            }
+
+            _insertionFlashVersions.Remove(border);
+            border.BeginAnimation(OpacityProperty, null);
+            border.Opacity = 1.0;
+            ResetDropZone(border);
+        };
+        border.BeginAnimation(OpacityProperty, flash, HandoffBehavior.SnapshotAndReplace);
+    }
+
+    private void CancelInsertionFlash(Border border)
+    {
+        _insertionFlashVersions.Remove(border);
+        border.BeginAnimation(OpacityProperty, null);
+        border.Opacity = 1.0;
+    }
+
+    private void ShowInsertionHighlight(Border border)
     {
         border.Height = border.MinHeight >= 100 ? double.NaN : 12;
         border.Background = border.MinHeight >= 100

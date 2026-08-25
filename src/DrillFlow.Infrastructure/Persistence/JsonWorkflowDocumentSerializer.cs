@@ -251,6 +251,8 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
                 return DeserializeNode<DrillNode>(scalarNode, serializer);
             case "abort":
                 return DeserializeNode<AbortNode>(scalarNode, serializer);
+            case "http":
+                return DeserializeNode<HttpActionNode>(scalarNode, serializer);
             case "delay":
                 return DeserializeNode<DelayNode>(scalarNode, serializer);
             case "repeat":
@@ -336,6 +338,8 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
                 return "drill";
             case AbortNode _:
                 return "abort";
+            case HttpActionNode _:
+                return "http";
             case DelayNode _:
                 return "delay";
             case RepeatNode _:

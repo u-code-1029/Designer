@@ -20,7 +20,7 @@
     <system:String x:Key="ClearBreakpoints">Clear all breakpoints</system:String>
     <system:String x:Key="Toolbox">Toolbox</system:String>
     <system:String x:Key="EquipmentActions">Equipment actions</system:String>
-    <system:String x:Key="FlowActions">Control flow</system:String>
+    <system:String x:Key="FlowActions">Designer actions</system:String>
     <system:String x:Key="DoubleClickHint">Drag an item or double-click to append it.</system:String>
     <system:String x:Key="DragAction">Reorder Action</system:String>
     <system:String x:Key="Workflow">Execution order</system:String>
@@ -65,6 +65,7 @@
     <system:String x:Key="ActionMeasure">Measure distance</system:String>
     <system:String x:Key="ActionDrill">Drill</system:String>
     <system:String x:Key="ActionAbort">Abort</system:String>
+    <system:String x:Key="ActionHttp">HTTP request</system:String>
     <system:String x:Key="ActionDelay">Delay</system:String>
     <system:String x:Key="ActionRepeat">Repeat</system:String>
     <system:String x:Key="ActionConditional">If / Else if / Else</system:String>
@@ -72,6 +73,7 @@
     <system:String x:Key="ToolboxMeasureDescription">Create a measure request</system:String>
     <system:String x:Key="ToolboxDrillDescription">Create a drill request</system:String>
     <system:String x:Key="ToolboxAbortDescription">Create an abort request</system:String>
+    <system:String x:Key="ToolboxHttpDescription">GET or POST with dynamic JSON results</system:String>
     <system:String x:Key="ToolboxDelayDescription">Local delay below 30,000 ms</system:String>
     <system:String x:Key="ToolboxRepeatDescription">Repeat up to Int32.MaxValue</system:String>
     <system:String x:Key="ToolboxConditionalDescription">Branch using parameters or results</system:String>
@@ -83,6 +85,11 @@
     <system:String x:Key="ParamMoveY">Y distance (m)</system:String>
     <system:String x:Key="ParamThickness">Plate thickness (m)</system:String>
     <system:String x:Key="ParamResultPath">Result destination path</system:String>
+    <system:String x:Key="ParamHttpMethod">HTTP method (GET or POST)</system:String>
+    <system:String x:Key="ParamHttpUrl">Absolute http/https URL</system:String>
+    <system:String x:Key="ParamHttpHeaders">Request headers (JSON object)</system:String>
+    <system:String x:Key="ParamHttpBody">Request body (text/JSON or expression object)</system:String>
+    <system:String x:Key="ParamHttpTimeout">Timeout (ms, 1 to 300,000)</system:String>
     <system:String x:Key="ParamDelay">Delay (ms)</system:String>
     <system:String x:Key="ParamCount">Repeat count</system:String>
     <system:String x:Key="ParamCondition">Condition expression</system:String>
@@ -126,6 +133,13 @@
     <system:String x:Key="ResultPositionYDescription">Y position after the action (m)</system:String>
     <system:String x:Key="ResultMeasuredDistanceDescription">Measured plate-to-drill-head distance (m)</system:String>
     <system:String x:Key="ResultValueDescription">Value returned by the equipment</system:String>
+    <system:String x:Key="ResultHttpStatusDescription">HTTP status code</system:String>
+    <system:String x:Key="ResultHttpSuccessDescription">Whether the HTTP status is 2xx</system:String>
+    <system:String x:Key="ResultHttpReasonDescription">HTTP reason phrase</system:String>
+    <system:String x:Key="ResultHttpHeadersDescription">HTTP response headers</system:String>
+    <system:String x:Key="ResultHttpBodyDescription">Raw HTTP response body</system:String>
+    <system:String x:Key="ResultHttpContentTypeDescription">HTTP response content type</system:String>
+    <system:String x:Key="ResultHttpJsonDescription">Dynamically parsed JSON response</system:String>
     <system:String x:Key="RequestJson">Request JSON</system:String>
     <system:String x:Key="ResponseJson">Response JSON</system:String>
     <system:String x:Key="Browse">Browse</system:String>
@@ -146,5 +160,8 @@
     <system:String x:Key="ResponseTestPayload">Response payload (you can edit the index and dynamic result values)</system:String>
     <system:String x:Key="ResponseTestPublished">The simulated response file was published.</system:String>
     <system:String x:Key="ResponseTestFailed">The simulated response file could not be published.</system:String>
+    <system:String x:Key="OpenExchangeFolder">Open equipment exchange folder</system:String>
+    <system:String x:Key="ExchangeFolderOpened">Opened the equipment exchange folder: {0}</system:String>
+    <system:String x:Key="ExchangeFolderOpenFailed">The equipment exchange folder could not be opened.</system:String>
     <system:String x:Key="ForceStopping">Force-stopping the workflow now.</system:String>
 </ResourceDictionary>

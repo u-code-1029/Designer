@@ -43,6 +43,13 @@ public sealed class RuntimeResultFieldViewModel : ObservableObject
         "measured_distance" => "ResultMeasuredDistanceDescription",
         "request_json" => "RequestJson",
         "response_json" => "ResponseJson",
+        "status_code" => "ResultHttpStatusDescription",
+        "is_success" => "ResultHttpSuccessDescription",
+        "reason_phrase" => "ResultHttpReasonDescription",
+        "headers" => "ResultHttpHeadersDescription",
+        "body_text" => "ResultHttpBodyDescription",
+        "content_type" => "ResultHttpContentTypeDescription",
+        "json" => "ResultHttpJsonDescription",
         _ => "ResultValueDescription"
     }];
 

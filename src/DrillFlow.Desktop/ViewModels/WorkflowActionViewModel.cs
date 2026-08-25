@@ -82,6 +82,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
         WorkflowNodeKind.Measure => "ActionMeasure",
         WorkflowNodeKind.Drill => "ActionDrill",
         WorkflowNodeKind.Abort => "ActionAbort",
+        WorkflowNodeKind.Http => "ActionHttp",
         WorkflowNodeKind.Delay => "ActionDelay",
         WorkflowNodeKind.Repeat => "ActionRepeat",
         _ => "ActionConditional"
@@ -93,6 +94,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
         WorkflowNodeKind.Measure => SymbolRegular.Ruler20,
         WorkflowNodeKind.Drill => SymbolRegular.Toolbox20,
         WorkflowNodeKind.Abort => SymbolRegular.Stop20,
+        WorkflowNodeKind.Http => SymbolRegular.Globe20,
         WorkflowNodeKind.Delay => SymbolRegular.Timer20,
         WorkflowNodeKind.Repeat => SymbolRegular.ArrowRepeatAll20,
         _ => SymbolRegular.BranchCompare20
@@ -369,6 +371,11 @@ public sealed class WorkflowActionViewModel : ObservableObject
         "move_y" => "ParamMoveY",
         "thickness" => "ParamThickness",
         "drill_result_path" => "ParamResultPath",
+        "method" => "ParamHttpMethod",
+        "url" => "ParamHttpUrl",
+        "headers" => "ParamHttpHeaders",
+        "body" => "ParamHttpBody",
+        "timeout_ms" => "ParamHttpTimeout",
         "milliseconds" => "ParamDelay",
         "count" => "ParamCount",
         "condition" => "ParamCondition",

@@ -22,6 +22,7 @@ namespace DrillFlow.Core.Validation
         public const double MoveCoordinateLimitMetres = 0.5d;
         public const double MaximumThicknessMetres = 2.4E-3d;
         public const int MaximumDelayMilliseconds = 29999;
+        public const int MaximumHttpTimeoutMilliseconds = 300000;
 
         public static MoveCoordinateMode GetMoveMode(ExpressionValue value)
         {
@@ -70,6 +71,54 @@ namespace DrillFlow.Core.Validation
         public static int GetDelayMilliseconds(ExpressionValue value)
         {
             return GetInteger(value, "Delay", 0, MaximumDelayMilliseconds);
+        }
+
+        public static string GetHttpMethod(ExpressionValue value)
+        {
+            var method = GetString(value, "HTTP method").Trim();
+            if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                return method.ToUpperInvariant();
+            }
+
+            throw new ParameterValidationException("HTTP method must be GET or POST.");
+        }
+
+        public static string GetHttpUrl(ExpressionValue value)
+        {
+            var text = GetNonEmptyString(value, "HTTP URL").Trim();
+            if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
+                || !(string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ParameterValidationException("HTTP URL must be an absolute http or https URL.");
+            }
+
+            return uri.AbsoluteUri;
+        }
+
+        public static object? GetHttpHeaders(ExpressionValue value)
+        {
+            if (value.Kind != ExpressionValueKind.Null
+                && value.Kind != ExpressionValueKind.String
+                && value.Kind != ExpressionValueKind.Object)
+            {
+                throw new ParameterValidationException(
+                    "HTTP headers must be a JSON object string, an object expression, or null.");
+            }
+
+            return value.ToObject();
+        }
+
+        public static object? GetHttpBody(ExpressionValue value)
+        {
+            return value.ToObject();
+        }
+
+        public static int GetHttpTimeoutMilliseconds(ExpressionValue value)
+        {
+            return GetInteger(value, "HTTP timeout", 1, MaximumHttpTimeoutMilliseconds);
         }
 
         public static string GetNonEmptyString(ExpressionValue value, string parameterName)

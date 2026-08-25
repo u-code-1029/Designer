@@ -50,7 +50,7 @@
 
         <StackPanel Grid.Row="4" Margin="0,0,0,10">
             <TextBlock Text="{DynamicResource ResponseTestDestination}" FontWeight="SemiBold" Margin="0,0,0,4" />
-            <TextBox Text="{Binding ResponsePath}"
+            <TextBox Text="{Binding ResponsePath, Mode=OneWay}"
                      IsReadOnly="True"
                      TextWrapping="NoWrap"
                      HorizontalScrollBarVisibility="Auto" />

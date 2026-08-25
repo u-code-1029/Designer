@@ -59,6 +59,26 @@ namespace DrillFlow.Tests
         }
 
         [Fact]
+        public void ObjectStringIndexAccessSupportsDynamicJsonPropertyNames()
+        {
+            var context = new ExpressionContext().SetVariable(
+                "json",
+                new Dictionary<string, object?>
+                {
+                    ["trace-id"] = "abc-123",
+                    ["items"] = new object[]
+                    {
+                        new Dictionary<string, object?> { ["display name"] = "first" }
+                    }
+                });
+
+            Assert.Equal("abc-123", _engine.Evaluate("json['trace-id']", context).AsString());
+            Assert.Equal("first", _engine.Evaluate("json.items[0][\"display name\"]", context).AsString());
+            Assert.Throws<ExpressionEvaluationException>(() => _engine.Evaluate("json['missing']", context));
+            Assert.Throws<ExpressionEvaluationException>(() => _engine.Evaluate("json[0]", context));
+        }
+
+        [Fact]
         public void AnalyzeReturnsOnlyRootActionIdentifiers()
         {
             var analysis = _engine.Analyze("measure_1.result.value + move_1.parameters.move_x");

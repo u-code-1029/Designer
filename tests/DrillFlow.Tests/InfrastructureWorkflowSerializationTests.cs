@@ -115,5 +115,33 @@ public sealed class InfrastructureWorkflowSerializationTests
         Assert.Throws<InvalidDataException>(
             () => serializer.Deserialize("{\"schemaVersion\":1,\"nodes\":[{\"type\":\"plugin\"}]}"));
     }
-}
 
+    [Fact]
+    public void RoundTrip_PreservesHttpDesignerActionBindings()
+    {
+        var serializer = new JsonWorkflowDocumentSerializer();
+        var source = new HttpActionNode
+        {
+            Key = "http_1",
+            Method = ParameterBinding.Literal("POST"),
+            Url = ParameterBinding.Literal("https://example.test/jobs"),
+            Headers = ParameterBinding.Literal("{\"X-Api-Key\":\"secret\"}"),
+            Body = ParameterBinding.Expression("measure_1.result.json"),
+            TimeoutMilliseconds = ParameterBinding.Literal("45000")
+        };
+
+        var json = serializer.Serialize(new WorkflowDocument
+        {
+            Name = "HTTP",
+            Nodes = new List<WorkflowNode> { source }
+        });
+        var restored = Assert.IsType<HttpActionNode>(Assert.Single(serializer.Deserialize(json).Nodes));
+
+        Assert.Contains("\"type\": \"http\"", json, StringComparison.Ordinal);
+        Assert.Equal("POST", restored.Method.RawText);
+        Assert.Equal("https://example.test/jobs", restored.Url.RawText);
+        Assert.Equal("{\"X-Api-Key\":\"secret\"}", restored.Headers.RawText);
+        Assert.Equal("=measure_1.result.json", restored.Body.RawText);
+        Assert.Equal("45000", restored.TimeoutMilliseconds.RawText);
+    }
+}

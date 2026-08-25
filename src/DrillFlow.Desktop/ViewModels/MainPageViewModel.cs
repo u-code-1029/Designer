@@ -25,6 +25,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private readonly IWorkflowExecutionFacade _execution;
     private readonly IFileDialogService _fileDialogs;
     private readonly IResponseSimulationDialogService _responseSimulationDialogs;
+    private readonly IExchangeFolderLauncher _exchangeFolderLauncher;
     private readonly WorkflowValidator _workflowValidator;
     private readonly ExpressionCompletionProvider _expressionCompletions = new();
     private readonly ILogger<MainPageViewModel> _logger;
@@ -49,6 +50,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         IWorkflowExecutionFacade execution,
         IFileDialogService fileDialogs,
         IResponseSimulationDialogService responseSimulationDialogs,
+        IExchangeFolderLauncher exchangeFolderLauncher,
         WorkflowValidator workflowValidator,
         ILogger<MainPageViewModel> logger)
     {
@@ -57,6 +59,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _execution = execution;
         _fileDialogs = fileDialogs;
         _responseSimulationDialogs = responseSimulationDialogs;
+        _exchangeFolderLauncher = exchangeFolderLauncher;
         _workflowValidator = workflowValidator;
         _logger = logger;
 
@@ -72,6 +75,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         };
         FlowToolboxItems = new ObservableCollection<ToolboxItemViewModel>
         {
+            new(WorkflowNodeKind.Http, "ActionHttp", "ToolboxHttpDescription", SymbolRegular.Globe20, localization),
             new(WorkflowNodeKind.Delay, "ActionDelay", "ToolboxDelayDescription", SymbolRegular.Timer20, localization),
             new(WorkflowNodeKind.Repeat, "ActionRepeat", "ToolboxRepeatDescription", SymbolRegular.ArrowRepeatAll20, localization),
             new(WorkflowNodeKind.Conditional, "ActionConditional", "ToolboxConditionalDescription", SymbolRegular.BranchCompare20, localization)
@@ -91,6 +95,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         TestResponseCommand = new AsyncRelayCommand(
             TestResponseAsync,
             () => SelectedAction is not null && IsEquipmentAction(SelectedAction.Kind));
+        OpenExchangeFolderCommand = new RelayCommand(OpenExchangeFolder);
         ContinueCommand = new RelayCommand(Continue, () => RunState == WorkflowRunState.Paused);
         StepCommand = new RelayCommand(Step, () => RunState == WorkflowRunState.Paused);
         StopCommand = new RelayCommand(
@@ -141,6 +146,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     public IAsyncRelayCommand RunSelectedCommand { get; }
 
     public IAsyncRelayCommand TestResponseCommand { get; }
+
+    public IRelayCommand OpenExchangeFolderCommand { get; }
 
     public IRelayCommand ContinueCommand { get; }
 
@@ -825,6 +832,22 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         {
             _logger.LogError(exception, "Response simulation failed for action {ActionKey}", selected.Alias);
             StatusMessage = _localization["ResponseTestFailed"] + " " + exception.Message;
+            StatusIsError = true;
+        }
+    }
+
+    private void OpenExchangeFolder()
+    {
+        try
+        {
+            var path = _exchangeFolderLauncher.Open();
+            StatusMessage = string.Format(_localization["ExchangeFolderOpened"], path);
+            StatusIsError = false;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Could not open the configured equipment exchange directory");
+            StatusMessage = _localization["ExchangeFolderOpenFailed"] + " " + exception.Message;
             StatusIsError = true;
         }
     }

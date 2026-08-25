@@ -147,7 +147,13 @@
                         </ContextMenu>
                     </Border.ContextMenu>
                     <StackPanel>
-                        <Grid>
+                        <Grid Background="Transparent"
+                              Cursor="SizeAll"
+                              Focusable="True"
+                              ToolTip="{DynamicResource DragAction}"
+                              PreviewMouseLeftButtonDown="DragHandle_PreviewMouseLeftButtonDown"
+                              PreviewMouseMove="DragHandle_PreviewMouseMove"
+                              PreviewMouseLeftButtonUp="DragHandle_PreviewMouseLeftButtonUp">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="22" />
                                 <ColumnDefinition Width="28" />
@@ -164,9 +170,7 @@
                                     Background="Transparent"
                                     IsEnabled="{Binding IsEditingEnabled}"
                                     Cursor="SizeAll"
-                                    ToolTip="{DynamicResource DragAction}"
-                                    PreviewMouseLeftButtonDown="DragHandle_PreviewMouseLeftButtonDown"
-                                    PreviewMouseMove="DragHandle_PreviewMouseMove">
+                                    ToolTip="{DynamicResource DragAction}">
                                 <ui:SymbolIcon Symbol="{Binding Icon}"
                                                FontSize="18"
                                                Foreground="{StaticResource DrillAccentBrush}"
@@ -271,7 +275,7 @@
                                     <TextBlock Text="{Binding Label}"
                                                Style="{StaticResource FieldLabelStyle}"
                                                TextWrapping="Wrap" />
-                                    <TextBox Text="{Binding Value}"
+                                    <TextBox Text="{Binding Value, Mode=OneWay}"
                                              IsReadOnly="True"
                                              FontFamily="Consolas"
                                              FontSize="11"
@@ -285,7 +289,7 @@
                     </ItemsControl>
                     <TextBlock Text="{DynamicResource ResultValues}"
                                Style="{StaticResource FieldLabelStyle}" />
-                    <TextBox Text="{Binding ValuesJson}"
+                    <TextBox Text="{Binding ValuesJson, Mode=OneWay}"
                              IsReadOnly="True"
                              FontFamily="Consolas"
                              FontSize="11"
@@ -364,8 +368,11 @@
                             <ui:Button.Icon><ui:SymbolIcon Symbol="DeleteDismiss24" /></ui:Button.Icon>
                         </ui:Button>
                         <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
-                        <ui:Button Command="{Binding TestResponseCommand}" ToolTip="{DynamicResource ResponseTest}">
+                        <ui:Button Command="{Binding TestResponseCommand}" ToolTip="{DynamicResource ResponseTest}" Margin="0,0,4,0">
                             <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentArrowDown20" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Command="{Binding OpenExchangeFolderCommand}" ToolTip="{DynamicResource OpenExchangeFolder}">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
                         </ui:Button>
                     </StackPanel>
                 </ScrollViewer>

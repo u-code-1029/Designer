@@ -20,7 +20,7 @@
     <system:String x:Key="ClearBreakpoints">모든 브레이크포인트 제거</system:String>
     <system:String x:Key="Toolbox">아이템 목록</system:String>
     <system:String x:Key="EquipmentActions">장비 동작</system:String>
-    <system:String x:Key="FlowActions">제어 흐름</system:String>
+    <system:String x:Key="FlowActions">디자이너 동작</system:String>
     <system:String x:Key="DoubleClickHint">끌어 놓거나 두 번 클릭해 추가합니다.</system:String>
     <system:String x:Key="DragAction">Action 순서 변경</system:String>
     <system:String x:Key="Workflow">실행 순서</system:String>
@@ -65,6 +65,7 @@
     <system:String x:Key="ActionMeasure">철판 사이 거리 재기</system:String>
     <system:String x:Key="ActionDrill">드릴 뚫기</system:String>
     <system:String x:Key="ActionAbort">멈추기</system:String>
+    <system:String x:Key="ActionHttp">HTTP 요청</system:String>
     <system:String x:Key="ActionDelay">Delay</system:String>
     <system:String x:Key="ActionRepeat">Repeat</system:String>
     <system:String x:Key="ActionConditional">If / Else if / Else</system:String>
@@ -72,6 +73,7 @@
     <system:String x:Key="ToolboxMeasureDescription">measure 요청 생성</system:String>
     <system:String x:Key="ToolboxDrillDescription">drill 요청 생성</system:String>
     <system:String x:Key="ToolboxAbortDescription">abort 요청 생성</system:String>
+    <system:String x:Key="ToolboxHttpDescription">동적 JSON 결과를 지원하는 GET 또는 POST</system:String>
     <system:String x:Key="ToolboxDelayDescription">30,000ms 미만의 로컬 지연</system:String>
     <system:String x:Key="ToolboxRepeatDescription">Int32 최대값까지 반복</system:String>
     <system:String x:Key="ToolboxConditionalDescription">파라미터 또는 결과로 조건 분기</system:String>
@@ -83,6 +85,11 @@
     <system:String x:Key="ParamMoveY">Y 이동 거리 (m)</system:String>
     <system:String x:Key="ParamThickness">철판 두께 (m)</system:String>
     <system:String x:Key="ParamResultPath">결과 저장 경로</system:String>
+    <system:String x:Key="ParamHttpMethod">HTTP 메서드 (GET 또는 POST)</system:String>
+    <system:String x:Key="ParamHttpUrl">http/https 절대 URL</system:String>
+    <system:String x:Key="ParamHttpHeaders">요청 헤더 (JSON 객체)</system:String>
+    <system:String x:Key="ParamHttpBody">요청 본문 (텍스트/JSON 또는 Expression 객체)</system:String>
+    <system:String x:Key="ParamHttpTimeout">타임아웃 (ms, 1~300,000)</system:String>
     <system:String x:Key="ParamDelay">지연 시간 (ms)</system:String>
     <system:String x:Key="ParamCount">반복 횟수</system:String>
     <system:String x:Key="ParamCondition">조건 Expression</system:String>
@@ -126,6 +133,13 @@
     <system:String x:Key="ResultPositionYDescription">동작 후 Y 위치 (m)</system:String>
     <system:String x:Key="ResultMeasuredDistanceDescription">측정된 철판과 드릴 헤드 사이 거리 (m)</system:String>
     <system:String x:Key="ResultValueDescription">장비가 반환한 결과 값</system:String>
+    <system:String x:Key="ResultHttpStatusDescription">HTTP 상태 코드</system:String>
+    <system:String x:Key="ResultHttpSuccessDescription">HTTP 상태가 2xx인지 여부</system:String>
+    <system:String x:Key="ResultHttpReasonDescription">HTTP 상태 설명</system:String>
+    <system:String x:Key="ResultHttpHeadersDescription">HTTP 응답 헤더</system:String>
+    <system:String x:Key="ResultHttpBodyDescription">HTTP 원문 응답 본문</system:String>
+    <system:String x:Key="ResultHttpContentTypeDescription">HTTP 응답 Content-Type</system:String>
+    <system:String x:Key="ResultHttpJsonDescription">동적으로 파싱된 JSON 응답</system:String>
     <system:String x:Key="RequestJson">Request JSON</system:String>
     <system:String x:Key="ResponseJson">Response JSON</system:String>
     <system:String x:Key="Browse">찾아보기</system:String>
@@ -146,5 +160,8 @@
     <system:String x:Key="ResponseTestPayload">Response 내용 (index와 동적 결과값을 편집할 수 있습니다)</system:String>
     <system:String x:Key="ResponseTestPublished">Response 테스트 파일을 생성했습니다.</system:String>
     <system:String x:Key="ResponseTestFailed">Response 테스트 파일을 생성하지 못했습니다.</system:String>
+    <system:String x:Key="OpenExchangeFolder">장비 통신 폴더 열기</system:String>
+    <system:String x:Key="ExchangeFolderOpened">장비 통신 폴더를 열었습니다: {0}</system:String>
+    <system:String x:Key="ExchangeFolderOpenFailed">장비 통신 폴더를 열지 못했습니다.</system:String>
     <system:String x:Key="ForceStopping">실행을 즉시 강제 종료하고 있습니다.</system:String>
 </ResourceDictionary>
