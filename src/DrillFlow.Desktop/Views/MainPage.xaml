@@ -96,10 +96,12 @@
                         Drop="DropZone_Drop" />
 
                 <Border Style="{StaticResource ActionCardBorderStyle}"
+                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
                         Focusable="True"
                         MouseLeftButtonDown="ActionCard_MouseLeftButtonDown">
                     <Border.ContextMenu>
-                        <ContextMenu Opened="ActionContextMenu_Opened">
+                        <ContextMenu Opened="ActionContextMenu_Opened"
+                                     DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
                             <MenuItem Header="{DynamicResource RunOnlyAction}"
                                       Command="{Binding RunSelectedCommand}">
                                 <MenuItem.Icon><ui:SymbolIcon Symbol="Play20" /></MenuItem.Icon>
@@ -385,24 +387,62 @@
                 <ColumnDefinition Width="6" />
                 <ColumnDefinition Width="*" MinWidth="390" />
                 <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="350" MinWidth="290" />
+                <ColumnDefinition Width="380" MinWidth="310" />
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
-                <DockPanel>
-                    <StackPanel DockPanel.Dock="Top">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" MinHeight="120" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="*" MinHeight="120" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0">
                         <TextBlock Text="{DynamicResource Toolbox}" Style="{StaticResource SectionTitleStyle}" />
                         <TextBlock Text="{DynamicResource DoubleClickHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
                     </StackPanel>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel>
-                            <TextBlock Text="{DynamicResource EquipmentActions}" FontWeight="SemiBold" Margin="0,4,0,8" />
+
+                    <Grid Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0"
+                                   Text="{DynamicResource EquipmentActions}"
+                                   FontWeight="SemiBold"
+                                   Margin="0,4,0,8" />
+                        <ScrollViewer Grid.Row="1"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl ItemsSource="{Binding EquipmentToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
-                            <TextBlock Text="{DynamicResource FlowActions}" FontWeight="SemiBold" Margin="0,14,0,8" />
+                        </ScrollViewer>
+                    </Grid>
+
+                    <GridSplitter Grid.Row="2"
+                                  Height="8"
+                                  HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Stretch"
+                                  ResizeDirection="Rows"
+                                  ResizeBehavior="PreviousAndNext"
+                                  Background="Transparent" />
+
+                    <Grid Grid.Row="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0"
+                                   Text="{DynamicResource FlowActions}"
+                                   FontWeight="SemiBold"
+                                   Margin="0,4,0,8" />
+                        <ScrollViewer Grid.Row="1"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl ItemsSource="{Binding FlowToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
-                        </StackPanel>
-                    </ScrollViewer>
-                </DockPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
             </Border>
 
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
@@ -417,7 +457,12 @@
                         <TextBlock Text="{DynamicResource Workflow}" FontSize="16" FontWeight="SemiBold" />
                     </Border>
 
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                    <ScrollViewer x:Name="WorkflowCanvasScrollViewer"
+                                  Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  PanningMode="Both"
+                                  CanContentScroll="False">
                         <Grid MinWidth="350" Margin="28,18">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="36" />
@@ -494,83 +539,76 @@
 
             <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
 
-            <Grid Grid.Column="4">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*" MinHeight="240" />
-                    <RowDefinition Height="6" />
-                    <RowDefinition Height="*" MinHeight="190" />
-                </Grid.RowDefinitions>
+            <Border Grid.Column="4" Style="{StaticResource PanelBorderStyle}" Padding="0">
+                <Grid>
+                    <TextBlock Text="{DynamicResource NoSelection}"
+                               Style="{StaticResource CaptionTextStyle}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
 
-                <Border Grid.Row="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
-                    <Grid>
-                        <TextBlock Text="{DynamicResource NoSelection}"
-                                   Style="{StaticResource CaptionTextStyle}"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                      Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
-                            <StackPanel DataContext="{Binding SelectedAction}">
-                                <TextBlock Text="{Binding ParameterObjectLabel}"
-                                           Style="{StaticResource SectionTitleStyle}"
-                                           TextWrapping="Wrap" />
-                                <TextBlock Text="{DynamicResource Alias}" Style="{StaticResource FieldLabelStyle}" />
-                                <TextBox Text="{Binding Alias, UpdateSourceTrigger=PropertyChanged}"
-                                         IsEnabled="{Binding IsEditingEnabled}"
-                                         GotKeyboardFocus="Parameter_GotKeyboardFocus" />
-                                <TextBlock Text="{Binding AliasValidationMessage}"
-                                           Foreground="{StaticResource DrillDangerBrush}"
-                                           FontSize="11"
-                                           Margin="0,3,0,10"
-                                           Visibility="{Binding AliasValidationMessage, Converter={StaticResource StringToVisibility}}" />
+                    <ui:TabView HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"
+                                Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
+                        <ui:TabViewItem Header="{DynamicResource Parameters}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          PanningMode="VerticalOnly">
+                                <StackPanel DataContext="{Binding SelectedAction}" Margin="12">
+                                    <TextBlock Text="{Binding ParameterObjectLabel}"
+                                               Style="{StaticResource SectionTitleStyle}"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{DynamicResource Alias}" Style="{StaticResource FieldLabelStyle}" />
+                                    <TextBox Text="{Binding Alias, UpdateSourceTrigger=PropertyChanged}"
+                                             IsEnabled="{Binding IsEditingEnabled}"
+                                             GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                                    <TextBlock Text="{Binding AliasValidationMessage}"
+                                               Foreground="{StaticResource DrillDangerBrush}"
+                                               FontSize="11"
+                                               Margin="0,3,0,10"
+                                               Visibility="{Binding AliasValidationMessage, Converter={StaticResource StringToVisibility}}" />
 
-                                <CheckBox Content="{DynamicResource Breakpoint}"
-                                          IsChecked="{Binding HasBreakpoint}"
-                                          IsEnabled="{Binding IsEditingEnabled}"
-                                          Margin="0,4,0,12" />
+                                    <CheckBox Content="{DynamicResource Breakpoint}"
+                                              IsChecked="{Binding HasBreakpoint}"
+                                              IsEnabled="{Binding IsEditingEnabled}"
+                                              Margin="0,4,0,12" />
 
-                                <CheckBox Content="{DynamicResource ActionEnabled}"
-                                          IsChecked="{Binding IsNodeEnabled}"
-                                          IsEnabled="{Binding IsEditingEnabled}"
-                                          Margin="0,0,0,12" />
+                                    <CheckBox Content="{DynamicResource ActionEnabled}"
+                                              IsChecked="{Binding IsNodeEnabled}"
+                                              IsEnabled="{Binding IsEditingEnabled}"
+                                              Margin="0,0,0,12" />
 
-                                <ItemsControl ItemsSource="{Binding Parameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
-                                <TextBlock Text="{DynamicResource ExpressionHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
+                                    <ItemsControl ItemsSource="{Binding Parameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
+                                    <TextBlock Text="{DynamicResource ExpressionHint}"
+                                               Style="{StaticResource CaptionTextStyle}"
+                                               Margin="0,0,0,12" />
 
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:Button Content="{DynamicResource AddElseIf}"
-                                               Command="{Binding DataContext.AddElseIfCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                                               Margin="0,0,6,0" />
-                                    <ui:Button Content="{DynamicResource AddElse}"
-                                               Command="{Binding DataContext.AddElseCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                                               Margin="0,0,6,0" />
-                                    <ui:Button Content="{DynamicResource DeleteAction}"
-                                               Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                                               Appearance="Danger">
-                                        <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
-                                    </ui:Button>
+                                    <WrapPanel>
+                                        <ui:Button Content="{DynamicResource AddElseIf}"
+                                                   Command="{Binding DataContext.AddElseIfCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                                   Margin="0,0,6,6" />
+                                        <ui:Button Content="{DynamicResource AddElse}"
+                                                   Command="{Binding DataContext.AddElseCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                                   Margin="0,0,6,6" />
+                                        <ui:Button Content="{DynamicResource DeleteAction}"
+                                                   Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                                   Appearance="Danger"
+                                                   Margin="0,0,0,6">
+                                            <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
+                                        </ui:Button>
+                                    </WrapPanel>
                                 </StackPanel>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
+                            </ScrollViewer>
+                        </ui:TabViewItem>
 
-                <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" />
-
-                <Border Grid.Row="2" Style="{StaticResource PanelBorderStyle}" Padding="12">
-                    <Grid>
-                        <TextBlock Text="{DynamicResource NoSelection}"
-                                   Style="{StaticResource CaptionTextStyle}"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
-                        <DockPanel Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
-                            <TextBlock DockPanel.Dock="Top"
-                                       Text="{Binding SelectedAction.ResultObjectLabel}"
-                                       Style="{StaticResource SectionTitleStyle}"
-                                       TextWrapping="Wrap" />
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <StackPanel>
+                        <ui:TabViewItem Header="{DynamicResource Results}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          PanningMode="VerticalOnly">
+                                <StackPanel Margin="12">
+                                    <TextBlock Text="{Binding SelectedAction.ResultObjectLabel}"
+                                               Style="{StaticResource SectionTitleStyle}"
+                                               TextWrapping="Wrap" />
                                     <TextBlock Text="{DynamicResource NoResults}"
                                                TextAlignment="Center"
                                                Margin="12">
@@ -585,13 +623,14 @@
                                             </Style>
                                         </TextBlock.Style>
                                     </TextBlock>
-                                    <ItemsControl ItemsSource="{Binding SelectedAction.Results}" ItemTemplate="{StaticResource RuntimeResultTemplate}" />
+                                    <ItemsControl ItemsSource="{Binding SelectedAction.Results}"
+                                                  ItemTemplate="{StaticResource RuntimeResultTemplate}" />
                                 </StackPanel>
                             </ScrollViewer>
-                        </DockPanel>
-                    </Grid>
-                </Border>
-            </Grid>
+                        </ui:TabViewItem>
+                    </ui:TabView>
+                </Grid>
+            </Border>
         </Grid>
 
         <ui:InfoBar Grid.Row="4"

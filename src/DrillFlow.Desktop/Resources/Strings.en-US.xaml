@@ -21,7 +21,7 @@
     <system:String x:Key="Toolbox">Toolbox</system:String>
     <system:String x:Key="EquipmentActions">Equipment actions</system:String>
     <system:String x:Key="FlowActions">Designer actions</system:String>
-    <system:String x:Key="DoubleClickHint">Drag an item or double-click to append it.</system:String>
+    <system:String x:Key="DoubleClickHint">Drag or double-click to add. Use Ctrl/Shift to select multiple Actions.</system:String>
     <system:String x:Key="DragAction">Reorder Action</system:String>
     <system:String x:Key="Workflow">Execution order</system:String>
     <system:String x:Key="Start">Start</system:String>
@@ -45,6 +45,10 @@
     <system:String x:Key="SelectInsertionPosition">Click to select the paste position</system:String>
     <system:String x:Key="ActionCopied">Copied {0}.</system:String>
     <system:String x:Key="ActionPasted">Pasted {0}.</system:String>
+    <system:String x:Key="ActionCut">Cut {0}.</system:String>
+    <system:String x:Key="ActionsCopied">Copied {0} Actions in order.</system:String>
+    <system:String x:Key="ActionsPasted">Pasted {0} Actions in order.</system:String>
+    <system:String x:Key="ActionsCut">Cut {0} Actions in order.</system:String>
     <system:String x:Key="ClipboardInvalid">The copied Action data cannot be read.</system:String>
     <system:String x:Key="AddElseIf">Add else if</system:String>
     <system:String x:Key="AddElse">Add else</system:String>
@@ -144,8 +148,12 @@
     <system:String x:Key="ResponseJson">Response JSON</system:String>
     <system:String x:Key="Browse">Browse</system:String>
     <system:String x:Key="SelectExchangeFolder">Select the equipment exchange folder. UNC paths can also be entered manually.</system:String>
+    <system:String x:Key="OK">OK</system:String>
+    <system:String x:Key="Cancel">Cancel</system:String>
+    <system:String x:Key="Discard">Discard</system:String>
+    <system:String x:Key="ApplicationErrorTitle">Application error</system:String>
     <system:String x:Key="UnsavedChangesTitle">Unsaved changes</system:String>
-    <system:String x:Key="UnsavedChangesPrompt">Save your changes?&#10;Yes: Save / No: Discard / Cancel: Go back</system:String>
+    <system:String x:Key="UnsavedChangesPrompt">There are unsaved changes. Save them before closing?</system:String>
     <system:String x:Key="ValidationIssueSummary">{0} validation error(s): {1}</system:String>
     <system:String x:Key="SettingsBusy">Communication settings cannot be changed while a workflow is running.</system:String>
     <system:String x:Key="ResponseTest">Test response</system:String>

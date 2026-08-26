@@ -24,6 +24,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private readonly IWorkflowDocumentService _documentService;
     private readonly IWorkflowExecutionFacade _execution;
     private readonly IFileDialogService _fileDialogs;
+    private readonly IUserDialogService _userDialogs;
     private readonly IResponseSimulationDialogService _responseSimulationDialogs;
     private readonly IExchangeFolderLauncher _exchangeFolderLauncher;
     private readonly WorkflowValidator _workflowValidator;
@@ -31,8 +32,10 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private readonly ILogger<MainPageViewModel> _logger;
     private readonly Stack<string> _undo = new();
     private readonly Stack<string> _redo = new();
+    private readonly HashSet<WorkflowActionViewModel> _selectedActions = new();
     private WorkflowDocument _document = new();
     private WorkflowActionViewModel? _selectedAction;
+    private WorkflowActionViewModel? _selectionAnchor;
     private string? _documentPath;
     private bool _isDirty;
     private bool _suppressCollectionSync;
@@ -41,14 +44,15 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private bool _statusIsError;
     private TaskCompletionSource<bool>? _terminalStateWaiter;
     private string? _clipboardSnapshot;
-    private ObservableCollection<WorkflowActionViewModel>? _pasteDestination;
-    private int _pasteIndex;
+    private bool _clipboardIsCut;
+    private object? _explicitPasteTarget;
 
     public MainPageViewModel(
         ILocalizationService localization,
         IWorkflowDocumentService documentService,
         IWorkflowExecutionFacade execution,
         IFileDialogService fileDialogs,
+        IUserDialogService userDialogs,
         IResponseSimulationDialogService responseSimulationDialogs,
         IExchangeFolderLauncher exchangeFolderLauncher,
         WorkflowValidator workflowValidator,
@@ -58,6 +62,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _documentService = documentService;
         _execution = execution;
         _fileDialogs = fileDialogs;
+        _userDialogs = userDialogs;
         _responseSimulationDialogs = responseSimulationDialogs;
         _exchangeFolderLauncher = exchangeFolderLauncher;
         _workflowValidator = workflowValidator;
@@ -103,9 +108,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             () => RunState is WorkflowRunState.Running or WorkflowRunState.Paused or WorkflowRunState.Stopping);
         ToggleBreakpointCommand = new RelayCommand(ToggleBreakpoint, () => SelectedAction is not null && IsWorkflowEditingEnabled);
         ClearBreakpointsCommand = new RelayCommand(ClearBreakpoints, () => EnumerateActions().Any(action => action.HasBreakpoint) && IsWorkflowEditingEnabled);
-        DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedAction is not null && IsWorkflowEditingEnabled);
-        CopySelectedCommand = new RelayCommand(CopySelected, () => SelectedAction is not null);
-        CutSelectedCommand = new RelayCommand(CutSelected, () => SelectedAction is not null && IsWorkflowEditingEnabled);
+        DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedActionCount > 0 && IsWorkflowEditingEnabled);
+        CopySelectedCommand = new RelayCommand(CopySelected, () => SelectedActionCount > 0);
+        CutSelectedCommand = new RelayCommand(CutSelected, () => SelectedActionCount > 0 && IsWorkflowEditingEnabled);
         PasteCommand = new RelayCommand(Paste, () => _clipboardSnapshot is not null && IsWorkflowEditingEnabled);
         ToggleEnabledCommand = new RelayCommand(
             ToggleEnabled,
@@ -185,21 +190,18 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 return;
             }
 
-            if (_selectedAction is not null)
-            {
-                _selectedAction.IsSelected = false;
-            }
-
             _selectedAction = value;
-            if (_selectedAction is not null)
-            {
-                _selectedAction.IsSelected = true;
-            }
-
             OnPropertyChanged();
             NotifyCommandStates();
         }
     }
+
+    public IReadOnlyList<WorkflowActionViewModel> SelectedActions =>
+        GetSelectedActionsInDisplayOrder();
+
+    public int SelectedActionCount => _selectedActions.Count;
+
+    public bool HasMultipleSelectedActions => SelectedActionCount > 1;
 
     public string DocumentName => string.IsNullOrWhiteSpace(_document.Name)
         ? _localization["DocumentUntitled"]
@@ -270,7 +272,88 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         private set => SetProperty(ref _statusIsError, value);
     }
 
-    public void SelectAction(WorkflowActionViewModel? action) => SelectedAction = action;
+    public void SelectAction(WorkflowActionViewModel? action)
+    {
+        SetSelectedActions(action is null
+            ? Array.Empty<WorkflowActionViewModel>()
+            : new[] { action }, action);
+        _selectionAnchor = action;
+    }
+
+    public void ToggleActionSelection(WorkflowActionViewModel action)
+    {
+        if (action is null)
+        {
+            throw new ArgumentNullException(nameof(action));
+        }
+
+        if (_selectedActions.Remove(action))
+        {
+            action.IsSelected = false;
+            if (ReferenceEquals(SelectedAction, action))
+            {
+                SelectedAction = GetSelectedActionsInDisplayOrder().LastOrDefault();
+            }
+
+            if (ReferenceEquals(_selectionAnchor, action))
+            {
+                _selectionAnchor = SelectedAction;
+            }
+        }
+        else
+        {
+            _selectedActions.Add(action);
+            action.IsSelected = true;
+            SelectedAction = action;
+            _selectionAnchor = action;
+        }
+
+        RaiseSelectionPropertiesChanged();
+    }
+
+    public void SelectActionRange(WorkflowActionViewModel action)
+    {
+        if (action is null)
+        {
+            throw new ArgumentNullException(nameof(action));
+        }
+
+        var ordered = EnumerateActions().ToList();
+        var anchorIndex = _selectionAnchor is null ? -1 : ordered.IndexOf(_selectionAnchor);
+        var targetIndex = ordered.IndexOf(action);
+        if (anchorIndex < 0 || targetIndex < 0)
+        {
+            SelectAction(action);
+            return;
+        }
+
+        var start = Math.Min(anchorIndex, targetIndex);
+        var count = Math.Abs(targetIndex - anchorIndex) + 1;
+        SetSelectedActions(ordered.GetRange(start, count), action, preserveAnchor: true);
+    }
+
+    public void EnsureActionSelected(WorkflowActionViewModel action)
+    {
+        if (action is null)
+        {
+            throw new ArgumentNullException(nameof(action));
+        }
+
+        if (!_selectedActions.Contains(action))
+        {
+            SelectAction(action);
+            return;
+        }
+
+        SelectedAction = action;
+        RaiseSelectionPropertiesChanged();
+    }
+
+    public IReadOnlyList<WorkflowActionViewModel> GetDragActions(WorkflowActionViewModel action)
+    {
+        EnsureActionSelected(action);
+        return GetSelectedActionRootsInDisplayOrder();
+    }
 
     public ExpressionCompletionResult GetExpressionCompletions(
         Guid ownerNodeId,
@@ -361,27 +444,64 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         ObservableCollection<WorkflowActionViewModel> destination,
         int index)
     {
-        if (!IsWorkflowEditingEnabled || IsCollectionInside(action, destination))
+        return MoveActions(new[] { action }, destination, index);
+    }
+
+    public bool MoveActions(
+        IEnumerable<WorkflowActionViewModel> actions,
+        ObservableCollection<WorkflowActionViewModel> destination,
+        int index)
+    {
+        var roots = NormalizeActionRoots(actions);
+        if (!CanMoveActions(roots, destination))
         {
             return false;
         }
 
-        var source = FindCollectionContaining(action);
-        if (source is null)
+        var locations = new List<ActionLocation>(roots.Count);
+        foreach (var action in roots)
         {
-            return false;
+            var collection = FindCollectionContaining(action);
+            if (collection is null)
+            {
+                return false;
+            }
+
+            locations.Add(new ActionLocation(action, collection, collection.IndexOf(action)));
+        }
+        var adjustedIndex = Math.Max(0, Math.Min(index, destination.Count));
+        adjustedIndex -= locations.Count(location =>
+            ReferenceEquals(location.Collection, destination)
+            && location.Index < adjustedIndex);
+
+        if (locations.All(location => ReferenceEquals(location.Collection, destination)))
+        {
+            var moving = new HashSet<WorkflowActionViewModel>(locations.Select(location => location.Action));
+            var projected = destination.Where(action => !moving.Contains(action)).ToList();
+            var projectedIndex = Math.Max(0, Math.Min(adjustedIndex, projected.Count));
+            projected.InsertRange(projectedIndex, locations.Select(location => location.Action));
+            if (projected.SequenceEqual(destination))
+            {
+                return true;
+            }
         }
 
         CaptureUndoCheckpoint();
-        var sourceIndex = source.IndexOf(action);
-        source.Remove(action);
-        if (ReferenceEquals(source, destination) && sourceIndex < index)
+        foreach (var group in locations.GroupBy(location => location.Collection))
         {
-            index--;
+            foreach (var location in group.OrderByDescending(location => location.Index))
+            {
+                location.Collection.RemoveAt(location.Index);
+            }
         }
 
-        destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), action);
-        SelectAction(action);
+        var insertionIndex = Math.Max(0, Math.Min(adjustedIndex, destination.Count));
+        foreach (var location in locations)
+        {
+            destination.Insert(insertionIndex++, location.Action);
+        }
+
+        SetSelectedActions(locations.Select(location => location.Action), locations.Last().Action);
         IsDirty = true;
         return true;
     }
@@ -390,9 +510,19 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         WorkflowActionViewModel action,
         ObservableCollection<WorkflowActionViewModel> destination)
     {
+        return CanMoveActions(new[] { action }, destination);
+    }
+
+    public bool CanMoveActions(
+        IEnumerable<WorkflowActionViewModel> actions,
+        ObservableCollection<WorkflowActionViewModel> destination)
+    {
+        var roots = NormalizeActionRoots(actions);
         return IsWorkflowEditingEnabled
-               && FindCollectionContaining(action) is not null
-               && !IsCollectionInside(action, destination);
+               && roots.Count > 0
+               && IsKnownCollection(destination)
+               && roots.All(action => FindCollectionContaining(action) is not null)
+               && roots.All(action => !IsCollectionInside(action, destination));
     }
 
     public ObservableCollection<WorkflowActionViewModel>? FindCollectionContaining(WorkflowActionViewModel action)
@@ -412,7 +542,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return false;
         }
 
-        if (target is ObservableCollection<WorkflowActionViewModel> collection)
+        if (target is ObservableCollection<WorkflowActionViewModel> collection
+            && IsKnownCollection(collection))
         {
             destination = collection;
             index = collection.Count;
@@ -437,13 +568,12 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     public bool SetPasteTarget(object? target)
     {
-        if (!TryResolveDropTarget(target, out var destination, out var index))
+        if (!TryResolveDropTarget(target, out _, out _))
         {
             return false;
         }
 
-        _pasteDestination = destination;
-        _pasteIndex = index;
+        _explicitPasteTarget = target;
         NotifyCommandStates();
         return true;
     }
@@ -453,23 +583,38 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         ObservableCollection<WorkflowActionViewModel> destination,
         int index)
     {
+        return CopyActionsTo(new[] { action }, destination, index);
+    }
+
+    public bool CopyActionsTo(
+        IEnumerable<WorkflowActionViewModel> actions,
+        ObservableCollection<WorkflowActionViewModel> destination,
+        int index)
+    {
+        var roots = NormalizeActionRoots(actions);
         if (!IsWorkflowEditingEnabled
-            || FindCollectionContaining(action) is null
+            || roots.Count == 0
+            || roots.Any(action => FindCollectionContaining(action) is null)
             || !IsKnownCollection(destination))
         {
             return false;
         }
 
         CaptureUndoCheckpoint();
-        var clonedNode = WorkflowNodeCopy.CloneForInsertion(
-            action.Model,
+        var clonedNodes = WorkflowNodeCopy.CloneManyForInsertion(
+            roots.Select(action => action.Model),
             EnumerateActions().Select(candidate => candidate.Alias));
-        var clone = new WorkflowActionViewModel(clonedNode, _localization);
-        AttachAction(clone);
-        destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), clone);
-        SelectAction(clone);
-        _pasteDestination = destination;
-        _pasteIndex = destination.IndexOf(clone) + 1;
+        var clones = clonedNodes
+            .Select(node => new WorkflowActionViewModel(node, _localization))
+            .ToList();
+        var insertionIndex = Math.Max(0, Math.Min(index, destination.Count));
+        foreach (var clone in clones)
+        {
+            AttachAction(clone);
+            destination.Insert(insertionIndex++, clone);
+        }
+
+        SetSelectedActions(clones, clones.Last());
         IsDirty = true;
         return true;
     }
@@ -596,7 +741,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return true;
         }
 
-        return _fileDialogs.ConfirmUnsavedChanges() switch
+        return (await _userDialogs.ConfirmUnsavedChangesAsync()) switch
         {
             UnsavedChangesChoice.Discard => true,
             UnsavedChangesChoice.Save => await SaveDocumentAsync(false),
@@ -884,7 +1029,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     private void CopySelected()
     {
-        if (SelectedAction is null)
+        var selected = GetSelectedActionRootsInDisplayOrder();
+        if (selected.Count == 0)
         {
             return;
         }
@@ -892,23 +1038,32 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         var clipboardDocument = new WorkflowDocument
         {
             Name = "Clipboard",
-            Nodes = new List<WorkflowNode> { SelectedAction.Model }
+            Nodes = selected.Select(action => action.Model).ToList()
         };
         _clipboardSnapshot = _documentService.Serialize(clipboardDocument);
-        StatusMessage = string.Format(_localization["ActionCopied"], SelectedAction.Alias);
+        _clipboardIsCut = false;
+        StatusMessage = selected.Count == 1
+            ? string.Format(_localization["ActionCopied"], selected[0].Alias)
+            : string.Format(_localization["ActionsCopied"], selected.Count);
         StatusIsError = false;
         NotifyCommandStates();
     }
 
     private void CutSelected()
     {
-        if (SelectedAction is null || !IsWorkflowEditingEnabled)
+        var selected = GetSelectedActionRootsInDisplayOrder();
+        if (selected.Count == 0 || !IsWorkflowEditingEnabled)
         {
             return;
         }
 
         CopySelected();
+        _clipboardIsCut = true;
         DeleteSelected();
+        StatusMessage = selected.Count == 1
+            ? string.Format(_localization["ActionCut"], selected[0].Alias)
+            : string.Format(_localization["ActionsCut"], selected.Count);
+        StatusIsError = false;
     }
 
     private void Paste()
@@ -920,21 +1075,21 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
         ObservableCollection<WorkflowActionViewModel> destination;
         int index;
-        if (_pasteDestination is not null && IsKnownCollection(_pasteDestination))
+        if (_explicitPasteTarget is null
+            || !TryResolveDropTarget(_explicitPasteTarget, out destination, out index))
         {
-            destination = _pasteDestination;
-            index = _pasteIndex;
-        }
-        else if (SelectedAction is not null
-                 && FindCollectionContaining(SelectedAction) is { } selectedParent)
-        {
-            destination = selectedParent;
-            index = selectedParent.IndexOf(SelectedAction) + 1;
-        }
-        else
-        {
-            destination = Actions;
-            index = Actions.Count;
+            _explicitPasteTarget = null;
+            if (SelectedAction is not null
+                && FindCollectionContaining(SelectedAction) is { } selectedParent)
+            {
+                destination = selectedParent;
+                index = selectedParent.IndexOf(SelectedAction) + 1;
+            }
+            else
+            {
+                destination = Actions;
+                index = Actions.Count;
+            }
         }
 
         WorkflowDocument clipboardDocument;
@@ -946,16 +1101,18 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         {
             _logger.LogWarning(exception, "The in-memory Action clipboard could not be read");
             _clipboardSnapshot = null;
+            _clipboardIsCut = false;
             StatusMessage = _localization["ClipboardInvalid"];
             StatusIsError = true;
             NotifyCommandStates();
             return;
         }
 
-        var source = clipboardDocument.Nodes?.SingleOrDefault();
-        if (source is null)
+        var sources = clipboardDocument.Nodes;
+        if (sources is null || sources.Count == 0)
         {
             _clipboardSnapshot = null;
+            _clipboardIsCut = false;
             StatusMessage = _localization["ClipboardInvalid"];
             StatusIsError = true;
             NotifyCommandStates();
@@ -963,18 +1120,28 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         }
 
         CaptureUndoCheckpoint();
-        var clonedNode = WorkflowNodeCopy.CloneForInsertion(
-            source,
-            EnumerateActions().Select(candidate => candidate.Alias));
-        var clone = new WorkflowActionViewModel(clonedNode, _localization);
-        AttachAction(clone);
+        var preserveCutIdentity = _clipboardIsCut && CanReinsertCutNodes(sources);
+        var pastedNodes = preserveCutIdentity
+            ? (IReadOnlyList<WorkflowNode>)sources
+            : WorkflowNodeCopy.CloneManyForInsertion(
+                sources,
+                EnumerateActions().Select(candidate => candidate.Alias));
+        var clones = pastedNodes
+            .Select(node => new WorkflowActionViewModel(node, _localization))
+            .ToList();
         index = Math.Max(0, Math.Min(index, destination.Count));
-        destination.Insert(index, clone);
-        _pasteDestination = destination;
-        _pasteIndex = index + 1;
-        SelectAction(clone);
+        foreach (var clone in clones)
+        {
+            AttachAction(clone);
+            destination.Insert(index++, clone);
+        }
+
+        _clipboardIsCut = false;
+        SetSelectedActions(clones, clones.Last());
         IsDirty = true;
-        StatusMessage = string.Format(_localization["ActionPasted"], clone.Alias);
+        StatusMessage = clones.Count == 1
+            ? string.Format(_localization["ActionPasted"], clones[0].Alias)
+            : string.Format(_localization["ActionsPasted"], clones.Count);
         StatusIsError = false;
     }
 
@@ -993,20 +1160,39 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     private void DeleteSelected()
     {
-        if (SelectedAction is null || !IsWorkflowEditingEnabled)
+        var selected = GetSelectedActionRootsInDisplayOrder();
+        if (selected.Count == 0 || !IsWorkflowEditingEnabled)
         {
             return;
         }
 
-        var parent = FindCollectionContaining(SelectedAction);
-        if (parent is null)
+        var locations = new List<ActionLocation>(selected.Count);
+        foreach (var action in selected)
+        {
+            var collection = FindCollectionContaining(action);
+            if (collection is null)
+            {
+                return;
+            }
+
+            locations.Add(new ActionLocation(action, collection, collection.IndexOf(action)));
+        }
+
+        if (locations.Any(location => location.Index < 0))
         {
             return;
         }
 
         CaptureUndoCheckpoint();
-        parent.Remove(SelectedAction);
-        SelectedAction = null;
+        ClearSelection();
+        foreach (var group in locations.GroupBy(location => location.Collection))
+        {
+            foreach (var location in group.OrderByDescending(location => location.Index))
+            {
+                location.Collection.RemoveAt(location.Index);
+            }
+        }
+
         IsDirty = true;
     }
 
@@ -1087,9 +1273,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             _suppressCollectionSync = false;
         }
 
-        SelectedAction = null;
-        _pasteDestination = null;
-        _pasteIndex = 0;
+        ClearSelection();
+        _explicitPasteTarget = null;
         IsDirty = dirty;
         OnPropertyChanged(nameof(DocumentName));
         OnPropertyChanged(nameof(DocumentDisplayName));
@@ -1227,6 +1412,124 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private IEnumerable<WorkflowActionViewModel> EnumerateActions()
     {
         return Actions.SelectMany(action => action.EnumerateDepthFirst());
+    }
+
+    private IReadOnlyList<WorkflowActionViewModel> GetSelectedActionsInDisplayOrder()
+    {
+        return EnumerateActions()
+            .Where(action => _selectedActions.Contains(action))
+            .ToArray();
+    }
+
+    private IReadOnlyList<WorkflowActionViewModel> GetSelectedActionRootsInDisplayOrder()
+    {
+        return NormalizeActionRoots(_selectedActions);
+    }
+
+    private IReadOnlyList<WorkflowActionViewModel> NormalizeActionRoots(
+        IEnumerable<WorkflowActionViewModel> actions)
+    {
+        if (actions is null)
+        {
+            throw new ArgumentNullException(nameof(actions));
+        }
+
+        var candidates = new HashSet<WorkflowActionViewModel>(
+            actions.Where(action => action is not null));
+        var ordered = EnumerateActions()
+            .Where(candidates.Contains)
+            .ToList();
+        return ordered
+            .Where(action => !ordered.Any(parent =>
+                !ReferenceEquals(parent, action)
+                && parent.EnumerateDepthFirst().Skip(1).Contains(action)))
+            .ToArray();
+    }
+
+    private bool CanReinsertCutNodes(IReadOnlyCollection<WorkflowNode> cutNodes)
+    {
+        var existingNodes = _document.EnumerateNodesDepthFirst().ToArray();
+        var existingIds = new HashSet<Guid>(existingNodes.Select(node => node.Id));
+        var existingAliases = new HashSet<string>(
+            existingNodes.Select(node => node.Key),
+            StringComparer.OrdinalIgnoreCase);
+        var existingBranchIds = new HashSet<Guid>(EnumerateBranchIds(existingNodes));
+
+        var incomingNodes = EnumerateNodes(cutNodes).ToArray();
+        return incomingNodes.All(node =>
+                   !existingIds.Contains(node.Id)
+                   && !existingAliases.Contains(node.Key))
+               && !EnumerateBranchIds(incomingNodes).Any(existingBranchIds.Contains);
+    }
+
+    private static IEnumerable<WorkflowNode> EnumerateNodes(IEnumerable<WorkflowNode> roots)
+    {
+        foreach (var root in roots)
+        {
+            yield return root;
+            foreach (var child in EnumerateNodes(root.GetChildren()))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    private static IEnumerable<Guid> EnumerateBranchIds(IEnumerable<WorkflowNode> nodes)
+    {
+        return nodes
+            .OfType<ConditionalNode>()
+            .SelectMany(node => node.Branches ?? new List<ConditionalBranch>())
+            .Where(branch => branch is not null)
+            .Select(branch => branch.Id);
+    }
+
+    private void SetSelectedActions(
+        IEnumerable<WorkflowActionViewModel> actions,
+        WorkflowActionViewModel? primary,
+        bool preserveAnchor = false)
+    {
+        var next = new HashSet<WorkflowActionViewModel>(
+            (actions ?? Enumerable.Empty<WorkflowActionViewModel>())
+            .Where(action => action is not null));
+
+        foreach (var action in _selectedActions.Where(action => !next.Contains(action)).ToArray())
+        {
+            action.IsSelected = false;
+        }
+
+        foreach (var action in next)
+        {
+            action.IsSelected = true;
+        }
+
+        _selectedActions.Clear();
+        foreach (var action in next)
+        {
+            _selectedActions.Add(action);
+        }
+
+        SelectedAction = primary is not null && next.Contains(primary)
+            ? primary
+            : GetSelectedActionsInDisplayOrder().LastOrDefault();
+        if (!preserveAnchor)
+        {
+            _selectionAnchor = SelectedAction;
+        }
+
+        RaiseSelectionPropertiesChanged();
+    }
+
+    private void ClearSelection()
+    {
+        SetSelectedActions(Array.Empty<WorkflowActionViewModel>(), null);
+    }
+
+    private void RaiseSelectionPropertiesChanged()
+    {
+        OnPropertyChanged(nameof(SelectedActions));
+        OnPropertyChanged(nameof(SelectedActionCount));
+        OnPropertyChanged(nameof(HasMultipleSelectedActions));
+        NotifyCommandStates();
     }
 
     private static ObservableCollection<WorkflowActionViewModel>? FindCollectionContaining(
@@ -1381,5 +1684,24 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         {
             dispatcher.BeginInvoke(action);
         }
+    }
+
+    private sealed class ActionLocation
+    {
+        public ActionLocation(
+            WorkflowActionViewModel action,
+            ObservableCollection<WorkflowActionViewModel> collection,
+            int index)
+        {
+            Action = action;
+            Collection = collection;
+            Index = index;
+        }
+
+        public WorkflowActionViewModel Action { get; }
+
+        public ObservableCollection<WorkflowActionViewModel> Collection { get; }
+
+        public int Index { get; }
     }
 }

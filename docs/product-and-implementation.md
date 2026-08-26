@@ -35,7 +35,7 @@ DrillFlow Designer는 철판 위 드릴 장비의 단위 동작과 디자이너 
 
 1. 왼쪽: 장비 동작과 디자이너 동작을 구분한 아이템 목록
 2. 중앙: 시작과 끝 사이의 세로 실행 순서 편집기
-3. 오른쪽 위/아래: 선택 Action의 파라미터와 현재 Run 결과
+3. 오른쪽: 선택 Action의 파라미터와 현재 Run 결과를 전환하는 탭
 
 Action 앞의 붉은 점은 브레이크포인트다. 파라미터와 결과 레이블은 Expression에서 사용하는 변수명을 먼저 보여주고, 괄호 안에 사용자 설명을 표시한다.
 
@@ -161,14 +161,16 @@ Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI Con
 | --- | --- |
 | 아이템 더블클릭 | 루트 실행 순서 끝에 Action 추가 |
 | 아이템을 삽입 bar/빈 Canvas에 drag | 해당 컬렉션·index에 새 Action 생성 |
-| Action 카드 헤더 drag | 같은 레벨 또는 허용된 중첩 컬렉션으로 이동 |
-| Action drag 중 Ctrl | subtree를 새 GUID와 고유 별칭으로 deep copy |
+| Action 클릭 | 단일 선택, Ctrl+클릭은 선택 토글, Shift+클릭은 anchor부터 범위 선택 |
+| Action 카드 헤더 drag | 선택된 최상위 Action 묶음을 표시 순서대로 같은 레벨 또는 허용된 중첩 컬렉션으로 이동 |
+| Action drag 중 Ctrl | 선택 묶음을 새 GUID와 고유 별칭으로 deep copy하고 묶음 내부 Expression 참조도 새 별칭으로 변경 |
 | 삽입 bar MouseOver | 놓기 가능한 위치를 accent horizontal bar로 표시 |
 | 삽입 bar MouseDown | 붙여넣기 target을 저장하고 짧게 pulse한 뒤 bar를 숨김 |
-| Ctrl+V | 마지막으로 클릭한 target이 유효하면 그 위치, 아니면 선택 Action 다음 위치에 붙여넣기 |
-| Action 클릭/우클릭 | 선택 변경 후 오른쪽 Inspector와 Context Menu command 갱신 |
+| Ctrl+V | 마지막으로 클릭한 target이 유효하면 그 위치, 아니면 주 선택 Action 다음 위치에 선택 묶음을 순서대로 붙여넣기 |
+| Action 우클릭 | 이미 선택된 Action이면 묶음을 유지하고, 선택 밖의 Action이면 단일 선택한 뒤 Context Menu command 갱신 |
 | Context Menu | 이 Action만 실행 / Response 테스트, 복사·잘라내기·붙여넣기·삭제, 활성화, 브레이크포인트를 separator로 분류 |
-| Ctrl+C/Ctrl+X/Delete/F9 | 선택 Action 복사/잘라내기/삭제/브레이크포인트 전환 |
+| Ctrl+C/Ctrl+X/Delete | 선택 묶음의 최상위 Action들을 순서대로 복사/잘라내기/삭제 |
+| F9 | 주 선택 Action의 브레이크포인트 전환 |
 | 파라미터 편집 시작 | Undo snapshot 생성, 입력마다 유효성/Expression 표시 갱신 |
 | Ctrl+Space | 현재 범위의 Expression completion popup 표시 |
 | 통신 폴더 버튼 | 최신 설정 경로를 Windows Explorer로 열고 상태 표시 |
@@ -186,7 +188,7 @@ Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI Con
 
 ### 부팅과 공통 서비스
 
-`App.xaml.cs`는 Generic Host를 구성하고 Microsoft.Extensions Configuration, DI, Options를 연결한다. 창을 직접 `new`하지 않고 Host service provider에서 singleton Window/Page/ViewModel을 가져온다. Serilog bootstrap logger는 Host 완성 전 오류를 Debug와 rolling file에 기록하고, Host 이후 정식 logger로 교체된다.
+`App.xaml.cs`는 Generic Host를 구성하고 Microsoft.Extensions Configuration, DI, Options를 연결한다. 창을 직접 `new`하지 않고 Host service provider에서 singleton Window/Page/ViewModel을 가져온다. Serilog bootstrap logger는 Host 완성 전 오류를 Debug와 rolling file에 기록하고, Host 이후 정식 logger로 교체된다. 시작 실패·두 번째 인스턴스·미저장 변경·일반 메시지는 Fluent ContentDialog로 통일하며, singleton dialog gate가 여러 ContentDialog가 동시에 열리지 않도록 직렬화한다. 파일·폴더 선택창도 현재 MainWindow를 owner로 사용한다.
 
 HTTP 실행 로그는 method, query를 제거한 URL path, timeout, status만 남긴다. 인증 헤더·request body·response body와 URL query는 rolling log에 기록하지 않는다.
 
@@ -245,6 +247,9 @@ code-behind는 hit testing, mouse 좌표, drag payload, animation처럼 WPF visu
 - Control Flow가 장비 response를 기다리지 않는 실행 경계 명문화
 - 장비 Action과 분리된 HTTP GET/POST Designer Action 및 동적 결과의 Expression 연결
 - 본 제품·이벤트·아키텍처 문서 추가
+- Ctrl/Shift 다중 선택과 순서 보존 그룹 복사·잘라내기·붙여넣기·삭제·드래그
+- 선택 묶음 내부 Action 간 Expression 참조를 복사본의 새 별칭으로 일괄 재작성
+- Inspector의 파라미터/결과 탭 전환과 Fluent ContentDialog 기반 시작·오류·미저장 확인 통일
 
 ## 11. 확장 시 체크리스트
 

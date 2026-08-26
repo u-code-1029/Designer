@@ -48,7 +48,7 @@ Arbitrary C# execution is never used. Runtime results exist only for the current
 
 Designer-owned Delay, Repeat, Conditional, and HTTP Actions never use the equipment exchange files. HTTP supports GET/POST and exposes status, headers, raw text, and dynamically parsed JSON through paths such as `http_1.result.json.items[0].id`.
 
-In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support a grouped right-click menu, `Ctrl+C/X/V`, Ctrl-drag deep copy, and mouse-selected insertion bars; copied nested workflows receive fresh IDs and unique aliases.
+In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support Ctrl/Shift multi-selection, ordered group `Ctrl+C/X/V`, grouped drag/drop, Ctrl-drag deep copy, and mouse-selected insertion bars. Copied workflow batches receive fresh IDs and unique aliases while references between the selected Actions follow their regenerated aliases.
 
 See [contract.md](contract.md) for the current equipment request/response contract and format-change map,
 [docs/architecture.md](docs/architecture.md) for the agreed behavior and safety boundaries,

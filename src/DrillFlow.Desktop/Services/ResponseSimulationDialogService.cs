@@ -15,15 +15,18 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
 {
     private readonly IEquipmentResponseSimulator _simulator;
     private readonly ILocalizationService _localization;
+    private readonly IContentDialogGate _dialogGate;
     private readonly ILogger<ResponseSimulationDialogService> _logger;
 
     public ResponseSimulationDialogService(
         IEquipmentResponseSimulator simulator,
         ILocalizationService localization,
+        IContentDialogGate dialogGate,
         ILogger<ResponseSimulationDialogService> logger)
     {
         _simulator = simulator;
         _localization = localization;
+        _dialogGate = dialogGate;
         _logger = logger;
     }
 
@@ -34,6 +37,14 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
             throw new ArgumentNullException(nameof(action));
         }
 
+        using (await _dialogGate.EnterAsync().ConfigureAwait(true))
+        {
+            return await ShowCoreAsync(action);
+        }
+    }
+
+    private async Task<bool> ShowCoreAsync(WorkflowActionViewModel action)
+    {
         var host = ContentDialogHost.GetForWindow(System.Windows.Application.Current.MainWindow)
                    ?? throw new InvalidOperationException("The main ContentDialog host is unavailable.");
         var lastCorrelation = action.Results.LastOrDefault()?.CorrelationId;

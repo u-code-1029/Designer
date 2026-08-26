@@ -19,6 +19,8 @@ public partial class MainPage : Page
     private readonly Dictionary<Border, long> _insertionFlashVersions = new();
     private FrameworkElement? _actionDragSource;
     private WorkflowActionViewModel? _actionBeingDragged;
+    private ModifierKeys _actionDragModifiers;
+    private bool _actionWasSelectedOnMouseDown;
     private long _nextInsertionFlashVersion;
 
     public MainPage(MainPageViewModel viewModel)
@@ -79,7 +81,19 @@ public partial class MainPage : Page
             && !IsInteractiveOrigin(e.OriginalSource as DependencyObject)
             && FindNearestAction(e.OriginalSource as DependencyObject) == action)
         {
-            ViewModel.SelectAction(action);
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
+            {
+                ViewModel.SelectActionRange(action);
+            }
+            else if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                ViewModel.ToggleActionSelection(action);
+            }
+            else
+            {
+                ViewModel.SelectAction(action);
+            }
+
             element.Focus();
             e.Handled = true;
         }
@@ -96,7 +110,25 @@ public partial class MainPage : Page
             _dragStart = e.GetPosition(this);
             _actionDragSource = element;
             _actionBeingDragged = action;
-            ViewModel.SelectAction(action);
+            _actionDragModifiers = Keyboard.Modifiers;
+            _actionWasSelectedOnMouseDown = action.IsSelected;
+
+            if ((_actionDragModifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
+            {
+                ViewModel.SelectActionRange(action);
+            }
+            else if ((_actionDragModifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                if (!_actionWasSelectedOnMouseDown)
+                {
+                    ViewModel.ToggleActionSelection(action);
+                }
+            }
+            else
+            {
+                ViewModel.EnsureActionSelected(action);
+            }
+
             element.Focus();
             Mouse.Capture(element);
             e.Handled = true;
@@ -127,7 +159,9 @@ public partial class MainPage : Page
         }
 
         var copyRequested = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
-        var data = new DataObject(DragFormat, new WorkflowDragPayload(action, copyRequested));
+        var data = new DataObject(
+            DragFormat,
+            new WorkflowDragPayload(ViewModel.GetDragActions(action), copyRequested));
         ClearPendingActionDrag();
         DragDrop.DoDragDrop(element, data, DragDropEffects.Copy | DragDropEffects.Move);
         e.Handled = true;
@@ -135,9 +169,24 @@ public partial class MainPage : Page
 
     private void DragHandle_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (ReferenceEquals(sender, _actionDragSource))
+        if (ReferenceEquals(sender, _actionDragSource) && _actionBeingDragged is { } action)
         {
+            var modifiers = _actionDragModifiers;
+            var wasSelected = _actionWasSelectedOnMouseDown;
             ClearPendingActionDrag();
+
+            if ((modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                if (wasSelected)
+                {
+                    ViewModel.ToggleActionSelection(action);
+                }
+            }
+            else if ((modifiers & ModifierKeys.Shift) != ModifierKeys.Shift)
+            {
+                ViewModel.SelectAction(action);
+            }
+
             e.Handled = true;
         }
     }
@@ -147,6 +196,8 @@ public partial class MainPage : Page
         var source = _actionDragSource;
         _actionDragSource = null;
         _actionBeingDragged = null;
+        _actionDragModifiers = ModifierKeys.None;
+        _actionWasSelectedOnMouseDown = false;
         if (source?.IsMouseCaptured == true)
         {
             source.ReleaseMouseCapture();
@@ -162,8 +213,7 @@ public partial class MainPage : Page
             return;
         }
 
-        ViewModel.SelectAction(action);
-        menu.DataContext = ViewModel;
+        ViewModel.EnsureActionSelected(action);
     }
 
     private static WorkflowActionViewModel? FindNearestAction(DependencyObject? origin)
@@ -235,19 +285,19 @@ public partial class MainPage : Page
             return;
         }
 
-        if (payload.ExistingAction is not null)
+        if (payload.ExistingActions is not null)
         {
             var copyRequested = payload.CopyRequested
                                 || (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
             if (copyRequested)
             {
-                e.Effects = ViewModel.CopyActionTo(payload.ExistingAction, destination, index)
+                e.Effects = ViewModel.CopyActionsTo(payload.ExistingActions, destination, index)
                     ? DragDropEffects.Copy
                     : DragDropEffects.None;
             }
             else
             {
-                e.Effects = ViewModel.MoveAction(payload.ExistingAction, destination, index)
+                e.Effects = ViewModel.MoveActions(payload.ExistingActions, destination, index)
                     ? DragDropEffects.Move
                     : DragDropEffects.None;
             }
@@ -270,16 +320,16 @@ public partial class MainPage : Page
             || sender is not Border border
             || !TryGetPayload(e, out var payload)
             || !ViewModel.TryResolveDropTarget(border.Tag, out var destination, out _)
-            || (payload.ExistingAction is not null
+            || (payload.ExistingActions is not null
                 && !(copyRequested = payload.CopyRequested
                     || (e.KeyStates & DragDropKeyStates.ControlKey) != 0)
-                && !ViewModel.CanMoveAction(payload.ExistingAction, destination)))
+                && !ViewModel.CanMoveActions(payload.ExistingActions, destination)))
         {
             e.Effects = DragDropEffects.None;
             return;
         }
 
-        e.Effects = payload.ExistingAction is null || copyRequested
+        e.Effects = payload.ExistingActions is null || copyRequested
             ? DragDropEffects.Copy
             : DragDropEffects.Move;
         CancelInsertionFlash(border);
@@ -422,7 +472,7 @@ public partial class MainPage : Page
         if (sender is DependencyObject dependencyObject
             && FindNearestAction(dependencyObject) is { } ownerAction)
         {
-            ViewModel.SelectAction(ownerAction);
+            ViewModel.EnsureActionSelected(ownerAction);
         }
 
         ViewModel.CaptureUndoCheckpoint();
@@ -501,15 +551,17 @@ public partial class MainPage : Page
             Kind = kind;
         }
 
-        public WorkflowDragPayload(WorkflowActionViewModel action, bool copyRequested)
+        public WorkflowDragPayload(
+            System.Collections.Generic.IReadOnlyList<WorkflowActionViewModel> actions,
+            bool copyRequested)
         {
-            ExistingAction = action;
+            ExistingActions = actions;
             CopyRequested = copyRequested;
         }
 
         public WorkflowNodeKind? Kind { get; }
 
-        public WorkflowActionViewModel? ExistingAction { get; }
+        public System.Collections.Generic.IReadOnlyList<WorkflowActionViewModel>? ExistingActions { get; }
 
         public bool CopyRequested { get; }
     }

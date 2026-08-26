@@ -1,12 +1,5 @@
 namespace DrillFlow.Desktop.Services;
 
-public enum UnsavedChangesChoice
-{
-    Save,
-    Discard,
-    Cancel
-}
-
 public interface IFileDialogService
 {
     string? ShowOpenWorkflowDialog();
@@ -14,6 +7,4 @@ public interface IFileDialogService
     string? ShowSaveWorkflowDialog(string suggestedFileName);
 
     string? ShowSelectFolderDialog(string initialFolder);
-
-    UnsavedChangesChoice ConfirmUnsavedChanges();
 }

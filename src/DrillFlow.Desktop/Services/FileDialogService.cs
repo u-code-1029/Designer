@@ -1,5 +1,5 @@
-using System.Windows;
-using DrillFlow.Desktop.Services;
+using System;
+using System.Windows.Interop;
 using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
@@ -26,7 +26,9 @@ public sealed class FileDialogService : IFileDialogService
             Title = _localization["Open"]
         };
 
-        return dialog.ShowDialog() == true ? dialog.FileName : null;
+        var owner = System.Windows.Application.Current?.MainWindow;
+        var result = owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
+        return result == true ? dialog.FileName : null;
     }
 
     public string? ShowSaveWorkflowDialog(string suggestedFileName)
@@ -40,7 +42,9 @@ public sealed class FileDialogService : IFileDialogService
             Title = _localization["SaveAs"]
         };
 
-        return dialog.ShowDialog() == true ? dialog.FileName : null;
+        var owner = System.Windows.Application.Current?.MainWindow;
+        var result = owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
+        return result == true ? dialog.FileName : null;
     }
 
     public string? ShowSelectFolderDialog(string initialFolder)
@@ -52,22 +56,20 @@ public sealed class FileDialogService : IFileDialogService
             SelectedPath = System.IO.Directory.Exists(initialFolder) ? initialFolder : string.Empty
         };
 
-        return dialog.ShowDialog() == Forms.DialogResult.OK ? dialog.SelectedPath : null;
+        var owner = System.Windows.Application.Current?.MainWindow;
+        var result = owner is null
+            ? dialog.ShowDialog()
+            : dialog.ShowDialog(new NativeWindowOwner(new WindowInteropHelper(owner).Handle));
+        return result == Forms.DialogResult.OK ? dialog.SelectedPath : null;
     }
 
-    public UnsavedChangesChoice ConfirmUnsavedChanges()
+    private sealed class NativeWindowOwner : Forms.IWin32Window
     {
-        var result = MessageBox.Show(
-            _localization["UnsavedChangesPrompt"],
-            _localization["UnsavedChangesTitle"],
-            MessageBoxButton.YesNoCancel,
-            MessageBoxImage.Warning);
-
-        return result switch
+        public NativeWindowOwner(IntPtr handle)
         {
-            MessageBoxResult.Yes => UnsavedChangesChoice.Save,
-            MessageBoxResult.No => UnsavedChangesChoice.Discard,
-            _ => UnsavedChangesChoice.Cancel
-        };
+            Handle = handle;
+        }
+
+        public IntPtr Handle { get; }
     }
 }

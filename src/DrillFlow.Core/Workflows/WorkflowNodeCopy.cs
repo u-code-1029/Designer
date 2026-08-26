@@ -21,13 +21,39 @@ namespace DrillFlow.Core.Workflows
                 throw new ArgumentNullException(nameof(source));
             }
 
-            var clone = CloneNode(source);
+            return CloneManyForInsertion(new[] { source }, existingAliases)[0];
+        }
+
+        /// <summary>
+        /// Creates independent copies of several workflow subtrees as one ordered batch.
+        /// References between different selected roots are rewritten together so copying
+        /// actions such as "measure" followed by "drill = measure.result..." preserves
+        /// the relationship after both aliases are regenerated.
+        /// </summary>
+        public static IReadOnlyList<WorkflowNode> CloneManyForInsertion(
+            IEnumerable<WorkflowNode> sources,
+            IEnumerable<string> existingAliases)
+        {
+            if (sources == null)
+            {
+                throw new ArgumentNullException(nameof(sources));
+            }
+
+            var sourceList = sources.ToList();
+            if (sourceList.Any(source => source == null))
+            {
+                throw new ArgumentException("A copied workflow batch cannot contain a null node.", nameof(sources));
+            }
+
+            ValidateUnambiguousBatch(sourceList, nameof(sources));
+
+            var clones = sourceList.Select(CloneNode).ToList();
             var usedAliases = new HashSet<string>(
                 existingAliases ?? Enumerable.Empty<string>(),
                 StringComparer.OrdinalIgnoreCase);
             var aliasMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var node in Enumerate(clone))
+            foreach (var node in clones.SelectMany(Enumerate))
             {
                 var originalAlias = node.Key ?? string.Empty;
                 var newAlias = CreateUniqueAlias(originalAlias, usedAliases);
@@ -40,8 +66,64 @@ namespace DrillFlow.Core.Workflows
                 usedAliases.Add(newAlias);
             }
 
-            RewriteInternalReferences(clone, aliasMap);
-            return clone;
+            foreach (var clone in clones)
+            {
+                RewriteInternalReferences(clone, aliasMap);
+            }
+
+            return clones;
+        }
+
+        /// <summary>
+        /// Alias rewriting requires one source node for each source alias. Duplicate
+        /// identities (including selecting both a container and one of its descendants)
+        /// and duplicate aliases would make a reference's intended target ambiguous, so
+        /// fail before creating a partially meaningful batch.
+        /// </summary>
+        private static void ValidateUnambiguousBatch(
+            IEnumerable<WorkflowNode> roots,
+            string parameterName)
+        {
+            var identities = new HashSet<Guid>();
+            var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var root in roots)
+            {
+                ValidateUnambiguousSubtree(root, identities, aliases, parameterName);
+            }
+        }
+
+        private static void ValidateUnambiguousSubtree(
+            WorkflowNode node,
+            ISet<Guid> identities,
+            ISet<string> aliases,
+            string parameterName)
+        {
+            if (!identities.Add(node.Id))
+            {
+                throw new ArgumentException(
+                    "A copied workflow batch cannot contain duplicate or overlapping nodes.",
+                    parameterName);
+            }
+
+            var alias = node.Key ?? string.Empty;
+            if (!aliases.Add(alias))
+            {
+                throw new ArgumentException(
+                    $"A copied workflow batch contains the duplicate alias '{alias}'.",
+                    parameterName);
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                if (child == null)
+                {
+                    throw new ArgumentException(
+                        "A copied workflow subtree cannot contain a null node.",
+                        parameterName);
+                }
+
+                ValidateUnambiguousSubtree(child, identities, aliases, parameterName);
+            }
         }
 
         private static WorkflowNode CloneNode(WorkflowNode source)

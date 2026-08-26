@@ -21,7 +21,7 @@
     <system:String x:Key="Toolbox">아이템 목록</system:String>
     <system:String x:Key="EquipmentActions">장비 동작</system:String>
     <system:String x:Key="FlowActions">디자이너 동작</system:String>
-    <system:String x:Key="DoubleClickHint">끌어 놓거나 두 번 클릭해 추가합니다.</system:String>
+    <system:String x:Key="DoubleClickHint">끌어 놓거나 두 번 클릭해 추가합니다. Ctrl/Shift로 여러 Action을 선택할 수 있습니다.</system:String>
     <system:String x:Key="DragAction">Action 순서 변경</system:String>
     <system:String x:Key="Workflow">실행 순서</system:String>
     <system:String x:Key="Start">시작</system:String>
@@ -45,6 +45,10 @@
     <system:String x:Key="SelectInsertionPosition">클릭하여 붙여넣을 위치 선택</system:String>
     <system:String x:Key="ActionCopied">{0}을(를) 복사했습니다.</system:String>
     <system:String x:Key="ActionPasted">{0}을(를) 붙여넣었습니다.</system:String>
+    <system:String x:Key="ActionCut">{0}을(를) 잘라냈습니다.</system:String>
+    <system:String x:Key="ActionsCopied">Action {0}개를 순서대로 복사했습니다.</system:String>
+    <system:String x:Key="ActionsPasted">Action {0}개를 순서대로 붙여넣었습니다.</system:String>
+    <system:String x:Key="ActionsCut">Action {0}개를 순서대로 잘라냈습니다.</system:String>
     <system:String x:Key="ClipboardInvalid">복사한 Action 데이터를 읽을 수 없습니다.</system:String>
     <system:String x:Key="AddElseIf">Else if 추가</system:String>
     <system:String x:Key="AddElse">Else 추가</system:String>
@@ -144,8 +148,12 @@
     <system:String x:Key="ResponseJson">Response JSON</system:String>
     <system:String x:Key="Browse">찾아보기</system:String>
     <system:String x:Key="SelectExchangeFolder">장비 파일 통신 폴더를 선택하세요. UNC 경로는 직접 입력할 수 있습니다.</system:String>
+    <system:String x:Key="OK">확인</system:String>
+    <system:String x:Key="Cancel">취소</system:String>
+    <system:String x:Key="Discard">버리기</system:String>
+    <system:String x:Key="ApplicationErrorTitle">프로그램 오류</system:String>
     <system:String x:Key="UnsavedChangesTitle">저장하지 않은 변경 내용</system:String>
-    <system:String x:Key="UnsavedChangesPrompt">변경 내용을 저장하시겠습니까?&#10;예: 저장 / 아니요: 버리기 / 취소: 돌아가기</system:String>
+    <system:String x:Key="UnsavedChangesPrompt">저장하지 않은 변경 내용이 있습니다. 닫기 전에 저장하시겠습니까?</system:String>
     <system:String x:Key="ValidationIssueSummary">유효성 오류 {0}개: {1}</system:String>
     <system:String x:Key="SettingsBusy">워크플로 실행 중에는 통신 설정을 변경할 수 없습니다.</system:String>
     <system:String x:Key="ResponseTest">Response 테스트</system:String>
