@@ -117,8 +117,6 @@ public static class ExpressionCompletionBehavior
             var border = new Border
             {
                 Padding = new Thickness(2),
-                Background = SystemColors.WindowBrush,
-                BorderBrush = SystemColors.ActiveBorderBrush,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4),
                 Effect = new DropShadowEffect
@@ -129,6 +127,12 @@ public static class ExpressionCompletionBehavior
                 },
                 Child = _comboBox
             };
+            border.SetResourceReference(
+                Border.BackgroundProperty,
+                "DrillSurfaceBrush");
+            border.SetResourceReference(
+                Border.BorderBrushProperty,
+                "DrillBorderBrush");
 
             _popup = new Popup
             {

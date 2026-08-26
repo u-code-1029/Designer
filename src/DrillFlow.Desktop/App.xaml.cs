@@ -106,6 +106,7 @@ public partial class App : System.Windows.Application
 
                     services.AddSingleton<IUserSettingsStore, UserSettingsStore>();
                     services.AddSingleton<ILocalizationService, LocalizationService>();
+                    services.AddSingleton<IApplicationThemeService, ApplicationThemeService>();
                     services.AddSingleton<IWorkflowDocumentService, WorkflowDocumentService>();
                     services.AddSingleton<IWorkflowExecutionFacade, WorkflowExecutionFacade>();
                     services.AddSingleton<IFileDialogService, FileDialogService>();
@@ -129,6 +130,8 @@ public partial class App : System.Windows.Application
 
             var localization = _host.Services.GetRequiredService<ILocalizationService>();
             localization.Initialize();
+            var theme = _host.Services.GetRequiredService<IApplicationThemeService>();
+            theme.Initialize();
 
             DispatcherUnhandledException += OnDispatcherUnhandledException;
 
@@ -260,6 +263,7 @@ public partial class App : System.Windows.Application
                 Language = string.IsNullOrWhiteSpace(persisted.Language)
                     ? fallback.Language
                     : persisted.Language,
+                Theme = ThemeSelection.Normalize(persisted.Theme),
                 Communication = persisted.Communication
             };
 

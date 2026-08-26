@@ -1,0 +1,1907 @@
+From 41c83d532f3a44b58448420234b2b77c641957d0 Mon Sep 17 00:00:00 2001
+From: OpenAI Codex <codex@openai.com>
+Date: Wed, 26 Aug 2026 09:07:07 +0900
+Subject: [PATCH] Improve multi-action editing and designer dialogs
+
+---
+ README.md                                     |   2 +-
+ .../Workflows/WorkflowNodeCopy.cs             |  36 +-
+ src/DrillFlow.Desktop/App.xaml.cs             | 141 +++--
+ .../Resources/Strings.en-US.xaml              |  14 +-
+ .../Resources/Strings.ko-KR.xaml              |  14 +-
+ .../Services/FileDialogService.cs             |  36 +-
+ .../Services/IContentDialogGate.cs            |  41 ++
+ .../Services/IFileDialogService.cs            |   9 -
+ .../Services/IUserDialogService.cs            |  17 +
+ .../ResponseSimulationDialogService.cs        |  11 +
+ .../Services/UserDialogService.cs             |  83 +++
+ .../ViewModels/MainPageViewModel.cs           | 482 +++++++++++++++---
+ src/DrillFlow.Desktop/Views/MainPage.xaml     | 223 ++++----
+ src/DrillFlow.Desktop/Views/MainPage.xaml.cs  |  45 +-
+ .../Views/StartupDialogWindow.xaml            |  39 ++
+ .../Views/StartupDialogWindow.xaml.cs         |  44 ++
+ .../CoreWorkflowNodeCopyTests.cs              |  26 +
+ 17 files changed, 992 insertions(+), 271 deletions(-)
+ create mode 100644 src/DrillFlow.Desktop/Services/IContentDialogGate.cs
+ create mode 100644 src/DrillFlow.Desktop/Services/IUserDialogService.cs
+ create mode 100644 src/DrillFlow.Desktop/Services/UserDialogService.cs
+ create mode 100644 src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml
+ create mode 100644 src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml.cs
+
+diff --git a/README.md b/README.md
+index 26cd6ff..499cb6f 100644
+--- a/README.md
++++ b/README.md
+@@ -46,7 +46,7 @@ Parameters retain their authored text, including scientific notation. Text begin
+ 
+ Arbitrary C# execution is never used. Runtime results exist only for the current run and are cleared before the next run. Repeat iterations remain addressable through `results[index]`, `results.last`, and the latest-result shortcut `result`.
+ 
+-In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support a grouped right-click menu, `Ctrl+C/X/V`, Ctrl-drag deep copy, and mouse-selected insertion bars; copied nested workflows receive fresh IDs and unique aliases.
++In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support Ctrl/Shift multi-selection, ordered group `Ctrl+C/X/V`, grouped drag/drop, Ctrl-drag deep copy, and mouse-selected insertion bars. Copied workflow batches receive fresh IDs and unique aliases while references between the selected Actions follow their regenerated aliases.
+ 
+ See [contract.md](contract.md) for the current equipment request/response contract and format-change map,
+ [docs/architecture.md](docs/architecture.md) for the agreed behavior and safety boundaries,
+diff --git a/src/DrillFlow.Core/Workflows/WorkflowNodeCopy.cs b/src/DrillFlow.Core/Workflows/WorkflowNodeCopy.cs
+index 6960edb..b8a5b4d 100644
+--- a/src/DrillFlow.Core/Workflows/WorkflowNodeCopy.cs
++++ b/src/DrillFlow.Core/Workflows/WorkflowNodeCopy.cs
+@@ -21,13 +21,37 @@ namespace DrillFlow.Core.Workflows
+                 throw new ArgumentNullException(nameof(source));
+             }
+ 
+-            var clone = CloneNode(source);
++            return CloneManyForInsertion(new[] { source }, existingAliases)[0];
++        }
++
++        /// <summary>
++        /// Creates independent copies of several workflow subtrees as one ordered batch.
++        /// References between different selected roots are rewritten together so copying
++        /// actions such as "measure" followed by "drill = measure.result..." preserves
++        /// the relationship after both aliases are regenerated.
++        /// </summary>
++        public static IReadOnlyList<WorkflowNode> CloneManyForInsertion(
++            IEnumerable<WorkflowNode> sources,
++            IEnumerable<string> existingAliases)
++        {
++            if (sources == null)
++            {
++                throw new ArgumentNullException(nameof(sources));
++            }
++
++            var sourceList = sources.ToList();
++            if (sourceList.Any(source => source == null))
++            {
++                throw new ArgumentException("A copied workflow batch cannot contain a null node.", nameof(sources));
++            }
++
++            var clones = sourceList.Select(CloneNode).ToList();
+             var usedAliases = new HashSet<string>(
+                 existingAliases ?? Enumerable.Empty<string>(),
+                 StringComparer.OrdinalIgnoreCase);
+             var aliasMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+ 
+-            foreach (var node in Enumerate(clone))
++            foreach (var node in clones.SelectMany(Enumerate))
+             {
+                 var originalAlias = node.Key ?? string.Empty;
+                 var newAlias = CreateUniqueAlias(originalAlias, usedAliases);
+@@ -40,8 +64,12 @@ namespace DrillFlow.Core.Workflows
+                 usedAliases.Add(newAlias);
+             }
+ 
+-            RewriteInternalReferences(clone, aliasMap);
+-            return clone;
++            foreach (var clone in clones)
++            {
++                RewriteInternalReferences(clone, aliasMap);
++            }
++
++            return clones;
+         }
+ 
+         private static WorkflowNode CloneNode(WorkflowNode source)
+diff --git a/src/DrillFlow.Desktop/App.xaml.cs b/src/DrillFlow.Desktop/App.xaml.cs
+index ea2e2dc..413cfa5 100644
+--- a/src/DrillFlow.Desktop/App.xaml.cs
++++ b/src/DrillFlow.Desktop/App.xaml.cs
+@@ -27,45 +27,46 @@ public partial class App : System.Windows.Application
+     private IHost? _host;
+     private Mutex? _singleInstanceMutex;
+     private bool _ownsSingleInstanceMutex;
++    private bool _handlingUnhandledException;
+ 
+     protected override async void OnStartup(StartupEventArgs e)
+     {
+-        _singleInstanceMutex = new Mutex(
+-            initiallyOwned: true,
+-            name: @"Local\DrillFlow.Designer.SingleInstance",
+-            createdNew: out _ownsSingleInstanceMutex);
+-        if (!_ownsSingleInstanceMutex)
+-        {
+-            MessageBox.Show(
+-                "DrillFlow Designer is already running.\nDrillFlow Designer가 이미 실행 중입니다.",
+-                "DrillFlow Designer",
+-                MessageBoxButton.OK,
+-                MessageBoxImage.Information);
+-            Shutdown();
+-            return;
+-        }
+-
+-        var logDirectory = Path.Combine(
+-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+-            "DrillFlow",
+-            "Logs");
+-
+-        Directory.CreateDirectory(logDirectory);
+-
+-        Log.Logger = new LoggerConfiguration()
+-            .MinimumLevel.Debug()
+-            .WriteTo.Debug()
+-            .WriteTo.File(
+-                Path.Combine(logDirectory, "bootstrap-.log"),
+-                rollingInterval: RollingInterval.Day,
+-                retainedFileCountLimit: 14,
+-                shared: true)
+-            // Serilog.Extensions.Hosting does not expose ReloadableLogger on its net462 asset;
+-            // this early logger still serves as the bootstrap logger and is replaced by UseSerilog.
+-            .CreateLogger();
++        base.OnStartup(e);
++        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+ 
+         try
+         {
++            _singleInstanceMutex = new Mutex(
++                initiallyOwned: true,
++                name: @"Local\DrillFlow.Designer.SingleInstance",
++                createdNew: out _ownsSingleInstanceMutex);
++            if (!_ownsSingleInstanceMutex)
++            {
++                await ShowBootstrapMessageAsync(
++                    "DrillFlow Designer",
++                    "DrillFlow Designer is already running.\nDrillFlow Designer가 이미 실행 중입니다.");
++                Shutdown();
++                return;
++            }
++
++            var logDirectory = Path.Combine(
++                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
++                "DrillFlow",
++                "Logs");
++            Directory.CreateDirectory(logDirectory);
++
++            Log.Logger = new LoggerConfiguration()
++                .MinimumLevel.Debug()
++                .WriteTo.Debug()
++                .WriteTo.File(
++                    Path.Combine(logDirectory, "bootstrap-.log"),
++                    rollingInterval: RollingInterval.Day,
++                    retainedFileCountLimit: 14,
++                    shared: true)
++                // Serilog.Extensions.Hosting does not expose ReloadableLogger on its net462 asset;
++                // this early logger still serves as the bootstrap logger and is replaced by UseSerilog.
++                .CreateLogger();
++
+             var userSettingsPath = Path.Combine(
+                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                 "DrillFlow",
+@@ -108,6 +109,8 @@ public partial class App : System.Windows.Application
+                     services.AddSingleton<IWorkflowDocumentService, WorkflowDocumentService>();
+                     services.AddSingleton<IWorkflowExecutionFacade, WorkflowExecutionFacade>();
+                     services.AddSingleton<IFileDialogService, FileDialogService>();
++                    services.AddSingleton<IContentDialogGate, ContentDialogGate>();
++                    services.AddSingleton<IUserDialogService, UserDialogService>();
+                     services.AddSingleton<IResponseSimulationDialogService, ResponseSimulationDialogService>();
+ 
+                     services.AddSingleton<MainWindowViewModel>();
+@@ -127,23 +130,18 @@ public partial class App : System.Windows.Application
+             localization.Initialize();
+ 
+             DispatcherUnhandledException += OnDispatcherUnhandledException;
+-            ShutdownMode = ShutdownMode.OnMainWindowClose;
+ 
+             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
+             MainWindow = mainWindow;
+             mainWindow.Show();
++            ShutdownMode = ShutdownMode.OnMainWindowClose;
+ 
+             Log.Information("DrillFlow Designer started");
+-            base.OnStartup(e);
+         }
+         catch (Exception exception)
+         {
+             Log.Fatal(exception, "Application startup failed");
+-            MessageBox.Show(
+-                exception.Message,
+-                "DrillFlow Designer",
+-                MessageBoxButton.OK,
+-                MessageBoxImage.Error);
++            await ShowStartupFailureAsync(exception);
+             Shutdown(-1);
+         }
+     }
+@@ -180,15 +178,64 @@ public partial class App : System.Windows.Application
+         base.OnExit(e);
+     }
+ 
+-    private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
++    private async void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+     {
+-        Log.Error(e.Exception, "Unhandled UI exception");
+-        MessageBox.Show(
+-            e.Exception.Message,
+-            "DrillFlow Designer",
+-            MessageBoxButton.OK,
+-            MessageBoxImage.Error);
+         e.Handled = true;
++        Log.Error(e.Exception, "Unhandled UI exception");
++        if (_handlingUnhandledException)
++        {
++            return;
++        }
++
++        _handlingUnhandledException = true;
++        try
++        {
++            var dialogs = _host?.Services.GetService<IUserDialogService>();
++            var localization = _host?.Services.GetService<ILocalizationService>();
++            if (dialogs is not null)
++            {
++                await dialogs.ShowMessageAsync(
++                    localization?["ApplicationErrorTitle"] ?? "DrillFlow Designer",
++                    e.Exception.Message);
++            }
++            else
++            {
++                await ShowBootstrapMessageAsync("DrillFlow Designer", e.Exception.Message);
++            }
++        }
++        catch (Exception dialogException)
++        {
++            Log.Error(dialogException, "Could not display the unhandled-error ContentDialog");
++        }
++        finally
++        {
++            _handlingUnhandledException = false;
++        }
++    }
++
++    private async Task ShowStartupFailureAsync(Exception exception)
++    {
++        try
++        {
++            var dialogs = _host?.Services.GetService<IUserDialogService>();
++            if (dialogs is not null && MainWindow?.IsLoaded == true)
++            {
++                await dialogs.ShowMessageAsync("DrillFlow Designer", exception.Message);
++                return;
++            }
++
++            await ShowBootstrapMessageAsync("DrillFlow Designer", exception.Message);
++        }
++        catch (Exception dialogException)
++        {
++            Log.Error(dialogException, "Could not display the startup-failure ContentDialog");
++        }
++    }
++
++    private static async Task ShowBootstrapMessageAsync(string title, string message)
++    {
++        var window = new StartupDialogWindow();
++        await window.ShowMessageAsync(title, message);
+     }
+ 
+     private static DesignerOptions LoadStartupOptions(string userSettingsPath, DesignerOptions fallback)
+diff --git a/src/DrillFlow.Desktop/Resources/Strings.en-US.xaml b/src/DrillFlow.Desktop/Resources/Strings.en-US.xaml
+index aa17c08..20a1771 100644
+--- a/src/DrillFlow.Desktop/Resources/Strings.en-US.xaml
++++ b/src/DrillFlow.Desktop/Resources/Strings.en-US.xaml
+@@ -20,8 +20,8 @@
+     <system:String x:Key="ClearBreakpoints">Clear all breakpoints</system:String>
+     <system:String x:Key="Toolbox">Toolbox</system:String>
+     <system:String x:Key="EquipmentActions">Equipment actions</system:String>
+-    <system:String x:Key="FlowActions">Control flow</system:String>
+-    <system:String x:Key="DoubleClickHint">Drag an item or double-click to append it.</system:String>
++    <system:String x:Key="FlowActions">Designer actions</system:String>
++    <system:String x:Key="DoubleClickHint">Drag or double-click to add. Use Ctrl/Shift to select multiple Actions.</system:String>
+     <system:String x:Key="DragAction">Reorder Action</system:String>
+     <system:String x:Key="Workflow">Execution order</system:String>
+     <system:String x:Key="Start">Start</system:String>
+@@ -45,6 +45,10 @@
+     <system:String x:Key="SelectInsertionPosition">Click to select the paste position</system:String>
+     <system:String x:Key="ActionCopied">Copied {0}.</system:String>
+     <system:String x:Key="ActionPasted">Pasted {0}.</system:String>
++    <system:String x:Key="ActionCut">Cut {0}.</system:String>
++    <system:String x:Key="ActionsCopied">Copied {0} Actions in order.</system:String>
++    <system:String x:Key="ActionsPasted">Pasted {0} Actions in order.</system:String>
++    <system:String x:Key="ActionsCut">Cut {0} Actions in order.</system:String>
+     <system:String x:Key="ClipboardInvalid">The copied Action data cannot be read.</system:String>
+     <system:String x:Key="AddElseIf">Add else if</system:String>
+     <system:String x:Key="AddElse">Add else</system:String>
+@@ -130,8 +134,12 @@
+     <system:String x:Key="ResponseJson">Response JSON</system:String>
+     <system:String x:Key="Browse">Browse</system:String>
+     <system:String x:Key="SelectExchangeFolder">Select the equipment exchange folder. UNC paths can also be entered manually.</system:String>
++    <system:String x:Key="OK">OK</system:String>
++    <system:String x:Key="Cancel">Cancel</system:String>
++    <system:String x:Key="Discard">Discard</system:String>
++    <system:String x:Key="ApplicationErrorTitle">Application error</system:String>
+     <system:String x:Key="UnsavedChangesTitle">Unsaved changes</system:String>
+-    <system:String x:Key="UnsavedChangesPrompt">Save your changes?&#10;Yes: Save / No: Discard / Cancel: Go back</system:String>
++    <system:String x:Key="UnsavedChangesPrompt">There are unsaved changes. Save them before closing?</system:String>
+     <system:String x:Key="ValidationIssueSummary">{0} validation error(s): {1}</system:String>
+     <system:String x:Key="SettingsBusy">Communication settings cannot be changed while a workflow is running.</system:String>
+     <system:String x:Key="ResponseTest">Test response</system:String>
+diff --git a/src/DrillFlow.Desktop/Resources/Strings.ko-KR.xaml b/src/DrillFlow.Desktop/Resources/Strings.ko-KR.xaml
+index 436b3e6..bcc58b4 100644
+--- a/src/DrillFlow.Desktop/Resources/Strings.ko-KR.xaml
++++ b/src/DrillFlow.Desktop/Resources/Strings.ko-KR.xaml
+@@ -20,8 +20,8 @@
+     <system:String x:Key="ClearBreakpoints">모든 브레이크포인트 제거</system:String>
+     <system:String x:Key="Toolbox">아이템 목록</system:String>
+     <system:String x:Key="EquipmentActions">장비 동작</system:String>
+-    <system:String x:Key="FlowActions">제어 흐름</system:String>
+-    <system:String x:Key="DoubleClickHint">끌어 놓거나 두 번 클릭해 추가합니다.</system:String>
++    <system:String x:Key="FlowActions">디자이너 동작</system:String>
++    <system:String x:Key="DoubleClickHint">끌어 놓거나 두 번 클릭해 추가합니다. Ctrl/Shift로 여러 Action을 선택할 수 있습니다.</system:String>
+     <system:String x:Key="DragAction">Action 순서 변경</system:String>
+     <system:String x:Key="Workflow">실행 순서</system:String>
+     <system:String x:Key="Start">시작</system:String>
+@@ -45,6 +45,10 @@
+     <system:String x:Key="SelectInsertionPosition">클릭하여 붙여넣을 위치 선택</system:String>
+     <system:String x:Key="ActionCopied">{0}을(를) 복사했습니다.</system:String>
+     <system:String x:Key="ActionPasted">{0}을(를) 붙여넣었습니다.</system:String>
++    <system:String x:Key="ActionCut">{0}을(를) 잘라냈습니다.</system:String>
++    <system:String x:Key="ActionsCopied">Action {0}개를 순서대로 복사했습니다.</system:String>
++    <system:String x:Key="ActionsPasted">Action {0}개를 순서대로 붙여넣었습니다.</system:String>
++    <system:String x:Key="ActionsCut">Action {0}개를 순서대로 잘라냈습니다.</system:String>
+     <system:String x:Key="ClipboardInvalid">복사한 Action 데이터를 읽을 수 없습니다.</system:String>
+     <system:String x:Key="AddElseIf">Else if 추가</system:String>
+     <system:String x:Key="AddElse">Else 추가</system:String>
+@@ -130,8 +134,12 @@
+     <system:String x:Key="ResponseJson">Response JSON</system:String>
+     <system:String x:Key="Browse">찾아보기</system:String>
+     <system:String x:Key="SelectExchangeFolder">장비 파일 통신 폴더를 선택하세요. UNC 경로는 직접 입력할 수 있습니다.</system:String>
++    <system:String x:Key="OK">확인</system:String>
++    <system:String x:Key="Cancel">취소</system:String>
++    <system:String x:Key="Discard">버리기</system:String>
++    <system:String x:Key="ApplicationErrorTitle">프로그램 오류</system:String>
+     <system:String x:Key="UnsavedChangesTitle">저장하지 않은 변경 내용</system:String>
+-    <system:String x:Key="UnsavedChangesPrompt">변경 내용을 저장하시겠습니까?&#10;예: 저장 / 아니요: 버리기 / 취소: 돌아가기</system:String>
++    <system:String x:Key="UnsavedChangesPrompt">저장하지 않은 변경 내용이 있습니다. 닫기 전에 저장하시겠습니까?</system:String>
+     <system:String x:Key="ValidationIssueSummary">유효성 오류 {0}개: {1}</system:String>
+     <system:String x:Key="SettingsBusy">워크플로 실행 중에는 통신 설정을 변경할 수 없습니다.</system:String>
+     <system:String x:Key="ResponseTest">Response 테스트</system:String>
+diff --git a/src/DrillFlow.Desktop/Services/FileDialogService.cs b/src/DrillFlow.Desktop/Services/FileDialogService.cs
+index dfa8434..42fcd14 100644
+--- a/src/DrillFlow.Desktop/Services/FileDialogService.cs
++++ b/src/DrillFlow.Desktop/Services/FileDialogService.cs
+@@ -1,5 +1,5 @@
+-using System.Windows;
+-using DrillFlow.Desktop.Services;
++using System;
++using System.Windows.Interop;
+ using Microsoft.Win32;
+ using Forms = System.Windows.Forms;
+ 
+@@ -26,7 +26,9 @@ public sealed class FileDialogService : IFileDialogService
+             Title = _localization["Open"]
+         };
+ 
+-        return dialog.ShowDialog() == true ? dialog.FileName : null;
++        var owner = System.Windows.Application.Current?.MainWindow;
++        var result = owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
++        return result == true ? dialog.FileName : null;
+     }
+ 
+     public string? ShowSaveWorkflowDialog(string suggestedFileName)
+@@ -40,7 +42,9 @@ public sealed class FileDialogService : IFileDialogService
+             Title = _localization["SaveAs"]
+         };
+ 
+-        return dialog.ShowDialog() == true ? dialog.FileName : null;
++        var owner = System.Windows.Application.Current?.MainWindow;
++        var result = owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
++        return result == true ? dialog.FileName : null;
+     }
+ 
+     public string? ShowSelectFolderDialog(string initialFolder)
+@@ -52,22 +56,20 @@ public sealed class FileDialogService : IFileDialogService
+             SelectedPath = System.IO.Directory.Exists(initialFolder) ? initialFolder : string.Empty
+         };
+ 
+-        return dialog.ShowDialog() == Forms.DialogResult.OK ? dialog.SelectedPath : null;
++        var owner = System.Windows.Application.Current?.MainWindow;
++        var result = owner is null
++            ? dialog.ShowDialog()
++            : dialog.ShowDialog(new NativeWindowOwner(new WindowInteropHelper(owner).Handle));
++        return result == Forms.DialogResult.OK ? dialog.SelectedPath : null;
+     }
+ 
+-    public UnsavedChangesChoice ConfirmUnsavedChanges()
++    private sealed class NativeWindowOwner : Forms.IWin32Window
+     {
+-        var result = MessageBox.Show(
+-            _localization["UnsavedChangesPrompt"],
+-            _localization["UnsavedChangesTitle"],
+-            MessageBoxButton.YesNoCancel,
+-            MessageBoxImage.Warning);
+-
+-        return result switch
++        public NativeWindowOwner(IntPtr handle)
+         {
+-            MessageBoxResult.Yes => UnsavedChangesChoice.Save,
+-            MessageBoxResult.No => UnsavedChangesChoice.Discard,
+-            _ => UnsavedChangesChoice.Cancel
+-        };
++            Handle = handle;
++        }
++
++        public IntPtr Handle { get; }
+     }
+ }
+diff --git a/src/DrillFlow.Desktop/Services/IContentDialogGate.cs b/src/DrillFlow.Desktop/Services/IContentDialogGate.cs
+new file mode 100644
+index 0000000..bac0b35
+--- /dev/null
++++ b/src/DrillFlow.Desktop/Services/IContentDialogGate.cs
+@@ -0,0 +1,41 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace DrillFlow.Desktop.Services;
++
++public interface IContentDialogGate
++{
++    Task<IDisposable> EnterAsync(CancellationToken cancellationToken = default);
++}
++
++public sealed class ContentDialogGate : IContentDialogGate, IDisposable
++{
++    private readonly SemaphoreSlim _semaphore = new(1, 1);
++
++    public async Task<IDisposable> EnterAsync(CancellationToken cancellationToken = default)
++    {
++        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
++        return new Releaser(_semaphore);
++    }
++
++    public void Dispose()
++    {
++        _semaphore.Dispose();
++    }
++
++    private sealed class Releaser : IDisposable
++    {
++        private SemaphoreSlim? _semaphore;
++
++        public Releaser(SemaphoreSlim semaphore)
++        {
++            _semaphore = semaphore;
++        }
++
++        public void Dispose()
++        {
++            Interlocked.Exchange(ref _semaphore, null)?.Release();
++        }
++    }
++}
+diff --git a/src/DrillFlow.Desktop/Services/IFileDialogService.cs b/src/DrillFlow.Desktop/Services/IFileDialogService.cs
+index ca6a7af..3d42b3f 100644
+--- a/src/DrillFlow.Desktop/Services/IFileDialogService.cs
++++ b/src/DrillFlow.Desktop/Services/IFileDialogService.cs
+@@ -1,12 +1,5 @@
+ namespace DrillFlow.Desktop.Services;
+ 
+-public enum UnsavedChangesChoice
+-{
+-    Save,
+-    Discard,
+-    Cancel
+-}
+-
+ public interface IFileDialogService
+ {
+     string? ShowOpenWorkflowDialog();
+@@ -14,6 +7,4 @@ public interface IFileDialogService
+     string? ShowSaveWorkflowDialog(string suggestedFileName);
+ 
+     string? ShowSelectFolderDialog(string initialFolder);
+-
+-    UnsavedChangesChoice ConfirmUnsavedChanges();
+ }
+diff --git a/src/DrillFlow.Desktop/Services/IUserDialogService.cs b/src/DrillFlow.Desktop/Services/IUserDialogService.cs
+new file mode 100644
+index 0000000..f10be2a
+--- /dev/null
++++ b/src/DrillFlow.Desktop/Services/IUserDialogService.cs
+@@ -0,0 +1,17 @@
++using System.Threading.Tasks;
++
++namespace DrillFlow.Desktop.Services;
++
++public enum UnsavedChangesChoice
++{
++    Save,
++    Discard,
++    Cancel
++}
++
++public interface IUserDialogService
++{
++    Task<UnsavedChangesChoice> ConfirmUnsavedChangesAsync();
++
++    Task ShowMessageAsync(string title, string message);
++}
+diff --git a/src/DrillFlow.Desktop/Services/ResponseSimulationDialogService.cs b/src/DrillFlow.Desktop/Services/ResponseSimulationDialogService.cs
+index c5cfcf6..9e601bf 100644
+--- a/src/DrillFlow.Desktop/Services/ResponseSimulationDialogService.cs
++++ b/src/DrillFlow.Desktop/Services/ResponseSimulationDialogService.cs
+@@ -15,15 +15,18 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
+ {
+     private readonly IEquipmentResponseSimulator _simulator;
+     private readonly ILocalizationService _localization;
++    private readonly IContentDialogGate _dialogGate;
+     private readonly ILogger<ResponseSimulationDialogService> _logger;
+ 
+     public ResponseSimulationDialogService(
+         IEquipmentResponseSimulator simulator,
+         ILocalizationService localization,
++        IContentDialogGate dialogGate,
+         ILogger<ResponseSimulationDialogService> logger)
+     {
+         _simulator = simulator;
+         _localization = localization;
++        _dialogGate = dialogGate;
+         _logger = logger;
+     }
+ 
+@@ -34,6 +37,14 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
+             throw new ArgumentNullException(nameof(action));
+         }
+ 
++        using (await _dialogGate.EnterAsync().ConfigureAwait(true))
++        {
++            return await ShowCoreAsync(action);
++        }
++    }
++
++    private async Task<bool> ShowCoreAsync(WorkflowActionViewModel action)
++    {
+         var host = ContentDialogHost.GetForWindow(System.Windows.Application.Current.MainWindow)
+                    ?? throw new InvalidOperationException("The main ContentDialog host is unavailable.");
+         var lastCorrelation = action.Results.LastOrDefault()?.CorrelationId;
+diff --git a/src/DrillFlow.Desktop/Services/UserDialogService.cs b/src/DrillFlow.Desktop/Services/UserDialogService.cs
+new file mode 100644
+index 0000000..b240967
+--- /dev/null
++++ b/src/DrillFlow.Desktop/Services/UserDialogService.cs
+@@ -0,0 +1,83 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using System.Windows;
++using Wpf.Ui.Controls;
++using TextBlock = System.Windows.Controls.TextBlock;
++
++namespace DrillFlow.Desktop.Services;
++
++public sealed class UserDialogService : IUserDialogService
++{
++    private readonly ILocalizationService _localization;
++    private readonly IContentDialogGate _dialogGate;
++
++    public UserDialogService(
++        ILocalizationService localization,
++        IContentDialogGate dialogGate)
++    {
++        _localization = localization;
++        _dialogGate = dialogGate;
++    }
++
++    public async Task<UnsavedChangesChoice> ConfirmUnsavedChangesAsync()
++    {
++        using (await _dialogGate.EnterAsync().ConfigureAwait(true))
++        {
++            var dialog = new ContentDialog(GetHost())
++            {
++                Title = _localization["UnsavedChangesTitle"],
++                Content = CreateMessage(_localization["UnsavedChangesPrompt"]),
++                PrimaryButtonText = _localization["Save"],
++                SecondaryButtonText = _localization["Discard"],
++                CloseButtonText = _localization["Cancel"],
++                DefaultButton = ContentDialogButton.Primary,
++                DialogWidth = 520
++            };
++
++            var result = await dialog.ShowAsync(CancellationToken.None);
++            return result switch
++            {
++                ContentDialogResult.Primary => UnsavedChangesChoice.Save,
++                ContentDialogResult.Secondary => UnsavedChangesChoice.Discard,
++                _ => UnsavedChangesChoice.Cancel
++            };
++        }
++    }
++
++    public async Task ShowMessageAsync(string title, string message)
++    {
++        using (await _dialogGate.EnterAsync().ConfigureAwait(true))
++        {
++            var dialog = new ContentDialog(GetHost())
++            {
++                Title = title ?? string.Empty,
++                Content = CreateMessage(message),
++                CloseButtonText = _localization["OK"],
++                DefaultButton = ContentDialogButton.Close,
++                DialogWidth = 520
++            };
++
++            await dialog.ShowAsync(CancellationToken.None);
++        }
++    }
++
++    private static ContentDialogHost GetHost()
++    {
++        var mainWindow = System.Windows.Application.Current?.MainWindow
++                         ?? throw new InvalidOperationException("The main application window is unavailable.");
++        return ContentDialogHost.GetForWindow(mainWindow)
++               ?? throw new InvalidOperationException("The main ContentDialog host is unavailable.");
++    }
++
++    private static TextBlock CreateMessage(string? message)
++    {
++        return new TextBlock
++        {
++            Text = message ?? string.Empty,
++            TextWrapping = TextWrapping.Wrap,
++            MaxWidth = 460,
++            Margin = new Thickness(0, 4, 0, 4)
++        };
++    }
++}
+diff --git a/src/DrillFlow.Desktop/ViewModels/MainPageViewModel.cs b/src/DrillFlow.Desktop/ViewModels/MainPageViewModel.cs
+index 39cd030..afab15a 100644
+--- a/src/DrillFlow.Desktop/ViewModels/MainPageViewModel.cs
++++ b/src/DrillFlow.Desktop/ViewModels/MainPageViewModel.cs
+@@ -24,14 +24,17 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+     private readonly IWorkflowDocumentService _documentService;
+     private readonly IWorkflowExecutionFacade _execution;
+     private readonly IFileDialogService _fileDialogs;
++    private readonly IUserDialogService _userDialogs;
+     private readonly IResponseSimulationDialogService _responseSimulationDialogs;
+     private readonly WorkflowValidator _workflowValidator;
+     private readonly ExpressionCompletionProvider _expressionCompletions = new();
+     private readonly ILogger<MainPageViewModel> _logger;
+     private readonly Stack<string> _undo = new();
+     private readonly Stack<string> _redo = new();
++    private readonly HashSet<WorkflowActionViewModel> _selectedActions = new();
+     private WorkflowDocument _document = new();
+     private WorkflowActionViewModel? _selectedAction;
++    private WorkflowActionViewModel? _selectionAnchor;
+     private string? _documentPath;
+     private bool _isDirty;
+     private bool _suppressCollectionSync;
+@@ -40,14 +43,15 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+     private bool _statusIsError;
+     private TaskCompletionSource<bool>? _terminalStateWaiter;
+     private string? _clipboardSnapshot;
+-    private ObservableCollection<WorkflowActionViewModel>? _pasteDestination;
+-    private int _pasteIndex;
++    private bool _clipboardIsCut;
++    private object? _explicitPasteTarget;
+ 
+     public MainPageViewModel(
+         ILocalizationService localization,
+         IWorkflowDocumentService documentService,
+         IWorkflowExecutionFacade execution,
+         IFileDialogService fileDialogs,
++        IUserDialogService userDialogs,
+         IResponseSimulationDialogService responseSimulationDialogs,
+         WorkflowValidator workflowValidator,
+         ILogger<MainPageViewModel> logger)
+@@ -56,6 +60,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         _documentService = documentService;
+         _execution = execution;
+         _fileDialogs = fileDialogs;
++        _userDialogs = userDialogs;
+         _responseSimulationDialogs = responseSimulationDialogs;
+         _workflowValidator = workflowValidator;
+         _logger = logger;
+@@ -98,9 +103,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+             () => RunState is WorkflowRunState.Running or WorkflowRunState.Paused or WorkflowRunState.Stopping);
+         ToggleBreakpointCommand = new RelayCommand(ToggleBreakpoint, () => SelectedAction is not null && IsWorkflowEditingEnabled);
+         ClearBreakpointsCommand = new RelayCommand(ClearBreakpoints, () => EnumerateActions().Any(action => action.HasBreakpoint) && IsWorkflowEditingEnabled);
+-        DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedAction is not null && IsWorkflowEditingEnabled);
+-        CopySelectedCommand = new RelayCommand(CopySelected, () => SelectedAction is not null);
+-        CutSelectedCommand = new RelayCommand(CutSelected, () => SelectedAction is not null && IsWorkflowEditingEnabled);
++        DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedActionCount > 0 && IsWorkflowEditingEnabled);
++        CopySelectedCommand = new RelayCommand(CopySelected, () => SelectedActionCount > 0);
++        CutSelectedCommand = new RelayCommand(CutSelected, () => SelectedActionCount > 0 && IsWorkflowEditingEnabled);
+         PasteCommand = new RelayCommand(Paste, () => _clipboardSnapshot is not null && IsWorkflowEditingEnabled);
+         ToggleEnabledCommand = new RelayCommand(
+             ToggleEnabled,
+@@ -178,22 +183,19 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+                 return;
+             }
+ 
+-            if (_selectedAction is not null)
+-            {
+-                _selectedAction.IsSelected = false;
+-            }
+-
+             _selectedAction = value;
+-            if (_selectedAction is not null)
+-            {
+-                _selectedAction.IsSelected = true;
+-            }
+-
+             OnPropertyChanged();
+             NotifyCommandStates();
+         }
+     }
+ 
++    public IReadOnlyList<WorkflowActionViewModel> SelectedActions =>
++        GetSelectedActionsInDisplayOrder();
++
++    public int SelectedActionCount => _selectedActions.Count;
++
++    public bool HasMultipleSelectedActions => SelectedActionCount > 1;
++
+     public string DocumentName => string.IsNullOrWhiteSpace(_document.Name)
+         ? _localization["DocumentUntitled"]
+         : _document.Name;
+@@ -263,7 +265,88 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         private set => SetProperty(ref _statusIsError, value);
+     }
+ 
+-    public void SelectAction(WorkflowActionViewModel? action) => SelectedAction = action;
++    public void SelectAction(WorkflowActionViewModel? action)
++    {
++        SetSelectedActions(action is null
++            ? Array.Empty<WorkflowActionViewModel>()
++            : new[] { action }, action);
++        _selectionAnchor = action;
++    }
++
++    public void ToggleActionSelection(WorkflowActionViewModel action)
++    {
++        if (action is null)
++        {
++            throw new ArgumentNullException(nameof(action));
++        }
++
++        if (_selectedActions.Remove(action))
++        {
++            action.IsSelected = false;
++            if (ReferenceEquals(SelectedAction, action))
++            {
++                SelectedAction = GetSelectedActionsInDisplayOrder().LastOrDefault();
++            }
++
++            if (ReferenceEquals(_selectionAnchor, action))
++            {
++                _selectionAnchor = SelectedAction;
++            }
++        }
++        else
++        {
++            _selectedActions.Add(action);
++            action.IsSelected = true;
++            SelectedAction = action;
++            _selectionAnchor = action;
++        }
++
++        RaiseSelectionPropertiesChanged();
++    }
++
++    public void SelectActionRange(WorkflowActionViewModel action)
++    {
++        if (action is null)
++        {
++            throw new ArgumentNullException(nameof(action));
++        }
++
++        var ordered = EnumerateActions().ToList();
++        var anchorIndex = _selectionAnchor is null ? -1 : ordered.IndexOf(_selectionAnchor);
++        var targetIndex = ordered.IndexOf(action);
++        if (anchorIndex < 0 || targetIndex < 0)
++        {
++            SelectAction(action);
++            return;
++        }
++
++        var start = Math.Min(anchorIndex, targetIndex);
++        var count = Math.Abs(targetIndex - anchorIndex) + 1;
++        SetSelectedActions(ordered.GetRange(start, count), action, preserveAnchor: true);
++    }
++
++    public void EnsureActionSelected(WorkflowActionViewModel action)
++    {
++        if (action is null)
++        {
++            throw new ArgumentNullException(nameof(action));
++        }
++
++        if (!_selectedActions.Contains(action))
++        {
++            SelectAction(action);
++            return;
++        }
++
++        SelectedAction = action;
++        RaiseSelectionPropertiesChanged();
++    }
++
++    public IReadOnlyList<WorkflowActionViewModel> GetDragActions(WorkflowActionViewModel action)
++    {
++        EnsureActionSelected(action);
++        return GetSelectedActionRootsInDisplayOrder();
++    }
+ 
+     public ExpressionCompletionResult GetExpressionCompletions(
+         Guid ownerNodeId,
+@@ -354,27 +437,64 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         ObservableCollection<WorkflowActionViewModel> destination,
+         int index)
+     {
+-        if (!IsWorkflowEditingEnabled || IsCollectionInside(action, destination))
++        return MoveActions(new[] { action }, destination, index);
++    }
++
++    public bool MoveActions(
++        IEnumerable<WorkflowActionViewModel> actions,
++        ObservableCollection<WorkflowActionViewModel> destination,
++        int index)
++    {
++        var roots = NormalizeActionRoots(actions);
++        if (!CanMoveActions(roots, destination))
+         {
+             return false;
+         }
+ 
+-        var source = FindCollectionContaining(action);
+-        if (source is null)
++        var locations = new List<ActionLocation>(roots.Count);
++        foreach (var action in roots)
+         {
+-            return false;
++            var collection = FindCollectionContaining(action);
++            if (collection is null)
++            {
++                return false;
++            }
++
++            locations.Add(new ActionLocation(action, collection, collection.IndexOf(action)));
++        }
++        var adjustedIndex = Math.Max(0, Math.Min(index, destination.Count));
++        adjustedIndex -= locations.Count(location =>
++            ReferenceEquals(location.Collection, destination)
++            && location.Index < adjustedIndex);
++
++        if (locations.All(location => ReferenceEquals(location.Collection, destination)))
++        {
++            var moving = new HashSet<WorkflowActionViewModel>(locations.Select(location => location.Action));
++            var projected = destination.Where(action => !moving.Contains(action)).ToList();
++            var projectedIndex = Math.Max(0, Math.Min(adjustedIndex, projected.Count));
++            projected.InsertRange(projectedIndex, locations.Select(location => location.Action));
++            if (projected.SequenceEqual(destination))
++            {
++                return true;
++            }
+         }
+ 
+         CaptureUndoCheckpoint();
+-        var sourceIndex = source.IndexOf(action);
+-        source.Remove(action);
+-        if (ReferenceEquals(source, destination) && sourceIndex < index)
++        foreach (var group in locations.GroupBy(location => location.Collection))
++        {
++            foreach (var location in group.OrderByDescending(location => location.Index))
++            {
++                location.Collection.RemoveAt(location.Index);
++            }
++        }
++
++        var insertionIndex = Math.Max(0, Math.Min(adjustedIndex, destination.Count));
++        foreach (var location in locations)
+         {
+-            index--;
++            destination.Insert(insertionIndex++, location.Action);
+         }
+ 
+-        destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), action);
+-        SelectAction(action);
++        SetSelectedActions(locations.Select(location => location.Action), locations.Last().Action);
+         IsDirty = true;
+         return true;
+     }
+@@ -383,9 +503,19 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         WorkflowActionViewModel action,
+         ObservableCollection<WorkflowActionViewModel> destination)
+     {
++        return CanMoveActions(new[] { action }, destination);
++    }
++
++    public bool CanMoveActions(
++        IEnumerable<WorkflowActionViewModel> actions,
++        ObservableCollection<WorkflowActionViewModel> destination)
++    {
++        var roots = NormalizeActionRoots(actions);
+         return IsWorkflowEditingEnabled
+-               && FindCollectionContaining(action) is not null
+-               && !IsCollectionInside(action, destination);
++               && roots.Count > 0
++               && IsKnownCollection(destination)
++               && roots.All(action => FindCollectionContaining(action) is not null)
++               && roots.All(action => !IsCollectionInside(action, destination));
+     }
+ 
+     public ObservableCollection<WorkflowActionViewModel>? FindCollectionContaining(WorkflowActionViewModel action)
+@@ -405,7 +535,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+             return false;
+         }
+ 
+-        if (target is ObservableCollection<WorkflowActionViewModel> collection)
++        if (target is ObservableCollection<WorkflowActionViewModel> collection
++            && IsKnownCollection(collection))
+         {
+             destination = collection;
+             index = collection.Count;
+@@ -430,13 +561,12 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+ 
+     public bool SetPasteTarget(object? target)
+     {
+-        if (!TryResolveDropTarget(target, out var destination, out var index))
++        if (!TryResolveDropTarget(target, out _, out _))
+         {
+             return false;
+         }
+ 
+-        _pasteDestination = destination;
+-        _pasteIndex = index;
++        _explicitPasteTarget = target;
+         NotifyCommandStates();
+         return true;
+     }
+@@ -446,23 +576,38 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         ObservableCollection<WorkflowActionViewModel> destination,
+         int index)
+     {
++        return CopyActionsTo(new[] { action }, destination, index);
++    }
++
++    public bool CopyActionsTo(
++        IEnumerable<WorkflowActionViewModel> actions,
++        ObservableCollection<WorkflowActionViewModel> destination,
++        int index)
++    {
++        var roots = NormalizeActionRoots(actions);
+         if (!IsWorkflowEditingEnabled
+-            || FindCollectionContaining(action) is null
++            || roots.Count == 0
++            || roots.Any(action => FindCollectionContaining(action) is null)
+             || !IsKnownCollection(destination))
+         {
+             return false;
+         }
+ 
+         CaptureUndoCheckpoint();
+-        var clonedNode = WorkflowNodeCopy.CloneForInsertion(
+-            action.Model,
++        var clonedNodes = WorkflowNodeCopy.CloneManyForInsertion(
++            roots.Select(action => action.Model),
+             EnumerateActions().Select(candidate => candidate.Alias));
+-        var clone = new WorkflowActionViewModel(clonedNode, _localization);
+-        AttachAction(clone);
+-        destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), clone);
+-        SelectAction(clone);
+-        _pasteDestination = destination;
+-        _pasteIndex = destination.IndexOf(clone) + 1;
++        var clones = clonedNodes
++            .Select(node => new WorkflowActionViewModel(node, _localization))
++            .ToList();
++        var insertionIndex = Math.Max(0, Math.Min(index, destination.Count));
++        foreach (var clone in clones)
++        {
++            AttachAction(clone);
++            destination.Insert(insertionIndex++, clone);
++        }
++
++        SetSelectedActions(clones, clones.Last());
+         IsDirty = true;
+         return true;
+     }
+@@ -589,7 +734,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+             return true;
+         }
+ 
+-        return _fileDialogs.ConfirmUnsavedChanges() switch
++        return (await _userDialogs.ConfirmUnsavedChangesAsync()) switch
+         {
+             UnsavedChangesChoice.Discard => true,
+             UnsavedChangesChoice.Save => await SaveDocumentAsync(false),
+@@ -861,7 +1006,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+ 
+     private void CopySelected()
+     {
+-        if (SelectedAction is null)
++        var selected = GetSelectedActionRootsInDisplayOrder();
++        if (selected.Count == 0)
+         {
+             return;
+         }
+@@ -869,23 +1015,32 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         var clipboardDocument = new WorkflowDocument
+         {
+             Name = "Clipboard",
+-            Nodes = new List<WorkflowNode> { SelectedAction.Model }
++            Nodes = selected.Select(action => action.Model).ToList()
+         };
+         _clipboardSnapshot = _documentService.Serialize(clipboardDocument);
+-        StatusMessage = string.Format(_localization["ActionCopied"], SelectedAction.Alias);
++        _clipboardIsCut = false;
++        StatusMessage = selected.Count == 1
++            ? string.Format(_localization["ActionCopied"], selected[0].Alias)
++            : string.Format(_localization["ActionsCopied"], selected.Count);
+         StatusIsError = false;
+         NotifyCommandStates();
+     }
+ 
+     private void CutSelected()
+     {
+-        if (SelectedAction is null || !IsWorkflowEditingEnabled)
++        var selected = GetSelectedActionRootsInDisplayOrder();
++        if (selected.Count == 0 || !IsWorkflowEditingEnabled)
+         {
+             return;
+         }
+ 
+         CopySelected();
++        _clipboardIsCut = true;
+         DeleteSelected();
++        StatusMessage = selected.Count == 1
++            ? string.Format(_localization["ActionCut"], selected[0].Alias)
++            : string.Format(_localization["ActionsCut"], selected.Count);
++        StatusIsError = false;
+     }
+ 
+     private void Paste()
+@@ -897,21 +1052,21 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+ 
+         ObservableCollection<WorkflowActionViewModel> destination;
+         int index;
+-        if (_pasteDestination is not null && IsKnownCollection(_pasteDestination))
+-        {
+-            destination = _pasteDestination;
+-            index = _pasteIndex;
+-        }
+-        else if (SelectedAction is not null
+-                 && FindCollectionContaining(SelectedAction) is { } selectedParent)
+-        {
+-            destination = selectedParent;
+-            index = selectedParent.IndexOf(SelectedAction) + 1;
+-        }
+-        else
++        if (_explicitPasteTarget is null
++            || !TryResolveDropTarget(_explicitPasteTarget, out destination, out index))
+         {
+-            destination = Actions;
+-            index = Actions.Count;
++            _explicitPasteTarget = null;
++            if (SelectedAction is not null
++                && FindCollectionContaining(SelectedAction) is { } selectedParent)
++            {
++                destination = selectedParent;
++                index = selectedParent.IndexOf(SelectedAction) + 1;
++            }
++            else
++            {
++                destination = Actions;
++                index = Actions.Count;
++            }
+         }
+ 
+         WorkflowDocument clipboardDocument;
+@@ -923,16 +1078,18 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         {
+             _logger.LogWarning(exception, "The in-memory Action clipboard could not be read");
+             _clipboardSnapshot = null;
++            _clipboardIsCut = false;
+             StatusMessage = _localization["ClipboardInvalid"];
+             StatusIsError = true;
+             NotifyCommandStates();
+             return;
+         }
+ 
+-        var source = clipboardDocument.Nodes?.SingleOrDefault();
+-        if (source is null)
++        var sources = clipboardDocument.Nodes;
++        if (sources is null || sources.Count == 0)
+         {
+             _clipboardSnapshot = null;
++            _clipboardIsCut = false;
+             StatusMessage = _localization["ClipboardInvalid"];
+             StatusIsError = true;
+             NotifyCommandStates();
+@@ -940,18 +1097,28 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         }
+ 
+         CaptureUndoCheckpoint();
+-        var clonedNode = WorkflowNodeCopy.CloneForInsertion(
+-            source,
+-            EnumerateActions().Select(candidate => candidate.Alias));
+-        var clone = new WorkflowActionViewModel(clonedNode, _localization);
+-        AttachAction(clone);
++        var preserveCutIdentity = _clipboardIsCut && CanReinsertCutNodes(sources);
++        var pastedNodes = preserveCutIdentity
++            ? (IReadOnlyList<WorkflowNode>)sources
++            : WorkflowNodeCopy.CloneManyForInsertion(
++                sources,
++                EnumerateActions().Select(candidate => candidate.Alias));
++        var clones = pastedNodes
++            .Select(node => new WorkflowActionViewModel(node, _localization))
++            .ToList();
+         index = Math.Max(0, Math.Min(index, destination.Count));
+-        destination.Insert(index, clone);
+-        _pasteDestination = destination;
+-        _pasteIndex = index + 1;
+-        SelectAction(clone);
++        foreach (var clone in clones)
++        {
++            AttachAction(clone);
++            destination.Insert(index++, clone);
++        }
++
++        _clipboardIsCut = false;
++        SetSelectedActions(clones, clones.Last());
+         IsDirty = true;
+-        StatusMessage = string.Format(_localization["ActionPasted"], clone.Alias);
++        StatusMessage = clones.Count == 1
++            ? string.Format(_localization["ActionPasted"], clones[0].Alias)
++            : string.Format(_localization["ActionsPasted"], clones.Count);
+         StatusIsError = false;
+     }
+ 
+@@ -970,20 +1137,39 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+ 
+     private void DeleteSelected()
+     {
+-        if (SelectedAction is null || !IsWorkflowEditingEnabled)
++        var selected = GetSelectedActionRootsInDisplayOrder();
++        if (selected.Count == 0 || !IsWorkflowEditingEnabled)
+         {
+             return;
+         }
+ 
+-        var parent = FindCollectionContaining(SelectedAction);
+-        if (parent is null)
++        var locations = new List<ActionLocation>(selected.Count);
++        foreach (var action in selected)
++        {
++            var collection = FindCollectionContaining(action);
++            if (collection is null)
++            {
++                return;
++            }
++
++            locations.Add(new ActionLocation(action, collection, collection.IndexOf(action)));
++        }
++
++        if (locations.Any(location => location.Index < 0))
+         {
+             return;
+         }
+ 
+         CaptureUndoCheckpoint();
+-        parent.Remove(SelectedAction);
+-        SelectedAction = null;
++        ClearSelection();
++        foreach (var group in locations.GroupBy(location => location.Collection))
++        {
++            foreach (var location in group.OrderByDescending(location => location.Index))
++            {
++                location.Collection.RemoveAt(location.Index);
++            }
++        }
++
+         IsDirty = true;
+     }
+ 
+@@ -1064,9 +1250,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+             _suppressCollectionSync = false;
+         }
+ 
+-        SelectedAction = null;
+-        _pasteDestination = null;
+-        _pasteIndex = 0;
++        ClearSelection();
++        _explicitPasteTarget = null;
+         IsDirty = dirty;
+         OnPropertyChanged(nameof(DocumentName));
+         OnPropertyChanged(nameof(DocumentDisplayName));
+@@ -1206,6 +1391,124 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+         return Actions.SelectMany(action => action.EnumerateDepthFirst());
+     }
+ 
++    private IReadOnlyList<WorkflowActionViewModel> GetSelectedActionsInDisplayOrder()
++    {
++        return EnumerateActions()
++            .Where(action => _selectedActions.Contains(action))
++            .ToArray();
++    }
++
++    private IReadOnlyList<WorkflowActionViewModel> GetSelectedActionRootsInDisplayOrder()
++    {
++        return NormalizeActionRoots(_selectedActions);
++    }
++
++    private IReadOnlyList<WorkflowActionViewModel> NormalizeActionRoots(
++        IEnumerable<WorkflowActionViewModel> actions)
++    {
++        if (actions is null)
++        {
++            throw new ArgumentNullException(nameof(actions));
++        }
++
++        var candidates = new HashSet<WorkflowActionViewModel>(
++            actions.Where(action => action is not null));
++        var ordered = EnumerateActions()
++            .Where(candidates.Contains)
++            .ToList();
++        return ordered
++            .Where(action => !ordered.Any(parent =>
++                !ReferenceEquals(parent, action)
++                && parent.EnumerateDepthFirst().Skip(1).Contains(action)))
++            .ToArray();
++    }
++
++    private bool CanReinsertCutNodes(IReadOnlyCollection<WorkflowNode> cutNodes)
++    {
++        var existingNodes = _document.EnumerateNodesDepthFirst().ToArray();
++        var existingIds = new HashSet<Guid>(existingNodes.Select(node => node.Id));
++        var existingAliases = new HashSet<string>(
++            existingNodes.Select(node => node.Key),
++            StringComparer.OrdinalIgnoreCase);
++        var existingBranchIds = new HashSet<Guid>(EnumerateBranchIds(existingNodes));
++
++        var incomingNodes = EnumerateNodes(cutNodes).ToArray();
++        return incomingNodes.All(node =>
++                   !existingIds.Contains(node.Id)
++                   && !existingAliases.Contains(node.Key))
++               && !EnumerateBranchIds(incomingNodes).Any(existingBranchIds.Contains);
++    }
++
++    private static IEnumerable<WorkflowNode> EnumerateNodes(IEnumerable<WorkflowNode> roots)
++    {
++        foreach (var root in roots)
++        {
++            yield return root;
++            foreach (var child in EnumerateNodes(root.GetChildren()))
++            {
++                yield return child;
++            }
++        }
++    }
++
++    private static IEnumerable<Guid> EnumerateBranchIds(IEnumerable<WorkflowNode> nodes)
++    {
++        return nodes
++            .OfType<ConditionalNode>()
++            .SelectMany(node => node.Branches ?? new List<ConditionalBranch>())
++            .Where(branch => branch is not null)
++            .Select(branch => branch.Id);
++    }
++
++    private void SetSelectedActions(
++        IEnumerable<WorkflowActionViewModel> actions,
++        WorkflowActionViewModel? primary,
++        bool preserveAnchor = false)
++    {
++        var next = new HashSet<WorkflowActionViewModel>(
++            (actions ?? Enumerable.Empty<WorkflowActionViewModel>())
++            .Where(action => action is not null));
++
++        foreach (var action in _selectedActions.Where(action => !next.Contains(action)).ToArray())
++        {
++            action.IsSelected = false;
++        }
++
++        foreach (var action in next)
++        {
++            action.IsSelected = true;
++        }
++
++        _selectedActions.Clear();
++        foreach (var action in next)
++        {
++            _selectedActions.Add(action);
++        }
++
++        SelectedAction = primary is not null && next.Contains(primary)
++            ? primary
++            : GetSelectedActionsInDisplayOrder().LastOrDefault();
++        if (!preserveAnchor)
++        {
++            _selectionAnchor = SelectedAction;
++        }
++
++        RaiseSelectionPropertiesChanged();
++    }
++
++    private void ClearSelection()
++    {
++        SetSelectedActions(Array.Empty<WorkflowActionViewModel>(), null);
++    }
++
++    private void RaiseSelectionPropertiesChanged()
++    {
++        OnPropertyChanged(nameof(SelectedActions));
++        OnPropertyChanged(nameof(SelectedActionCount));
++        OnPropertyChanged(nameof(HasMultipleSelectedActions));
++        NotifyCommandStates();
++    }
++
+     private static ObservableCollection<WorkflowActionViewModel>? FindCollectionContaining(
+         ObservableCollection<WorkflowActionViewModel> collection,
+         WorkflowActionViewModel action)
+@@ -1359,4 +1662,23 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
+             dispatcher.BeginInvoke(action);
+         }
+     }
++
++    private sealed class ActionLocation
++    {
++        public ActionLocation(
++            WorkflowActionViewModel action,
++            ObservableCollection<WorkflowActionViewModel> collection,
++            int index)
++        {
++            Action = action;
++            Collection = collection;
++            Index = index;
++        }
++
++        public WorkflowActionViewModel Action { get; }
++
++        public ObservableCollection<WorkflowActionViewModel> Collection { get; }
++
++        public int Index { get; }
++    }
+ }
+diff --git a/src/DrillFlow.Desktop/Views/MainPage.xaml b/src/DrillFlow.Desktop/Views/MainPage.xaml
+index ff57e99..8b401bd 100644
+--- a/src/DrillFlow.Desktop/Views/MainPage.xaml
++++ b/src/DrillFlow.Desktop/Views/MainPage.xaml
+@@ -96,10 +96,12 @@
+                         Drop="DropZone_Drop" />
+ 
+                 <Border Style="{StaticResource ActionCardBorderStyle}"
++                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                         Focusable="True"
+                         MouseLeftButtonDown="ActionCard_MouseLeftButtonDown">
+                     <Border.ContextMenu>
+-                        <ContextMenu Opened="ActionContextMenu_Opened">
++                        <ContextMenu Opened="ActionContextMenu_Opened"
++                                     DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                             <MenuItem Header="{DynamicResource RunOnlyAction}"
+                                       Command="{Binding RunSelectedCommand}">
+                                 <MenuItem.Icon><ui:SymbolIcon Symbol="Play20" /></MenuItem.Icon>
+@@ -378,24 +380,62 @@
+                 <ColumnDefinition Width="6" />
+                 <ColumnDefinition Width="*" MinWidth="390" />
+                 <ColumnDefinition Width="6" />
+-                <ColumnDefinition Width="350" MinWidth="290" />
++                <ColumnDefinition Width="380" MinWidth="310" />
+             </Grid.ColumnDefinitions>
+ 
+             <Border Grid.Column="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
+-                <DockPanel>
+-                    <StackPanel DockPanel.Dock="Top">
++                <Grid>
++                    <Grid.RowDefinitions>
++                        <RowDefinition Height="Auto" />
++                        <RowDefinition Height="*" MinHeight="120" />
++                        <RowDefinition Height="8" />
++                        <RowDefinition Height="*" MinHeight="120" />
++                    </Grid.RowDefinitions>
++                    <StackPanel Grid.Row="0">
+                         <TextBlock Text="{DynamicResource Toolbox}" Style="{StaticResource SectionTitleStyle}" />
+                         <TextBlock Text="{DynamicResource DoubleClickHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
+                     </StackPanel>
+-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+-                        <StackPanel>
+-                            <TextBlock Text="{DynamicResource EquipmentActions}" FontWeight="SemiBold" Margin="0,4,0,8" />
++
++                    <Grid Grid.Row="1">
++                        <Grid.RowDefinitions>
++                            <RowDefinition Height="Auto" />
++                            <RowDefinition Height="*" />
++                        </Grid.RowDefinitions>
++                        <TextBlock Grid.Row="0"
++                                   Text="{DynamicResource EquipmentActions}"
++                                   FontWeight="SemiBold"
++                                   Margin="0,4,0,8" />
++                        <ScrollViewer Grid.Row="1"
++                                      VerticalScrollBarVisibility="Auto"
++                                      HorizontalScrollBarVisibility="Disabled">
+                             <ItemsControl ItemsSource="{Binding EquipmentToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
+-                            <TextBlock Text="{DynamicResource FlowActions}" FontWeight="SemiBold" Margin="0,14,0,8" />
++                        </ScrollViewer>
++                    </Grid>
++
++                    <GridSplitter Grid.Row="2"
++                                  Height="8"
++                                  HorizontalAlignment="Stretch"
++                                  VerticalAlignment="Stretch"
++                                  ResizeDirection="Rows"
++                                  ResizeBehavior="PreviousAndNext"
++                                  Background="Transparent" />
++
++                    <Grid Grid.Row="3">
++                        <Grid.RowDefinitions>
++                            <RowDefinition Height="Auto" />
++                            <RowDefinition Height="*" />
++                        </Grid.RowDefinitions>
++                        <TextBlock Grid.Row="0"
++                                   Text="{DynamicResource FlowActions}"
++                                   FontWeight="SemiBold"
++                                   Margin="0,4,0,8" />
++                        <ScrollViewer Grid.Row="1"
++                                      VerticalScrollBarVisibility="Auto"
++                                      HorizontalScrollBarVisibility="Disabled">
+                             <ItemsControl ItemsSource="{Binding FlowToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
+-                        </StackPanel>
+-                    </ScrollViewer>
+-                </DockPanel>
++                        </ScrollViewer>
++                    </Grid>
++                </Grid>
+             </Border>
+ 
+             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
+@@ -410,7 +450,12 @@
+                         <TextBlock Text="{DynamicResource Workflow}" FontSize="16" FontWeight="SemiBold" />
+                     </Border>
+ 
+-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
++                    <ScrollViewer x:Name="WorkflowCanvasScrollViewer"
++                                  Grid.Row="1"
++                                  VerticalScrollBarVisibility="Auto"
++                                  HorizontalScrollBarVisibility="Auto"
++                                  PanningMode="Both"
++                                  CanContentScroll="False">
+                         <Grid MinWidth="350" Margin="28,18">
+                             <Grid.ColumnDefinitions>
+                                 <ColumnDefinition Width="36" />
+@@ -487,83 +532,76 @@
+ 
+             <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
+ 
+-            <Grid Grid.Column="4">
+-                <Grid.RowDefinitions>
+-                    <RowDefinition Height="*" MinHeight="240" />
+-                    <RowDefinition Height="6" />
+-                    <RowDefinition Height="*" MinHeight="190" />
+-                </Grid.RowDefinitions>
+-
+-                <Border Grid.Row="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
+-                    <Grid>
+-                        <TextBlock Text="{DynamicResource NoSelection}"
+-                                   Style="{StaticResource CaptionTextStyle}"
+-                                   HorizontalAlignment="Center"
+-                                   VerticalAlignment="Center"
+-                                   Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
+-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+-                                      Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
+-                            <StackPanel DataContext="{Binding SelectedAction}">
+-                                <TextBlock Text="{Binding ParameterObjectLabel}"
+-                                           Style="{StaticResource SectionTitleStyle}"
+-                                           TextWrapping="Wrap" />
+-                                <TextBlock Text="{DynamicResource Alias}" Style="{StaticResource FieldLabelStyle}" />
+-                                <TextBox Text="{Binding Alias, UpdateSourceTrigger=PropertyChanged}"
+-                                         IsEnabled="{Binding IsEditingEnabled}"
+-                                         GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+-                                <TextBlock Text="{Binding AliasValidationMessage}"
+-                                           Foreground="{StaticResource DrillDangerBrush}"
+-                                           FontSize="11"
+-                                           Margin="0,3,0,10"
+-                                           Visibility="{Binding AliasValidationMessage, Converter={StaticResource StringToVisibility}}" />
+-
+-                                <CheckBox Content="{DynamicResource Breakpoint}"
+-                                          IsChecked="{Binding HasBreakpoint}"
+-                                          IsEnabled="{Binding IsEditingEnabled}"
+-                                          Margin="0,4,0,12" />
+-
+-                                <CheckBox Content="{DynamicResource ActionEnabled}"
+-                                          IsChecked="{Binding IsNodeEnabled}"
+-                                          IsEnabled="{Binding IsEditingEnabled}"
+-                                          Margin="0,0,0,12" />
+-
+-                                <ItemsControl ItemsSource="{Binding Parameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
+-                                <TextBlock Text="{DynamicResource ExpressionHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
+-
+-                                <StackPanel Orientation="Horizontal">
+-                                    <ui:Button Content="{DynamicResource AddElseIf}"
+-                                               Command="{Binding DataContext.AddElseIfCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+-                                               Margin="0,0,6,0" />
+-                                    <ui:Button Content="{DynamicResource AddElse}"
+-                                               Command="{Binding DataContext.AddElseCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+-                                               Margin="0,0,6,0" />
+-                                    <ui:Button Content="{DynamicResource DeleteAction}"
+-                                               Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+-                                               Appearance="Danger">
+-                                        <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
+-                                    </ui:Button>
++            <Border Grid.Column="4" Style="{StaticResource PanelBorderStyle}" Padding="0">
++                <Grid>
++                    <TextBlock Text="{DynamicResource NoSelection}"
++                               Style="{StaticResource CaptionTextStyle}"
++                               HorizontalAlignment="Center"
++                               VerticalAlignment="Center"
++                               Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
++
++                    <ui:TabView HorizontalContentAlignment="Stretch"
++                                VerticalContentAlignment="Stretch"
++                                Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
++                        <ui:TabViewItem Header="{DynamicResource Parameters}">
++                            <ScrollViewer VerticalScrollBarVisibility="Auto"
++                                          HorizontalScrollBarVisibility="Disabled"
++                                          PanningMode="VerticalOnly">
++                                <StackPanel DataContext="{Binding SelectedAction}" Margin="12">
++                                    <TextBlock Text="{Binding ParameterObjectLabel}"
++                                               Style="{StaticResource SectionTitleStyle}"
++                                               TextWrapping="Wrap" />
++                                    <TextBlock Text="{DynamicResource Alias}" Style="{StaticResource FieldLabelStyle}" />
++                                    <TextBox Text="{Binding Alias, UpdateSourceTrigger=PropertyChanged}"
++                                             IsEnabled="{Binding IsEditingEnabled}"
++                                             GotKeyboardFocus="Parameter_GotKeyboardFocus" />
++                                    <TextBlock Text="{Binding AliasValidationMessage}"
++                                               Foreground="{StaticResource DrillDangerBrush}"
++                                               FontSize="11"
++                                               Margin="0,3,0,10"
++                                               Visibility="{Binding AliasValidationMessage, Converter={StaticResource StringToVisibility}}" />
++
++                                    <CheckBox Content="{DynamicResource Breakpoint}"
++                                              IsChecked="{Binding HasBreakpoint}"
++                                              IsEnabled="{Binding IsEditingEnabled}"
++                                              Margin="0,4,0,12" />
++
++                                    <CheckBox Content="{DynamicResource ActionEnabled}"
++                                              IsChecked="{Binding IsNodeEnabled}"
++                                              IsEnabled="{Binding IsEditingEnabled}"
++                                              Margin="0,0,0,12" />
++
++                                    <ItemsControl ItemsSource="{Binding Parameters}" ItemTemplate="{StaticResource ParameterTemplate}" />
++                                    <TextBlock Text="{DynamicResource ExpressionHint}"
++                                               Style="{StaticResource CaptionTextStyle}"
++                                               Margin="0,0,0,12" />
++
++                                    <WrapPanel>
++                                        <ui:Button Content="{DynamicResource AddElseIf}"
++                                                   Command="{Binding DataContext.AddElseIfCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
++                                                   Margin="0,0,6,6" />
++                                        <ui:Button Content="{DynamicResource AddElse}"
++                                                   Command="{Binding DataContext.AddElseCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
++                                                   Margin="0,0,6,6" />
++                                        <ui:Button Content="{DynamicResource DeleteAction}"
++                                                   Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
++                                                   Appearance="Danger"
++                                                   Margin="0,0,0,6">
++                                            <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
++                                        </ui:Button>
++                                    </WrapPanel>
+                                 </StackPanel>
+-                            </StackPanel>
+-                        </ScrollViewer>
+-                    </Grid>
+-                </Border>
++                            </ScrollViewer>
++                        </ui:TabViewItem>
+ 
+-                <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" />
+-
+-                <Border Grid.Row="2" Style="{StaticResource PanelBorderStyle}" Padding="12">
+-                    <Grid>
+-                        <TextBlock Text="{DynamicResource NoSelection}"
+-                                   Style="{StaticResource CaptionTextStyle}"
+-                                   HorizontalAlignment="Center"
+-                                   VerticalAlignment="Center"
+-                                   Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
+-                        <DockPanel Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
+-                            <TextBlock DockPanel.Dock="Top"
+-                                       Text="{Binding SelectedAction.ResultObjectLabel}"
+-                                       Style="{StaticResource SectionTitleStyle}"
+-                                       TextWrapping="Wrap" />
+-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+-                                <StackPanel>
++                        <ui:TabViewItem Header="{DynamicResource Results}">
++                            <ScrollViewer VerticalScrollBarVisibility="Auto"
++                                          HorizontalScrollBarVisibility="Disabled"
++                                          PanningMode="VerticalOnly">
++                                <StackPanel Margin="12">
++                                    <TextBlock Text="{Binding SelectedAction.ResultObjectLabel}"
++                                               Style="{StaticResource SectionTitleStyle}"
++                                               TextWrapping="Wrap" />
+                                     <TextBlock Text="{DynamicResource NoResults}"
+                                                TextAlignment="Center"
+                                                Margin="12">
+@@ -578,13 +616,14 @@
+                                             </Style>
+                                         </TextBlock.Style>
+                                     </TextBlock>
+-                                    <ItemsControl ItemsSource="{Binding SelectedAction.Results}" ItemTemplate="{StaticResource RuntimeResultTemplate}" />
++                                    <ItemsControl ItemsSource="{Binding SelectedAction.Results}"
++                                                  ItemTemplate="{StaticResource RuntimeResultTemplate}" />
+                                 </StackPanel>
+                             </ScrollViewer>
+-                        </DockPanel>
+-                    </Grid>
+-                </Border>
+-            </Grid>
++                        </ui:TabViewItem>
++                    </ui:TabView>
++                </Grid>
++            </Border>
+         </Grid>
+ 
+         <ui:InfoBar Grid.Row="4"
+diff --git a/src/DrillFlow.Desktop/Views/MainPage.xaml.cs b/src/DrillFlow.Desktop/Views/MainPage.xaml.cs
+index 6482c28..0d051c4 100644
+--- a/src/DrillFlow.Desktop/Views/MainPage.xaml.cs
++++ b/src/DrillFlow.Desktop/Views/MainPage.xaml.cs
+@@ -74,7 +74,19 @@ public partial class MainPage : Page
+             && !IsInteractiveOrigin(e.OriginalSource as DependencyObject)
+             && FindNearestAction(e.OriginalSource as DependencyObject) == action)
+         {
+-            ViewModel.SelectAction(action);
++            if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
++            {
++                ViewModel.SelectActionRange(action);
++            }
++            else if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
++            {
++                ViewModel.ToggleActionSelection(action);
++            }
++            else
++            {
++                ViewModel.SelectAction(action);
++            }
++
+             element.Focus();
+             e.Handled = true;
+         }
+@@ -87,7 +99,7 @@ public partial class MainPage : Page
+             && element.DataContext is WorkflowActionViewModel action)
+         {
+             _dragStart = e.GetPosition(this);
+-            ViewModel.SelectAction(action);
++            ViewModel.EnsureActionSelected(action);
+             e.Handled = true;
+         }
+     }
+@@ -110,7 +122,9 @@ public partial class MainPage : Page
+         }
+ 
+         var copyRequested = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+-        var data = new DataObject(DragFormat, new WorkflowDragPayload(action, copyRequested));
++        var data = new DataObject(
++            DragFormat,
++            new WorkflowDragPayload(ViewModel.GetDragActions(action), copyRequested));
+         DragDrop.DoDragDrop(element, data, DragDropEffects.Copy | DragDropEffects.Move);
+     }
+ 
+@@ -123,8 +137,7 @@ public partial class MainPage : Page
+             return;
+         }
+ 
+-        ViewModel.SelectAction(action);
+-        menu.DataContext = ViewModel;
++        ViewModel.EnsureActionSelected(action);
+     }
+ 
+     private static WorkflowActionViewModel? FindNearestAction(DependencyObject? origin)
+@@ -196,19 +209,19 @@ public partial class MainPage : Page
+             return;
+         }
+ 
+-        if (payload.ExistingAction is not null)
++        if (payload.ExistingActions is not null)
+         {
+             var copyRequested = payload.CopyRequested
+                                 || (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
+             if (copyRequested)
+             {
+-                e.Effects = ViewModel.CopyActionTo(payload.ExistingAction, destination, index)
++                e.Effects = ViewModel.CopyActionsTo(payload.ExistingActions, destination, index)
+                     ? DragDropEffects.Copy
+                     : DragDropEffects.None;
+             }
+             else
+             {
+-                e.Effects = ViewModel.MoveAction(payload.ExistingAction, destination, index)
++                e.Effects = ViewModel.MoveActions(payload.ExistingActions, destination, index)
+                     ? DragDropEffects.Move
+                     : DragDropEffects.None;
+             }
+@@ -231,16 +244,16 @@ public partial class MainPage : Page
+             || sender is not Border border
+             || !TryGetPayload(e, out var payload)
+             || !ViewModel.TryResolveDropTarget(border.Tag, out var destination, out _)
+-            || (payload.ExistingAction is not null
++            || (payload.ExistingActions is not null
+                 && !(copyRequested = payload.CopyRequested
+                     || (e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+-                && !ViewModel.CanMoveAction(payload.ExistingAction, destination)))
++                && !ViewModel.CanMoveActions(payload.ExistingActions, destination)))
+         {
+             e.Effects = DragDropEffects.None;
+             return;
+         }
+ 
+-        e.Effects = payload.ExistingAction is null || copyRequested
++        e.Effects = payload.ExistingActions is null || copyRequested
+             ? DragDropEffects.Copy
+             : DragDropEffects.Move;
+         if (border.MinHeight < 100)
+@@ -352,7 +365,7 @@ public partial class MainPage : Page
+         if (sender is DependencyObject dependencyObject
+             && FindNearestAction(dependencyObject) is { } ownerAction)
+         {
+-            ViewModel.SelectAction(ownerAction);
++            ViewModel.EnsureActionSelected(ownerAction);
+         }
+ 
+         ViewModel.CaptureUndoCheckpoint();
+@@ -431,15 +444,17 @@ public partial class MainPage : Page
+             Kind = kind;
+         }
+ 
+-        public WorkflowDragPayload(WorkflowActionViewModel action, bool copyRequested)
++        public WorkflowDragPayload(
++            System.Collections.Generic.IReadOnlyList<WorkflowActionViewModel> actions,
++            bool copyRequested)
+         {
+-            ExistingAction = action;
++            ExistingActions = actions;
+             CopyRequested = copyRequested;
+         }
+ 
+         public WorkflowNodeKind? Kind { get; }
+ 
+-        public WorkflowActionViewModel? ExistingAction { get; }
++        public System.Collections.Generic.IReadOnlyList<WorkflowActionViewModel>? ExistingActions { get; }
+ 
+         public bool CopyRequested { get; }
+     }
+diff --git a/src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml b/src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml
+new file mode 100644
+index 0000000..18bdd63
+--- /dev/null
++++ b/src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml
+@@ -0,0 +1,39 @@
++<ui:FluentWindow x:Class="DrillFlow.Desktop.Views.StartupDialogWindow"
++                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
++                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
++                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
++                 Title="DrillFlow Designer"
++                 Width="600"
++                 Height="300"
++                 MinWidth="520"
++                 MinHeight="260"
++                 ResizeMode="NoResize"
++                 WindowStartupLocation="CenterScreen"
++                 ExtendsContentIntoTitleBar="True"
++                 WindowBackdropType="None">
++    <Grid Background="{StaticResource DrillCanvasBrush}">
++        <Grid.RowDefinitions>
++            <RowDefinition Height="Auto" />
++            <RowDefinition Height="*" />
++        </Grid.RowDefinitions>
++
++        <ui:TitleBar Grid.Row="0"
++                     Title="DrillFlow Designer"
++                     ShowMinimize="False"
++                     ShowMaximize="False"
++                     ShowClose="False"
++                     CanMaximize="False" />
++
++        <Border Grid.Row="1"
++                Margin="24"
++                Background="{StaticResource DrillSurfaceBrush}"
++                BorderBrush="{StaticResource DrillBorderBrush}"
++                BorderThickness="1"
++                CornerRadius="8" />
++
++        <ui:ContentDialogHost x:Name="RootContentDialogHost"
++                              Grid.RowSpan="2"
++                              IsDisableSiblingsEnabled="True"
++                              Panel.ZIndex="100" />
++    </Grid>
++</ui:FluentWindow>
+diff --git a/src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml.cs b/src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml.cs
+new file mode 100644
+index 0000000..82418cd
+--- /dev/null
++++ b/src/DrillFlow.Desktop/Views/StartupDialogWindow.xaml.cs
+@@ -0,0 +1,44 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using System.Windows;
++using System.Windows.Threading;
++using Wpf.Ui.Controls;
++using TextBlock = System.Windows.Controls.TextBlock;
++
++namespace DrillFlow.Desktop.Views;
++
++public partial class StartupDialogWindow : FluentWindow
++{
++    public StartupDialogWindow()
++    {
++        InitializeComponent();
++    }
++
++    public async Task ShowMessageAsync(string title, string message)
++    {
++        Title = string.IsNullOrWhiteSpace(title) ? "DrillFlow Designer" : title;
++        Show();
++        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
++
++        var host = ContentDialogHost.GetForWindow(this)
++                   ?? throw new InvalidOperationException("The startup ContentDialog host is unavailable.");
++        var dialog = new ContentDialog(host)
++        {
++            Title = Title,
++            Content = new TextBlock
++            {
++                Text = message ?? string.Empty,
++                TextWrapping = TextWrapping.Wrap,
++                MaxWidth = 500,
++                Margin = new Thickness(0, 4, 0, 4)
++            },
++            CloseButtonText = "OK",
++            DefaultButton = ContentDialogButton.Close,
++            DialogWidth = 540
++        };
++
++        await dialog.ShowAsync(CancellationToken.None);
++        Close();
++    }
++}
+diff --git a/tests/DrillFlow.Tests/CoreWorkflowNodeCopyTests.cs b/tests/DrillFlow.Tests/CoreWorkflowNodeCopyTests.cs
+index 439ef4b..86a8d37 100644
+--- a/tests/DrillFlow.Tests/CoreWorkflowNodeCopyTests.cs
++++ b/tests/DrillFlow.Tests/CoreWorkflowNodeCopyTests.cs
+@@ -57,5 +57,31 @@ namespace DrillFlow.Tests
+                 clone.Branches[0].Condition!.RawText);
+             Assert.NotEqual(conditional.Branches[0].Id, clone.Branches[0].Id);
+         }
++
++        [Fact]
++        public void CloneManyForInsertionPreservesOrderAndRewritesReferencesAcrossSelectedRoots()
++        {
++            var measure = new MeasureNode { Key = "measure_1" };
++            var drill = new DrillNode
++            {
++                Key = "drill_1",
++                Thickness = ParameterBinding.Expression(
++                    "measure_1.result.measured_distance + external.parameters.offset")
++            };
++
++            var clones = WorkflowNodeCopy.CloneManyForInsertion(
++                new WorkflowNode[] { measure, drill },
++                new[] { "measure_1", "drill_1" });
++
++            var clonedMeasure = Assert.IsType<MeasureNode>(clones[0]);
++            var clonedDrill = Assert.IsType<DrillNode>(clones[1]);
++            Assert.Equal("measure_1_copy", clonedMeasure.Key);
++            Assert.Equal("drill_1_copy", clonedDrill.Key);
++            Assert.Equal(
++                "=measure_1_copy.result.measured_distance + external.parameters.offset",
++                clonedDrill.Thickness.RawText);
++            Assert.NotEqual(measure.Id, clonedMeasure.Id);
++            Assert.NotEqual(drill.Id, clonedDrill.Id);
++        }
+     }
+ }

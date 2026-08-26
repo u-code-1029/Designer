@@ -11,7 +11,7 @@
                  WindowStartupLocation="CenterScreen"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="None">
-    <Grid Background="{StaticResource DrillCanvasBrush}">
+    <Grid Background="{DynamicResource DrillCanvasBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -26,8 +26,8 @@
 
         <Border Grid.Row="1"
                 Margin="24"
-                Background="{StaticResource DrillSurfaceBrush}"
-                BorderBrush="{StaticResource DrillBorderBrush}"
+                Background="{DynamicResource DrillSurfaceBrush}"
+                BorderBrush="{DynamicResource DrillBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="8" />
 

@@ -1,7 +1,8 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
 
 namespace DrillFlow.Desktop.Services;
 
@@ -10,10 +11,14 @@ public sealed class FileDialogService : IFileDialogService
     private const string WorkflowFilter = "DrillFlow workflow (*.drillflow.json)|*.drillflow.json|JSON (*.json)|*.json|All files (*.*)|*.*";
 
     private readonly ILocalizationService _localization;
+    private readonly ILogger<FileDialogService> _logger;
 
-    public FileDialogService(ILocalizationService localization)
+    public FileDialogService(
+        ILocalizationService localization,
+        ILogger<FileDialogService> logger)
     {
         _localization = localization;
+        _logger = logger;
     }
 
     public string? ShowOpenWorkflowDialog()
@@ -49,27 +54,31 @@ public sealed class FileDialogService : IFileDialogService
 
     public string? ShowSelectFolderDialog(string initialFolder)
     {
-        using var dialog = new Forms.FolderBrowserDialog
+        try
         {
-            Description = _localization["SelectExchangeFolder"],
-            ShowNewFolderButton = true,
-            SelectedPath = System.IO.Directory.Exists(initialFolder) ? initialFolder : string.Empty
-        };
+            var owner = System.Windows.Application.Current?.MainWindow;
+            var ownerHandle = IntPtr.Zero;
+            if (owner is not null)
+            {
+                var interopHelper = new WindowInteropHelper(owner);
+                ownerHandle = interopHelper.Handle;
+                if (ownerHandle == IntPtr.Zero)
+                {
+                    ownerHandle = interopHelper.EnsureHandle();
+                }
+            }
 
-        var owner = System.Windows.Application.Current?.MainWindow;
-        var result = owner is null
-            ? dialog.ShowDialog()
-            : dialog.ShowDialog(new NativeWindowOwner(new WindowInteropHelper(owner).Handle));
-        return result == Forms.DialogResult.OK ? dialog.SelectedPath : null;
-    }
-
-    private sealed class NativeWindowOwner : Forms.IWin32Window
-    {
-        public NativeWindowOwner(IntPtr handle)
-        {
-            Handle = handle;
+            return ShellFolderPicker.Show(
+                ownerHandle,
+                _localization["SelectExchangeFolder"],
+                initialFolder);
         }
-
-        public IntPtr Handle { get; }
+        catch (Exception exception) when (
+            exception is COMException ||
+            exception is InvalidOperationException)
+        {
+            _logger.LogError(exception, "Failed to show the Windows folder picker.");
+            return null;
+        }
     }
 }

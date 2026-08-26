@@ -17,11 +17,14 @@ public sealed class SettingsPageViewModel : ObservableObject
 {
     private readonly IUserSettingsStore _settingsStore;
     private readonly ILocalizationService _localization;
+    private readonly IApplicationThemeService _themeService;
     private readonly EquipmentCommunicationOptions _liveOptions;
     private readonly IWorkflowExecutionFacade _execution;
     private readonly IFileDialogService _fileDialogs;
+    private readonly IExchangeFolderLauncher _exchangeFolderLauncher;
     private readonly ILogger<SettingsPageViewModel> _logger;
     private string _language = "Auto";
+    private string _theme = ThemeSelection.System;
     private string _exchangeFolder = string.Empty;
     private string _requestFileName = "request.json";
     private string _responseFileName = "response.json";
@@ -41,21 +44,26 @@ public sealed class SettingsPageViewModel : ObservableObject
     public SettingsPageViewModel(
         IUserSettingsStore settingsStore,
         ILocalizationService localization,
+        IApplicationThemeService themeService,
         IOptions<EquipmentCommunicationOptions> liveOptions,
         IWorkflowExecutionFacade execution,
         IFileDialogService fileDialogs,
+        IExchangeFolderLauncher exchangeFolderLauncher,
         ILogger<SettingsPageViewModel> logger)
     {
         _settingsStore = settingsStore;
         _localization = localization;
+        _themeService = themeService;
         _liveOptions = liveOptions.Value;
         _execution = execution;
         _fileDialogs = fileDialogs;
+        _exchangeFolderLauncher = exchangeFolderLauncher;
         _logger = logger;
 
         SaveCommand = new RelayCommand(Save, () => CanEditSettings);
         TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync, () => CanEditSettings);
         BrowseFolderCommand = new RelayCommand(BrowseFolder, () => CanEditSettings);
+        OpenFolderCommand = new RelayCommand(OpenFolder, CanOpenFolder);
 
         Load();
         // Invalid persisted drafts remain visible so the operator can correct them, but they
@@ -86,7 +94,16 @@ public sealed class SettingsPageViewModel : ObservableObject
 
     public IRelayCommand BrowseFolderCommand { get; }
 
+    public IRelayCommand OpenFolderCommand { get; }
+
     public string[] LanguageChoices { get; } = { "Auto", "ko-KR", "en-US" };
+
+    public string[] ThemeChoices { get; } =
+    {
+        ThemeSelection.System,
+        ThemeSelection.Light,
+        ThemeSelection.Dark
+    };
 
     public string[] EquipmentRequestHandlingChoices { get; } =
     {
@@ -106,10 +123,29 @@ public sealed class SettingsPageViewModel : ObservableObject
         set => SetProperty(ref _language, value ?? "Auto");
     }
 
+    public string Theme
+    {
+        get => _theme;
+        set
+        {
+            var normalized = ThemeSelection.Normalize(value);
+            if (SetProperty(ref _theme, normalized))
+            {
+                _themeService.ApplyTheme(normalized);
+            }
+        }
+    }
+
     public string ExchangeFolder
     {
         get => _exchangeFolder;
-        set => SetProperty(ref _exchangeFolder, value ?? string.Empty);
+        set
+        {
+            if (SetProperty(ref _exchangeFolder, value ?? string.Empty))
+            {
+                OpenFolderCommand.NotifyCanExecuteChanged();
+            }
+        }
     }
 
     public string RequestFileName
@@ -202,6 +238,7 @@ public sealed class SettingsPageViewModel : ObservableObject
                 TestConnectionCommand.NotifyCanExecuteChanged();
                 SaveCommand.NotifyCanExecuteChanged();
                 BrowseFolderCommand.NotifyCanExecuteChanged();
+                OpenFolderCommand.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanEditSettings));
             }
         }
@@ -223,6 +260,7 @@ public sealed class SettingsPageViewModel : ObservableObject
                 SaveCommand.NotifyCanExecuteChanged();
                 TestConnectionCommand.NotifyCanExecuteChanged();
                 BrowseFolderCommand.NotifyCanExecuteChanged();
+                OpenFolderCommand.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanEditSettings));
             }
         }
@@ -236,6 +274,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         var communication = preferences.Communication ?? new CommunicationSettings();
 
         Language = preferences.Language;
+        Theme = preferences.Theme;
         ExchangeFolder = communication.ExchangeFolder;
         RequestFileName = communication.RequestFileName;
         ResponseFileName = communication.ResponseFileName;
@@ -269,6 +308,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         var preferences = new UserPreferences
         {
             Language = Language,
+            Theme = Theme,
             Communication = communication
         };
 
@@ -333,7 +373,7 @@ public sealed class SettingsPageViewModel : ObservableObject
     private bool Validate()
     {
         string? failure = null;
-        if (string.IsNullOrWhiteSpace(ExchangeFolder) || !Path.IsPathRooted(ExchangeFolder))
+        if (!IsRootedPath(ExchangeFolder))
         {
             failure = _localization["FolderRequired"];
         }
@@ -405,6 +445,24 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
     }
 
+    private bool CanOpenFolder() => CanEditSettings && IsRootedPath(ExchangeFolder);
+
+    private void OpenFolder()
+    {
+        try
+        {
+            var path = _exchangeFolderLauncher.Open(ExchangeFolder);
+            StatusMessage = string.Format(_localization["ExchangeFolderOpened"], path);
+            StatusIsError = false;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Could not open the draft equipment exchange directory");
+            StatusMessage = _localization["ExchangeFolderOpenFailed"] + " " + exception.Message;
+            StatusIsError = true;
+        }
+    }
+
     private void ApplyToLiveOptions(CommunicationSettings settings)
     {
         _liveOptions.ExchangeDirectory = settings.ExchangeFolder;
@@ -429,11 +487,67 @@ public sealed class SettingsPageViewModel : ObservableObject
 
     private static bool IsLeafFileName(string value)
     {
-        return !string.IsNullOrWhiteSpace(value)
-               && string.Equals(Path.GetFileName(value), value, StringComparison.Ordinal)
-               && !Path.IsPathRooted(value)
-               && value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
-               && !string.IsNullOrWhiteSpace(Path.GetExtension(value));
+        try
+        {
+            return !string.IsNullOrWhiteSpace(value)
+                   && string.Equals(Path.GetFileName(value), value, StringComparison.Ordinal)
+                   && !Path.IsPathRooted(value)
+                   && value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+                   && !string.IsNullOrWhiteSpace(Path.GetExtension(value));
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRootedPath(string value)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            var path = value.Trim();
+            if (path.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+            {
+                return false;
+            }
+
+            if (path.StartsWith(@"\\", StringComparison.Ordinal))
+            {
+                var serverSeparator = path.IndexOfAny(new[] { '\\', '/' }, 2);
+                if (serverSeparator <= 2 || serverSeparator == path.Length - 1)
+                {
+                    return false;
+                }
+
+                var shareStart = serverSeparator + 1;
+                var shareSeparator = path.IndexOfAny(new[] { '\\', '/' }, shareStart);
+                var shareLength = (shareSeparator < 0 ? path.Length : shareSeparator) - shareStart;
+                return shareLength > 0;
+            }
+
+            return path.Length >= 3
+                   && char.IsLetter(path[0])
+                   && path[1] == ':'
+                   && (path[2] == Path.DirectorySeparatorChar
+                       || path[2] == Path.AltDirectorySeparatorChar);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static void TryDelete(string path)

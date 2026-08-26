@@ -27,6 +27,7 @@ public sealed class UserSettingsStore : IUserSettingsStore
         var fallback = new UserPreferences
         {
             Language = string.IsNullOrWhiteSpace(_defaults.Language) ? "Auto" : _defaults.Language,
+            Theme = ThemeSelection.Normalize(_defaults.Theme),
             Communication = (_defaults.Communication ?? new CommunicationSettings()).Clone()
         };
 
@@ -45,6 +46,7 @@ public sealed class UserSettingsStore : IUserSettingsStore
             }
 
             persisted.Communication ??= fallback.Communication;
+            persisted.Theme = ThemeSelection.Normalize(persisted.Theme);
             return persisted;
         }
         catch (Exception exception)

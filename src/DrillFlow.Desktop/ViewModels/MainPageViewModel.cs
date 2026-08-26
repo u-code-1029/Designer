@@ -280,6 +280,19 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _selectionAnchor = action;
     }
 
+    public void SelectAllActions()
+    {
+        var actions = EnumerateActions().ToList();
+        var primaryAction = actions.LastOrDefault();
+        SetSelectedActions(actions, primaryAction);
+        _selectionAnchor = actions.FirstOrDefault();
+    }
+
+    public void ClearActionSelection()
+    {
+        ClearSelection();
+    }
+
     public void ToggleActionSelection(WorkflowActionViewModel action)
     {
         if (action is null)

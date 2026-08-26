@@ -13,7 +13,7 @@
     <system:String x:Key="Redo">Redo</system:String>
     <system:String x:Key="Validate">Validate</system:String>
     <system:String x:Key="Run">Run</system:String>
-    <system:String x:Key="Continue">Continue</system:String>
+    <system:String x:Key="Continue">Continue (F10)</system:String>
     <system:String x:Key="Step">Step</system:String>
     <system:String x:Key="Stop">Stop</system:String>
     <system:String x:Key="ToggleBreakpoint">Toggle breakpoint</system:String>
@@ -98,6 +98,11 @@
     <system:String x:Key="ParamCount">Repeat count</system:String>
     <system:String x:Key="ParamCondition">Condition expression</system:String>
     <system:String x:Key="SettingsTitle">Settings</system:String>
+    <system:String x:Key="AppearanceSettings">Appearance and language</system:String>
+    <system:String x:Key="Theme">App theme</system:String>
+    <system:String x:Key="ThemeSystem">Use system setting</system:String>
+    <system:String x:Key="ThemeLight">Light</system:String>
+    <system:String x:Key="ThemeDark">Dark</system:String>
     <system:String x:Key="CommunicationSettings">Equipment file exchange</system:String>
     <system:String x:Key="ExchangeFolder">Exchange folder</system:String>
     <system:String x:Key="RequestFileName">Request file name</system:String>
@@ -172,4 +177,8 @@
     <system:String x:Key="ExchangeFolderOpened">Opened the equipment exchange folder: {0}</system:String>
     <system:String x:Key="ExchangeFolderOpenFailed">The equipment exchange folder could not be opened.</system:String>
     <system:String x:Key="ForceStopping">Force-stopping the workflow now.</system:String>
+    <system:String x:Key="ZoomOut">Zoom out canvas (Ctrl+-)</system:String>
+    <system:String x:Key="ResetZoom">Reset canvas zoom to 100% (Ctrl+0)</system:String>
+    <system:String x:Key="ZoomIn">Zoom in canvas (Ctrl++)</system:String>
+    <system:String x:Key="ResetView">Reset layout, scroll positions, and zoom</system:String>
 </ResourceDictionary>

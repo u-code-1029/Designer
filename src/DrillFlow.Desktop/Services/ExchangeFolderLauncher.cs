@@ -14,9 +14,11 @@ public sealed class ExchangeFolderLauncher : IExchangeFolderLauncher
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     }
 
-    public string Open()
+    public string Open() => Open(_options.ExchangeDirectory);
+
+    public string Open(string directory)
     {
-        var directory = (_options.ExchangeDirectory ?? string.Empty).Trim();
+        directory = (directory ?? string.Empty).Trim();
         if (directory.Length == 0)
         {
             throw new InvalidOperationException("The equipment exchange directory is not configured.");

@@ -7,11 +7,14 @@ DrillFlow Designer is a WPF workflow editor for composing and running drill-equi
 - Windows 7 SP1 or later
 - .NET Framework 4.8
 - WPF-UI 4.3 Fluent controls
+- Runtime System/Light/Dark themes persisted in user settings
 - Generic Host, Microsoft dependency injection and options
 - Serilog bootstrap logging with rolling file and debug sinks
 - A Windows compatibility manifest (as-invoker, Win7+, DPI-aware)
 
 The application deliberately targets `net48`: modern `.NET 8+` runtimes do not run on Windows 7. Windows 10/11 receive the same functional Fluent UI, while unsupported backdrop effects fall back to a solid background.
+
+The communication-directory browser uses the Windows Shell file-open dialog in folder-selection mode. This keeps the modern Explorer experience and local/UNC support on Windows 7; WPF's `Microsoft.Win32.OpenFolderDialog` is only available on modern .NET, not .NET Framework 4.8. Settings also provides a separate button that opens the currently entered directory in Explorer.
 
 ## Solution
 
@@ -48,7 +51,7 @@ Arbitrary C# execution is never used. Runtime results exist only for the current
 
 Designer-owned Delay, Repeat, Conditional, and HTTP Actions never use the equipment exchange files. HTTP supports GET/POST and exposes status, headers, raw text, and dynamically parsed JSON through paths such as `http_1.result.json.items[0].id`.
 
-In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support Ctrl/Shift multi-selection, ordered group `Ctrl+C/X/V`, grouped drag/drop, Ctrl-drag deep copy, and mouse-selected insertion bars. Copied workflow batches receive fresh IDs and unique aliases while references between the selected Actions follow their regenerated aliases.
+In an Expression editor, `Ctrl+Space` opens context-aware completion for accessible earlier Actions and their `parameters`/`result` members. Actions support Ctrl/Shift multi-selection, `Ctrl+A`/`Esc`, ordered group `Ctrl+C/X/V`, grouped drag/drop, Ctrl-drag deep copy, and mouse-selected insertion slots. Copied workflow batches receive fresh IDs and unique aliases while references between the selected Actions follow their regenerated aliases. The designer keeps its command/status regions fixed while the toolbox, workflow Canvas, and Fluent inspector tabs scroll independently. Spaced `+` markers expose every valid insertion slot, the lowest-layer execution rail connects only the Start and End markers and is occluded by cards, Canvas zoom is available from 60–160%, and View Reset restores the split layout, scroll positions, inspector tab, and 100% zoom. While paused at a breakpoint, `F10` performs Continue.
 
 See [contract.md](contract.md) for the current equipment request/response contract and format-change map,
 [docs/architecture.md](docs/architecture.md) for the agreed behavior and safety boundaries,

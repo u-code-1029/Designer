@@ -25,19 +25,19 @@ DrillFlow Designer는 철판 위 드릴 장비의 단위 동작과 디자이너 
 
 ### App shell
 
-`MainWindow`는 WPF-UI `FluentWindow`다. `ExtendsContentIntoTitleBar=True`로 사용자 정의 TitleBar 영역까지 확장하되 최소화·최대화·닫기 버튼을 계속 표시한다. 왼쪽 Compact Navigation에는 디자이너와 설정 페이지가 있고, 페이지 콘텐츠는 Navigation Pane을 제외한 전 영역으로 늘어난다.
+`MainWindow`는 WPF-UI `FluentWindow`다. `ExtendsContentIntoTitleBar=True`로 사용자 정의 TitleBar 영역까지 확장하되 최소화·최대화·닫기 버튼을 계속 표시한다. 왼쪽 Compact Navigation에는 디자이너와 설정 페이지가 있고, 페이지 콘텐츠는 Navigation Pane을 제외한 전 영역으로 늘어난다. MainPage의 `CanContentScroll=False`와 함께 NavigationView presenter의 외부 DynamicScrollViewer를 명시적으로 끄므로 툴바와 상태 표시줄은 고정된다.
 
 ### Designer 페이지
 
-상단 Command Bar에는 문서 새로 만들기·열기·저장·다른 이름으로 저장, Undo/Redo, 유효성 검사, Run/Continue/Step/Stop, 브레이크포인트 전환/전체 제거, Response 테스트, 장비 통신 폴더 열기가 있다. 각 명령은 의미를 나타내는 Fluent Symbol 아이콘과 툴팁을 가진다.
+상단 Command Bar에는 문서 새로 만들기·열기·저장·다른 이름으로 저장, Undo/Redo, 유효성 검사, Run/Continue/Step/Stop, 브레이크포인트 전환/전체 제거, Response 테스트, 장비 통신 폴더 열기, Canvas 확대·축소·100%, View Reset이 있다. 각 명령은 의미를 나타내는 Fluent Symbol 아이콘과 툴팁을 가진다. View Reset은 좌·중·우 폭, 왼쪽 상·하 목록 높이, 각 영역의 스크롤 위치, Inspector 첫 탭과 Canvas 100% 배율을 함께 기본값으로 되돌린다.
 
-본문은 다음 세 영역으로 나뉜다.
+본문은 다음 세 영역으로 나뉘며 각 영역만 독립적으로 스크롤한다.
 
 1. 왼쪽: 장비 동작과 디자이너 동작을 구분한 아이템 목록
 2. 중앙: 시작과 끝 사이의 세로 실행 순서 편집기
-3. 오른쪽: 선택 Action의 파라미터와 현재 Run 결과를 전환하는 탭
+3. 오른쪽: WPF-UI Fluent 스타일 탭으로 전환하는 선택 Action의 파라미터와 현재 Run 결과
 
-Action 앞의 붉은 점은 브레이크포인트다. 파라미터와 결과 레이블은 Expression에서 사용하는 변수명을 먼저 보여주고, 괄호 안에 사용자 설명을 표시한다.
+Action 앞의 붉은 점은 브레이크포인트다. 시작 pill 아래부터 끝 pill 위까지만 이어지는 수직 실행선이 Action의 위→아래 실행 순서를 표시하며 Canvas 전체를 가르는 선은 사용하지 않는다. 실행선은 가장 낮은 layer에 있고, 불투명 Action 카드나 빈 워크플로 안내 박스가 놓인 구간에서는 그 뒤로 완전히 가려진다. 시작·끝·Action 사이에는 삽입 여백을 확보하고, 루트와 Repeat·조건 분기 내부를 포함해 Action을 넣을 수 있는 모든 위치에는 작은 `+`가 항상 보인다. drag/hover 시 같은 위치가 accent bar로 강조된다. 파라미터와 결과 레이블은 Expression에서 사용하는 변수명을 먼저 보여주고, 괄호 안에 사용자 설명을 표시한다.
 
 ### Settings 페이지
 
@@ -49,8 +49,11 @@ Action 앞의 붉은 점은 브레이크포인트다. 파라미터와 결과 레
 - 앱이 response를 읽고 삭제하는 방식 또는 유지·덮어쓰기 방식
 - response timeout, retry 사용 여부·횟수·간격, polling 간격
 - 한국어/영어/시스템 언어
+- 시스템/라이트/다크 앱 테마
 
-설정은 사용자 LocalAppData의 `settings.json`에 저장되며, 다음 파일 교환과 Response 테스트 Dialog가 최신 값을 사용한다.
+통신 폴더 행에는 폴더 선택과 현재 입력 경로 열기를 분리한 두 버튼이 있다. .NET Framework 4.8에는 현대 WPF의 `Microsoft.Win32.OpenFolderDialog`가 없으므로, Windows 7부터 제공되는 Windows Shell `IFileOpenDialog`를 폴더 선택 모드로 사용한다. 이 선택기는 MainWindow를 owner로 가지며 로컬·UNC 초기 경로를 지원한다.
+
+테마는 선택 즉시 WPF-UI 컨트롤과 앱 전용 surface/text brush에 함께 적용된다. 이미 렌더링된 WPF brush는 frozen 상태일 수 있으므로 기존 객체의 색을 수정하지 않고 테마마다 새 불변 brush 리소스로 교체한다. 따라서 열린 페이지와 드래그·삽입 강조 상태도 Light/Dark 전환을 즉시 따라간다. 시스템 모드는 OS 변경 이벤트를 따라가며 Windows 7에서는 Mica 없이 Light fallback을 사용한다. 설정은 사용자 LocalAppData의 `settings.json`에 저장되며, 다음 실행·파일 교환·Response 테스트 Dialog가 최신 값을 사용한다.
 
 ## 3. Action 모델
 
@@ -135,8 +138,8 @@ Runner 상태는 `Idle → Validating → Running`으로 진행하며 실행 중
 - Run: 문서 전체를 deep snapshot한 뒤 검증하고 현재 Run 결과를 초기화해 실행한다.
 - 이 Action만 실행: 선택 subtree만 동일 ID의 snapshot으로 실행하며 해당 subtree의 authored breakpoint는 무시한다.
 - Breakpoint: Action 실행 직전에 `Paused`가 된다.
-- Continue: 다음 breakpoint까지 계속한다.
-- Step: 한 실행 단위를 완료한 뒤 다음 Action 앞에서 다시 멈춘다.
+- Continue: Command Bar 또는 `F10`으로 다음 breakpoint까지 계속한다.
+- Step: Command Bar에서 한 실행 단위를 완료한 뒤 다음 Action 앞에서 다시 멈춘다.
 - Stop 첫 클릭: 다음 Action 시작을 막는다. 이미 전송한 장비 요청은 response까지 기다려 기록한 뒤 멈춘다.
 - Stop 두 번째 클릭: 현재 파일 응답 대기를 즉시 취소하고 로컬 실행을 끝낸다. 어떤 경우에도 toolbar Stop은 `abort` 명령을 만들지 않는다.
 - Abort Action: 명시적인 장비 `abort` request/response를 수행한 뒤 배열을 종료한다.
@@ -164,12 +167,16 @@ Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI Con
 | Action 클릭 | 단일 선택, Ctrl+클릭은 선택 토글, Shift+클릭은 anchor부터 범위 선택 |
 | Action 카드 헤더 drag | 선택된 최상위 Action 묶음을 표시 순서대로 같은 레벨 또는 허용된 중첩 컬렉션으로 이동 |
 | Action drag 중 Ctrl | 선택 묶음을 새 GUID와 고유 별칭으로 deep copy하고 묶음 내부 Expression 참조도 새 별칭으로 변경 |
-| 삽입 bar MouseOver | 놓기 가능한 위치를 accent horizontal bar로 표시 |
+| 삽입 위치의 `+` MouseOver | 놓기 가능한 위치를 accent horizontal bar로 표시 |
 | 삽입 bar MouseDown | 붙여넣기 target을 저장하고 짧게 pulse한 뒤 bar를 숨김 |
 | Ctrl+V | 마지막으로 클릭한 target이 유효하면 그 위치, 아니면 주 선택 Action 다음 위치에 선택 묶음을 순서대로 붙여넣기 |
 | Action 우클릭 | 이미 선택된 Action이면 묶음을 유지하고, 선택 밖의 Action이면 단일 선택한 뒤 Context Menu command 갱신 |
 | Context Menu | 이 Action만 실행 / Response 테스트, 복사·잘라내기·붙여넣기·삭제, 활성화, 브레이크포인트를 separator로 분류 |
 | Ctrl+C/Ctrl+X/Delete | 선택 묶음의 최상위 Action들을 순서대로 복사/잘라내기/삭제 |
+| Ctrl+A / Esc | 모든 Action을 선택 / 선택을 모두 해제 |
+| Ctrl++ / Ctrl+- / Ctrl+0 | Canvas를 10% 단위로 확대·축소 / 100%로 복원(60~160%) |
+| View Reset | splitter 크기, 독립 스크롤, Inspector 탭과 Canvas 배율을 초기 상태로 복원 |
+| F10 | Breakpoint에서 Paused 상태일 때 Continue 실행 |
 | F9 | 주 선택 Action의 브레이크포인트 전환 |
 | 파라미터 편집 시작 | Undo snapshot 생성, 입력마다 유효성/Expression 표시 갱신 |
 | Ctrl+Space | 현재 범위의 Expression completion popup 표시 |
@@ -188,7 +195,7 @@ Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI Con
 
 ### 부팅과 공통 서비스
 
-`App.xaml.cs`는 Generic Host를 구성하고 Microsoft.Extensions Configuration, DI, Options를 연결한다. 창을 직접 `new`하지 않고 Host service provider에서 singleton Window/Page/ViewModel을 가져온다. Serilog bootstrap logger는 Host 완성 전 오류를 Debug와 rolling file에 기록하고, Host 이후 정식 logger로 교체된다. 시작 실패·두 번째 인스턴스·미저장 변경·일반 메시지는 Fluent ContentDialog로 통일하며, singleton dialog gate가 여러 ContentDialog가 동시에 열리지 않도록 직렬화한다. 파일·폴더 선택창도 현재 MainWindow를 owner로 사용한다.
+`App.xaml.cs`는 Generic Host를 구성하고 Microsoft.Extensions Configuration, DI, Options를 연결한다. 창을 직접 `new`하지 않고 Host service provider에서 singleton Window/Page/ViewModel을 가져온다. Serilog bootstrap logger는 Host 완성 전 오류를 Debug와 rolling file에 기록하고, Host 이후 정식 logger로 교체된다. 시작 실패·두 번째 인스턴스·미저장 변경·일반 메시지는 Fluent ContentDialog로 통일하며, singleton dialog gate가 여러 ContentDialog가 동시에 열리지 않도록 직렬화한다. 파일·폴더 선택창도 현재 MainWindow를 owner로 사용하고 Shell COM 자원은 호출마다 해제한다. `ApplicationThemeService`는 저장된 테마를 시작 시 복원하고 런타임 변경과 시스템 테마 이벤트를 UI Dispatcher에서 적용한다.
 
 HTTP 실행 로그는 method, query를 제거한 URL path, timeout, status만 남긴다. 인증 헤더·request body·response body와 URL query는 rolling log에 기록하지 않는다.
 
@@ -250,6 +257,16 @@ code-behind는 hit testing, mouse 좌표, drag payload, animation처럼 WPF visu
 - Ctrl/Shift 다중 선택과 순서 보존 그룹 복사·잘라내기·붙여넣기·삭제·드래그
 - 선택 묶음 내부 Action 간 Expression 참조를 복사본의 새 별칭으로 일괄 재작성
 - Inspector의 파라미터/결과 탭 전환과 Fluent ContentDialog 기반 시작·오류·미저장 확인 통일
+- MainPage 외부 스크롤 제거와 좌측 목록·Canvas·Inspector의 독립 스크롤
+- WPF-UI Fluent TabControl/TabItem 스타일과 시작~끝 중앙 실행선
+- 설정에서 즉시 전환하고 다음 실행에 복원되는 시스템/라이트/다크 테마
+- 좌·중·우 및 왼쪽 상·하 splitter를 한 번에 복원하는 View Reset
+- 시작·끝 표시 사이에만 존재하는 실행선과 모든 유효 삽입 위치의 작은 `+`
+- Canvas 60~160% 확대·축소와 `Ctrl+A` 전체 선택·`Esc` 선택 해제
+- 이미 열린 창·스타일·Expression 자동완성 Popup까지 즉시 갱신하는 런타임 테마 전환
+- `F10` Continue 단축키, 넓어진 삽입 여백과 선을 완전히 가리는 불투명 Action/빈 안내 surface
+- Windows 7/net48 호환 Explorer형 통신 폴더 선택기와 현재 입력 폴더 열기 버튼
+- 이미 렌더링되어 frozen된 brush 때문에 부분 전환되던 Light/Dark 런타임 오류 수정
 
 ## 11. 확장 시 체크리스트
 
@@ -266,4 +283,4 @@ code-behind는 hit testing, mouse 좌표, drag payload, animation처럼 WPF visu
 7. completion의 parameter/result member catalog
 8. 저장 round-trip, runner, cancellation, dynamic result 테스트
 
-배포 전에는 Release 빌드와 전체 테스트뿐 아니라 Windows 7 SP1 x86/x64 VM에서 Fluent fallback, DPI, 한·영 리소스, 실제 SMB lifecycle, drag/drop, breakpoint/Step/Stop, HTTP TLS 호환성을 확인한다.
+배포 전에는 Release 빌드와 전체 테스트뿐 아니라 Windows 7 SP1 x86/x64 VM에서 Fluent fallback, 런타임 Light/Dark/System 전환, DPI, 한·영 리소스, 실제 SMB lifecycle, drag/drop, breakpoint/Step/Stop, HTTP TLS 호환성을 확인한다.

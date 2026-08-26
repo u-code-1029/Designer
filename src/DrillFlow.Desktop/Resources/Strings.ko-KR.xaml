@@ -13,7 +13,7 @@
     <system:String x:Key="Redo">다시 실행</system:String>
     <system:String x:Key="Validate">유효성 검사</system:String>
     <system:String x:Key="Run">실행</system:String>
-    <system:String x:Key="Continue">계속</system:String>
+    <system:String x:Key="Continue">계속 (F10)</system:String>
     <system:String x:Key="Step">한 단계 실행</system:String>
     <system:String x:Key="Stop">중지</system:String>
     <system:String x:Key="ToggleBreakpoint">브레이크포인트 전환</system:String>
@@ -98,6 +98,11 @@
     <system:String x:Key="ParamCount">반복 횟수</system:String>
     <system:String x:Key="ParamCondition">조건 Expression</system:String>
     <system:String x:Key="SettingsTitle">설정</system:String>
+    <system:String x:Key="AppearanceSettings">화면 및 언어</system:String>
+    <system:String x:Key="Theme">앱 테마</system:String>
+    <system:String x:Key="ThemeSystem">시스템 설정 사용</system:String>
+    <system:String x:Key="ThemeLight">라이트</system:String>
+    <system:String x:Key="ThemeDark">다크</system:String>
     <system:String x:Key="CommunicationSettings">장비 파일 통신</system:String>
     <system:String x:Key="ExchangeFolder">통신 폴더</system:String>
     <system:String x:Key="RequestFileName">요청 파일명</system:String>
@@ -172,4 +177,8 @@
     <system:String x:Key="ExchangeFolderOpened">장비 통신 폴더를 열었습니다: {0}</system:String>
     <system:String x:Key="ExchangeFolderOpenFailed">장비 통신 폴더를 열지 못했습니다.</system:String>
     <system:String x:Key="ForceStopping">실행을 즉시 강제 종료하고 있습니다.</system:String>
+    <system:String x:Key="ZoomOut">캔버스 축소 (Ctrl+-)</system:String>
+    <system:String x:Key="ResetZoom">캔버스 배율 100% (Ctrl+0)</system:String>
+    <system:String x:Key="ZoomIn">캔버스 확대 (Ctrl++)</system:String>
+    <system:String x:Key="ResetView">분할 크기, 스크롤 위치 및 배율 초기화</system:String>
 </ResourceDictionary>

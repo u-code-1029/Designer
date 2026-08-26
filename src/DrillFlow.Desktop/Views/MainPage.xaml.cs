@@ -15,12 +15,18 @@ namespace DrillFlow.Desktop.Views;
 public partial class MainPage : Page
 {
     private const string DragFormat = "DrillFlow.WorkflowDragPayload";
+    private const double MinimumCanvasZoom = 0.6;
+    private const double MaximumCanvasZoom = 1.6;
+    private const double CanvasZoomStep = 0.1;
+    private const double InsertionMarkerRestingHeight = 28;
+    private const double InsertionMarkerActiveHeight = 32;
     private Point _dragStart;
     private readonly Dictionary<Border, long> _insertionFlashVersions = new();
     private FrameworkElement? _actionDragSource;
     private WorkflowActionViewModel? _actionBeingDragged;
     private ModifierKeys _actionDragModifiers;
     private bool _actionWasSelectedOnMouseDown;
+    private double _canvasZoom = 1.0;
     private long _nextInsertionFlashVersion;
 
     public MainPage(MainPageViewModel viewModel)
@@ -30,6 +36,41 @@ public partial class MainPage : Page
     }
 
     private MainPageViewModel ViewModel => (MainPageViewModel)DataContext;
+
+    private void ZoomOut_Click(object sender, RoutedEventArgs e) =>
+        SetCanvasZoom(_canvasZoom - CanvasZoomStep);
+
+    private void ResetZoom_Click(object sender, RoutedEventArgs e) => SetCanvasZoom(1.0);
+
+    private void ZoomIn_Click(object sender, RoutedEventArgs e) =>
+        SetCanvasZoom(_canvasZoom + CanvasZoomStep);
+
+    private void ResetView_Click(object sender, RoutedEventArgs e)
+    {
+        ToolboxColumn.Width = new GridLength(230);
+        WorkflowColumn.Width = new GridLength(1, GridUnitType.Star);
+        InspectorColumn.Width = new GridLength(380);
+        EquipmentToolboxRow.Height = new GridLength(1, GridUnitType.Star);
+        FlowToolboxRow.Height = new GridLength(1, GridUnitType.Star);
+
+        EquipmentToolboxScrollViewer.ScrollToHome();
+        FlowToolboxScrollViewer.ScrollToHome();
+        WorkflowCanvasScrollViewer.ScrollToHome();
+        ParameterScrollViewer.ScrollToHome();
+        ResultScrollViewer.ScrollToHome();
+        InspectorTabControl.SelectedIndex = 0;
+        SetCanvasZoom(1.0);
+    }
+
+    private void SetCanvasZoom(double zoom)
+    {
+        _canvasZoom = Math.Max(
+            MinimumCanvasZoom,
+            Math.Min(MaximumCanvasZoom, Math.Round(zoom, 1)));
+        WorkflowCanvasScaleTransform.ScaleX = _canvasZoom;
+        WorkflowCanvasScaleTransform.ScaleY = _canvasZoom;
+        CanvasZoomText.Text = $"{_canvasZoom:P0}";
+    }
 
     private void ToolboxItem_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -335,11 +376,11 @@ public partial class MainPage : Page
         CancelInsertionFlash(border);
         if (border.MinHeight < 100)
         {
-            border.Height = 18;
+            border.Height = InsertionMarkerActiveHeight;
         }
 
-        border.Background = (Brush)FindResource("DrillAccentSoftBrush");
-        border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
+        border.SetResourceReference(Border.BackgroundProperty, "DrillAccentSoftBrush");
+        border.SetResourceReference(Border.BorderBrushProperty, "DrillAccentBrush");
         border.BorderThickness = border.MinHeight >= 100
             ? new Thickness(2)
             : new Thickness(0, 2, 0, 0);
@@ -353,11 +394,16 @@ public partial class MainPage : Page
             return;
         }
 
-        border.Height = border.MinHeight >= 100 ? double.NaN : 12;
+        border.Height = border.MinHeight >= 100 ? double.NaN : InsertionMarkerRestingHeight;
         border.Background = Brushes.Transparent;
-        border.BorderBrush = border.MinHeight >= 100
-            ? (Brush)FindResource("DrillBorderBrush")
-            : Brushes.Transparent;
+        if (border.MinHeight >= 100)
+        {
+            border.SetResourceReference(Border.BorderBrushProperty, "DrillBorderBrush");
+        }
+        else
+        {
+            border.BorderBrush = Brushes.Transparent;
+        }
         border.BorderThickness = border.MinHeight >= 100
             ? new Thickness(1)
             : new Thickness(0, 2, 0, 0);
@@ -375,7 +421,7 @@ public partial class MainPage : Page
     {
         if (sender is Border border && !_insertionFlashVersions.ContainsKey(border))
         {
-            border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
+            border.SetResourceReference(Border.BorderBrushProperty, "DrillAccentBrush");
             border.BorderThickness = new Thickness(0, 2, 0, 0);
         }
     }
@@ -439,11 +485,17 @@ public partial class MainPage : Page
 
     private void ShowInsertionHighlight(Border border)
     {
-        border.Height = border.MinHeight >= 100 ? double.NaN : 12;
-        border.Background = border.MinHeight >= 100
-            ? (Brush)FindResource("DrillAccentSoftBrush")
-            : Brushes.Transparent;
-        border.BorderBrush = (Brush)FindResource("DrillAccentBrush");
+        border.Height = border.MinHeight >= 100 ? double.NaN : InsertionMarkerRestingHeight;
+        if (border.MinHeight >= 100)
+        {
+            border.SetResourceReference(Border.BackgroundProperty, "DrillAccentSoftBrush");
+        }
+        else
+        {
+            border.Background = Brushes.Transparent;
+        }
+
+        border.SetResourceReference(Border.BorderBrushProperty, "DrillAccentBrush");
         border.BorderThickness = border.MinHeight >= 100
             ? new Thickness(2)
             : new Thickness(0, 3, 0, 0);
@@ -481,6 +533,9 @@ public partial class MainPage : Page
     private void Page_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         var isTextEditorFocused = Keyboard.FocusedElement is TextBoxBase;
+        var isContinueShortcut = Keyboard.Modifiers == ModifierKeys.None
+                                 && (e.Key == Key.F10
+                                     || (e.Key == Key.System && e.SystemKey == Key.F10));
         if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S && ViewModel.SaveCommand.CanExecute(null))
         {
             ViewModel.SaveCommand.Execute(null);
@@ -494,6 +549,13 @@ public partial class MainPage : Page
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.Y && ViewModel.RedoCommand.CanExecute(null))
         {
             ViewModel.RedoCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && Keyboard.Modifiers == ModifierKeys.Control
+                 && e.Key == Key.A)
+        {
+            ViewModel.SelectAllActions();
             e.Handled = true;
         }
         else if (!isTextEditorFocused
@@ -527,6 +589,32 @@ public partial class MainPage : Page
             ViewModel.DeleteSelectedCommand.Execute(null);
             e.Handled = true;
         }
+        else if (!isTextEditorFocused && e.Key == Key.Escape)
+        {
+            ViewModel.ClearActionSelection();
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control
+                 && (e.Key == Key.OemPlus || e.Key == Key.Add))
+        {
+            SetCanvasZoom(_canvasZoom + CanvasZoomStep);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control
+                 && (e.Key == Key.OemMinus || e.Key == Key.Subtract))
+        {
+            SetCanvasZoom(_canvasZoom - CanvasZoomStep);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control
+                 && (e.Key == Key.D0 || e.Key == Key.NumPad0))
+        {
+            SetCanvasZoom(1.0);
+            e.Handled = true;
+        }
         else if (e.Key == Key.F5 && ViewModel.RunCommand.CanExecute(null))
         {
             ViewModel.RunCommand.Execute(null);
@@ -537,9 +625,9 @@ public partial class MainPage : Page
             ViewModel.ToggleBreakpointCommand.Execute(null);
             e.Handled = true;
         }
-        else if (e.Key == Key.F10 && ViewModel.StepCommand.CanExecute(null))
+        else if (isContinueShortcut && ViewModel.ContinueCommand.CanExecute(null))
         {
-            ViewModel.StepCommand.Execute(null);
+            ViewModel.ContinueCommand.Execute(null);
             e.Handled = true;
         }
     }

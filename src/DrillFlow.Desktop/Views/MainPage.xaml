@@ -6,14 +6,38 @@
       xmlns:converters="clr-namespace:DrillFlow.Desktop.Converters"
       xmlns:behaviors="clr-namespace:DrillFlow.Desktop.Behaviors"
       xmlns:workflow="clr-namespace:DrillFlow.Core.Workflows;assembly=DrillFlow.Core"
-      Background="{StaticResource DrillCanvasBrush}"
+      Background="{DynamicResource DrillCanvasBrush}"
       ShowsNavigationUI="False"
+      ScrollViewer.CanContentScroll="False"
+      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+      ScrollViewer.VerticalScrollBarVisibility="Disabled"
+      ClipToBounds="True"
       PreviewKeyDown="Page_PreviewKeyDown">
     <Page.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         <converters:NullToVisibilityConverter x:Key="NullToVisibility" />
         <converters:NullToVisibilityConverter x:Key="NullToVisibilityInverted" Invert="True" />
         <converters:StringToVisibilityConverter x:Key="StringToVisibility" />
+
+        <ControlTemplate x:Key="InsertionHintTemplate" TargetType="{x:Type ContentControl}">
+            <Border Width="18"
+                    Height="18"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource DrillCanvasBrush}"
+                    BorderBrush="{DynamicResource DrillBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="9"
+                    IsHitTestVisible="False">
+                <TextBlock Text="+"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Margin="0,-2,0,0"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource DrillAccentBrush}" />
+            </Border>
+        </ControlTemplate>
 
         <DataTemplate x:Key="ToolboxItemTemplate">
             <Border Style="{StaticResource ToolboxItemStyle}"
@@ -26,9 +50,9 @@
                         <ColumnDefinition Width="32" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <ui:SymbolIcon Grid.Column="0" Symbol="{Binding Icon}" FontSize="20" Foreground="{StaticResource DrillAccentBrush}" />
+                    <ui:SymbolIcon Grid.Column="0" Symbol="{Binding Icon}" FontSize="20" Foreground="{DynamicResource DrillAccentBrush}" />
                     <StackPanel Grid.Column="1">
-                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="{StaticResource DrillTextBrush}" />
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="{DynamicResource DrillTextBrush}" />
                         <TextBlock Text="{Binding Description}" Style="{StaticResource CaptionTextStyle}" />
                     </StackPanel>
                 </Grid>
@@ -39,8 +63,8 @@
         <DataTemplate x:Key="WorkflowBranchTemplate">
             <Border Margin="16,6,0,2"
                     Padding="10"
-                    Background="{StaticResource DrillSubtleBrush}"
-                    BorderBrush="{StaticResource DrillBorderBrush}"
+                    Background="{DynamicResource DrillSubtleBrush}"
+                    BorderBrush="{DynamicResource DrillBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="6">
                 <StackPanel>
@@ -49,8 +73,10 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Border Background="{StaticResource DrillAccentBrush}" CornerRadius="4" Padding="7,3">
-                            <TextBlock Text="{Binding Title}" Foreground="White" FontWeight="SemiBold" />
+                        <Border Background="{DynamicResource DrillAccentBrush}" CornerRadius="4" Padding="7,3">
+                            <TextBlock Text="{Binding Title}"
+                                       Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}"
+                                       FontWeight="SemiBold" />
                         </Border>
                         <TextBox x:Name="ConditionEditor"
                                  Grid.Column="1"
@@ -73,7 +99,10 @@
                             DragEnter="DropZone_DragEnter"
                             DragOver="DropZone_DragOver"
                             DragLeave="DropZone_DragLeave"
-                            Drop="DropZone_Drop" />
+                            Drop="DropZone_Drop">
+                        <ContentControl Template="{StaticResource InsertionHintTemplate}"
+                                        IsHitTestVisible="False" />
+                    </Border>
                 </StackPanel>
             </Border>
             <DataTemplate.Triggers>
@@ -93,7 +122,10 @@
                         DragEnter="DropZone_DragEnter"
                         DragOver="DropZone_DragOver"
                         DragLeave="DropZone_DragLeave"
-                        Drop="DropZone_Drop" />
+                        Drop="DropZone_Drop">
+                    <ContentControl Template="{StaticResource InsertionHintTemplate}"
+                                    IsHitTestVisible="False" />
+                </Border>
 
                 <Border Style="{StaticResource ActionCardBorderStyle}"
                         Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
@@ -149,6 +181,15 @@
                         </ContextMenu>
                     </Border.ContextMenu>
                     <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsNodeEnabled}" Value="False">
+                                        <Setter Property="Opacity" Value="0.55" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
                         <Grid Background="Transparent"
                               Cursor="SizeAll"
                               Focusable="True"
@@ -165,7 +206,7 @@
                             <ui:SymbolIcon Grid.Column="0"
                                            Symbol="Record20"
                                            HorizontalAlignment="Left"
-                                           Foreground="{StaticResource DrillDangerBrush}"
+                                           Foreground="{DynamicResource DrillDangerBrush}"
                                            Visibility="{Binding HasBreakpoint, Converter={StaticResource BoolToVisibility}}"
                                            ToolTip="{DynamicResource Breakpoint}" />
                             <Border Grid.Column="1"
@@ -175,24 +216,24 @@
                                     ToolTip="{DynamicResource DragAction}">
                                 <ui:SymbolIcon Symbol="{Binding Icon}"
                                                FontSize="18"
-                                               Foreground="{StaticResource DrillAccentBrush}"
+                                               Foreground="{DynamicResource DrillAccentBrush}"
                                                IsHitTestVisible="False" />
                             </Border>
                             <StackPanel Grid.Column="2">
-                                <TextBlock Text="{Binding Alias}" FontWeight="SemiBold" Foreground="{StaticResource DrillTextBrush}" />
+                                <TextBlock Text="{Binding Alias}" FontWeight="SemiBold" Foreground="{DynamicResource DrillTextBrush}" />
                                 <TextBlock Text="{Binding Title}" Style="{StaticResource CaptionTextStyle}" />
                             </StackPanel>
                             <TextBlock Grid.Column="3"
                                        Text="{Binding RuntimeStateText}"
                                        VerticalAlignment="Center"
-                                       Foreground="{StaticResource DrillSecondaryTextBrush}"
+                                       Foreground="{DynamicResource DrillSecondaryTextBrush}"
                                        Margin="8,0" />
                         </Grid>
 
                         <Border x:Name="RepeatBody"
                                 Margin="0,10,0,0"
                                 Padding="8"
-                                BorderBrush="{StaticResource DrillBorderBrush}"
+                                BorderBrush="{DynamicResource DrillBorderBrush}"
                                 BorderThickness="1,1,1,0"
                                 CornerRadius="6"
                                 Visibility="Collapsed">
@@ -207,7 +248,10 @@
                                         DragEnter="DropZone_DragEnter"
                                         DragOver="DropZone_DragOver"
                                         DragLeave="DropZone_DragLeave"
-                                        Drop="DropZone_Drop" />
+                                        Drop="DropZone_Drop">
+                                    <ContentControl Template="{StaticResource InsertionHintTemplate}"
+                                                    IsHitTestVisible="False" />
+                                </Border>
                             </StackPanel>
                         </Border>
 
@@ -238,7 +282,7 @@
                          behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
                          GotKeyboardFocus="Parameter_GotKeyboardFocus" />
                 <TextBlock Text="{Binding ValidationMessage}"
-                           Foreground="{StaticResource DrillDangerBrush}"
+                           Foreground="{DynamicResource DrillDangerBrush}"
                            FontSize="11"
                            Margin="0,3,0,0"
                            TextWrapping="Wrap"
@@ -247,8 +291,8 @@
         </DataTemplate>
 
         <DataTemplate x:Key="RuntimeResultTemplate">
-            <Border Background="{StaticResource DrillSubtleBrush}"
-                    BorderBrush="{StaticResource DrillBorderBrush}"
+            <Border Background="{DynamicResource DrillSubtleBrush}"
+                    BorderBrush="{DynamicResource DrillBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="6"
                     Padding="10"
@@ -304,7 +348,7 @@
         </DataTemplate>
     </Page.Resources>
 
-    <Grid Margin="16">
+    <Grid Margin="16" ClipToBounds="True">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="12" />
@@ -376,6 +420,29 @@
                         <ui:Button Command="{Binding OpenExchangeFolderCommand}" ToolTip="{DynamicResource OpenExchangeFolder}">
                             <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
                         </ui:Button>
+                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <ui:Button Click="ZoomOut_Click"
+                                   ToolTip="{DynamicResource ZoomOut}"
+                                   Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="ZoomOut24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Click="ResetZoom_Click"
+                                   ToolTip="{DynamicResource ResetZoom}"
+                                   Margin="0,0,4,0"
+                                   MinWidth="58">
+                            <TextBlock x:Name="CanvasZoomText"
+                                       Text="100%"
+                                       HorizontalAlignment="Center" />
+                        </ui:Button>
+                        <ui:Button Click="ZoomIn_Click"
+                                   ToolTip="{DynamicResource ZoomIn}"
+                                   Margin="0,0,4,0">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="ZoomIn24" /></ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Click="ResetView_Click"
+                                   ToolTip="{DynamicResource ResetView}">
+                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowReset24" /></ui:Button.Icon>
+                        </ui:Button>
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -383,20 +450,20 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="230" MinWidth="190" />
+                <ColumnDefinition x:Name="ToolboxColumn" Width="230" MinWidth="190" />
                 <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="*" MinWidth="390" />
+                <ColumnDefinition x:Name="WorkflowColumn" Width="*" MinWidth="390" />
                 <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="380" MinWidth="310" />
+                <ColumnDefinition x:Name="InspectorColumn" Width="380" MinWidth="310" />
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Style="{StaticResource PanelBorderStyle}" Padding="12">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" MinHeight="120" />
+                        <RowDefinition x:Name="EquipmentToolboxRow" Height="*" MinHeight="120" />
                         <RowDefinition Height="8" />
-                        <RowDefinition Height="*" MinHeight="120" />
+                        <RowDefinition x:Name="FlowToolboxRow" Height="*" MinHeight="120" />
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0">
                         <TextBlock Text="{DynamicResource Toolbox}" Style="{StaticResource SectionTitleStyle}" />
@@ -412,9 +479,12 @@
                                    Text="{DynamicResource EquipmentActions}"
                                    FontWeight="SemiBold"
                                    Margin="0,4,0,8" />
-                        <ScrollViewer Grid.Row="1"
+                        <ScrollViewer x:Name="EquipmentToolboxScrollViewer"
+                                      Grid.Row="1"
                                       VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      CanContentScroll="False"
+                                      PanningMode="VerticalOnly">
                             <ItemsControl ItemsSource="{Binding EquipmentToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
                         </ScrollViewer>
                     </Grid>
@@ -436,9 +506,12 @@
                                    Text="{DynamicResource FlowActions}"
                                    FontWeight="SemiBold"
                                    Margin="0,4,0,8" />
-                        <ScrollViewer Grid.Row="1"
+                        <ScrollViewer x:Name="FlowToolboxScrollViewer"
+                                      Grid.Row="1"
                                       VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      CanContentScroll="False"
+                                      PanningMode="VerticalOnly">
                             <ItemsControl ItemsSource="{Binding FlowToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
                         </ScrollViewer>
                     </Grid>
@@ -447,13 +520,13 @@
 
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" />
 
-            <Border Grid.Column="2" Style="{StaticResource PanelBorderStyle}" Padding="0" Background="{StaticResource DrillCanvasBrush}">
+            <Border Grid.Column="2" Style="{StaticResource PanelBorderStyle}" Padding="0" Background="{DynamicResource DrillCanvasBrush}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Border Grid.Row="0" Background="{StaticResource DrillSurfaceBrush}" Padding="14" BorderBrush="{StaticResource DrillBorderBrush}" BorderThickness="0,0,0,1">
+                    <Border Grid.Row="0" Background="{DynamicResource DrillSurfaceBrush}" Padding="14" BorderBrush="{DynamicResource DrillBorderBrush}" BorderThickness="0,0,0,1">
                         <TextBlock Text="{DynamicResource Workflow}" FontSize="16" FontWeight="SemiBold" />
                     </Border>
 
@@ -463,27 +536,45 @@
                                   HorizontalScrollBarVisibility="Auto"
                                   PanningMode="Both"
                                   CanContentScroll="False">
-                        <Grid MinWidth="350" Margin="28,18">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="36" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0" Width="3" Margin="16,24,0,24" Background="{StaticResource DrillBorderBrush}" />
-                            <StackPanel Grid.Column="1">
-                                <Border Background="{StaticResource DrillSuccessBrush}" CornerRadius="14" Padding="12,5" HorizontalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <ui:SymbolIcon Symbol="Play20" Foreground="White" Margin="0,0,6,0" />
-                                        <TextBlock Text="{DynamicResource Start}" Foreground="White" FontWeight="SemiBold" />
-                                    </StackPanel>
-                                </Border>
+                        <Grid x:Name="WorkflowCanvasContent" MinWidth="350" Margin="28,18">
+                            <Grid.LayoutTransform>
+                                <ScaleTransform x:Name="WorkflowCanvasScaleTransform" ScaleX="1" ScaleY="1" />
+                            </Grid.LayoutTransform>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
 
+                            <Border Grid.Row="0"
+                                    Background="{DynamicResource DrillSuccessBrush}"
+                                    CornerRadius="14"
+                                    Padding="12,5"
+                                    HorizontalAlignment="Center"
+                                    Panel.ZIndex="2">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="Play20" Foreground="{DynamicResource TextFillColorInverseBrush}" Margin="0,0,6,0" />
+                                    <TextBlock Text="{DynamicResource Start}" Foreground="{DynamicResource TextFillColorInverseBrush}" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Border>
+
+                            <Grid Grid.Row="1" Margin="0,12">
+                                <!-- This rail connects the Start and End markers only. -->
+                                <Border Width="2"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Stretch"
+                                        Background="{DynamicResource DrillBorderBrush}"
+                                        IsHitTestVisible="False"
+                                        Panel.ZIndex="0" />
+
+                                <StackPanel Panel.ZIndex="1">
                                 <Border Tag="{Binding Actions}"
                                         MinHeight="180"
                                         Margin="4,10"
                                         Padding="20"
                                         AllowDrop="True"
-                                        Background="Transparent"
-                                        BorderBrush="{StaticResource DrillBorderBrush}"
+                                        Background="{DynamicResource DrillOpaqueSurfaceBrush}"
+                                        BorderBrush="{DynamicResource DrillBorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="8"
                                         MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
@@ -502,9 +593,25 @@
                                         </Style>
                                     </Border.Style>
                                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Border Width="24"
+                                                Height="24"
+                                                Margin="0,0,0,8"
+                                                HorizontalAlignment="Center"
+                                                Background="{DynamicResource DrillCanvasBrush}"
+                                                BorderBrush="{DynamicResource DrillAccentBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="12">
+                                            <TextBlock Text="+"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,-3,0,0"
+                                                       FontSize="19"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource DrillAccentBrush}" />
+                                        </Border>
                                         <ui:SymbolIcon Symbol="ArrowDownload24"
                                                        FontSize="26"
-                                                       Foreground="{StaticResource DrillAccentBrush}"
+                                                       Foreground="{DynamicResource DrillAccentBrush}"
                                                        HorizontalAlignment="Center"
                                                        Margin="0,0,0,8" />
                                         <TextBlock Text="{DynamicResource EmptyWorkflow}"
@@ -515,23 +622,41 @@
 
                                 <ItemsControl ItemsSource="{Binding Actions}" ItemTemplate="{StaticResource WorkflowActionTemplate}" />
 
-                                <Border Style="{StaticResource InsertionMarkerStyle}"
-                                        Tag="{Binding Actions}"
+                                <Border Tag="{Binding Actions}"
                                         MouseEnter="InsertionMarker_MouseEnter"
                                         MouseLeave="InsertionMarker_MouseLeave"
                                         MouseLeftButtonDown="InsertionMarker_MouseLeftButtonDown"
                                         DragEnter="DropZone_DragEnter"
                                         DragOver="DropZone_DragOver"
                                         DragLeave="DropZone_DragLeave"
-                                        Drop="DropZone_Drop" />
-
-                                <Border Background="{StaticResource DrillSecondaryTextBrush}" CornerRadius="14" Padding="12,5" HorizontalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <ui:SymbolIcon Symbol="Stop20" Foreground="White" Margin="0,0,6,0" />
-                                        <TextBlock Text="{DynamicResource End}" Foreground="White" FontWeight="SemiBold" />
-                                    </StackPanel>
+                                        Drop="DropZone_Drop">
+                                    <Border.Style>
+                                        <Style TargetType="Border" BasedOn="{StaticResource InsertionMarkerStyle}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Actions.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <ContentControl Template="{StaticResource InsertionHintTemplate}"
+                                                    IsHitTestVisible="False" />
                                 </Border>
-                            </StackPanel>
+
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Grid.Row="2"
+                                    Background="{DynamicResource DrillSecondaryTextBrush}"
+                                    CornerRadius="14"
+                                    Padding="12,5"
+                                    HorizontalAlignment="Center"
+                                    Panel.ZIndex="2">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="Stop20" Foreground="{DynamicResource TextFillColorInverseBrush}" Margin="0,0,6,0" />
+                                    <TextBlock Text="{DynamicResource End}" Foreground="{DynamicResource TextFillColorInverseBrush}" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Border>
                         </Grid>
                     </ScrollViewer>
                 </Grid>
@@ -547,12 +672,25 @@
                                VerticalAlignment="Center"
                                Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibilityInverted}}" />
 
-                    <ui:TabView HorizontalContentAlignment="Stretch"
+                    <!-- Native TabControl/TabItem pick up WPF-UI's Fluent implicit styles. -->
+                    <TabControl x:Name="InspectorTabControl"
+                                Style="{StaticResource {x:Type TabControl}}"
+                                HorizontalContentAlignment="Stretch"
                                 VerticalContentAlignment="Stretch"
+                                Background="Transparent"
+                                BorderThickness="0"
                                 Visibility="{Binding SelectedAction, Converter={StaticResource NullToVisibility}}">
-                        <ui:TabViewItem Header="{DynamicResource Parameters}">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        <TabItem Style="{StaticResource {x:Type TabItem}}">
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="Settings24" FontSize="16" Margin="0,0,6,0" />
+                                    <TextBlock Text="{DynamicResource Parameters}" />
+                                </StackPanel>
+                            </TabItem.Header>
+                            <ScrollViewer x:Name="ParameterScrollViewer"
+                                          VerticalScrollBarVisibility="Auto"
                                           HorizontalScrollBarVisibility="Disabled"
+                                          CanContentScroll="False"
                                           PanningMode="VerticalOnly">
                                 <StackPanel DataContext="{Binding SelectedAction}" Margin="12">
                                     <TextBlock Text="{Binding ParameterObjectLabel}"
@@ -563,7 +701,7 @@
                                              IsEnabled="{Binding IsEditingEnabled}"
                                              GotKeyboardFocus="Parameter_GotKeyboardFocus" />
                                     <TextBlock Text="{Binding AliasValidationMessage}"
-                                               Foreground="{StaticResource DrillDangerBrush}"
+                                               Foreground="{DynamicResource DrillDangerBrush}"
                                                FontSize="11"
                                                Margin="0,3,0,10"
                                                Visibility="{Binding AliasValidationMessage, Converter={StaticResource StringToVisibility}}" />
@@ -599,11 +737,19 @@
                                     </WrapPanel>
                                 </StackPanel>
                             </ScrollViewer>
-                        </ui:TabViewItem>
+                        </TabItem>
 
-                        <ui:TabViewItem Header="{DynamicResource Results}">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        <TabItem Style="{StaticResource {x:Type TabItem}}">
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="DocumentArrowDown20" FontSize="16" Margin="0,0,6,0" />
+                                    <TextBlock Text="{DynamicResource Results}" />
+                                </StackPanel>
+                            </TabItem.Header>
+                            <ScrollViewer x:Name="ResultScrollViewer"
+                                          VerticalScrollBarVisibility="Auto"
                                           HorizontalScrollBarVisibility="Disabled"
+                                          CanContentScroll="False"
                                           PanningMode="VerticalOnly">
                                 <StackPanel Margin="12">
                                     <TextBlock Text="{Binding SelectedAction.ResultObjectLabel}"
@@ -627,8 +773,8 @@
                                                   ItemTemplate="{StaticResource RuntimeResultTemplate}" />
                                 </StackPanel>
                             </ScrollViewer>
-                        </ui:TabViewItem>
-                    </ui:TabView>
+                        </TabItem>
+                    </TabControl>
                 </Grid>
             </Border>
         </Grid>

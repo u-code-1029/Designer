@@ -3,7 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       xmlns:converters="clr-namespace:DrillFlow.Desktop.Converters"
-      Background="{StaticResource DrillCanvasBrush}"
+      Background="{DynamicResource DrillCanvasBrush}"
       HorizontalAlignment="Stretch"
       VerticalAlignment="Stretch"
       ShowsNavigationUI="False">
@@ -22,11 +22,44 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="16" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Text="{DynamicResource SettingsTitle}" Style="{StaticResource PageTitleStyle}" />
 
-            <ui:Card Grid.Row="2" Padding="22" IsEnabled="{Binding CanEditSettings}">
+            <ui:Card Grid.Row="2" Padding="22">
+                <StackPanel>
+                    <TextBlock Text="{DynamicResource AppearanceSettings}" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource Theme}" Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox SelectedValue="{Binding Theme}"
+                                      SelectedValuePath="Tag">
+                                <ComboBoxItem Tag="System" Content="{DynamicResource ThemeSystem}" />
+                                <ComboBoxItem Tag="Light" Content="{DynamicResource ThemeLight}" />
+                                <ComboBoxItem Tag="Dark" Content="{DynamicResource ThemeDark}" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource Language}" Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox SelectedValue="{Binding Language}"
+                                      SelectedValuePath="Tag">
+                                <ComboBoxItem Tag="Auto" Content="{DynamicResource LanguageAuto}" />
+                                <ComboBoxItem Tag="ko-KR" Content="{DynamicResource LanguageKorean}" />
+                                <ComboBoxItem Tag="en-US" Content="{DynamicResource LanguageEnglish}" />
+                            </ComboBox>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </ui:Card>
+
+            <ui:Card Grid.Row="4" Padding="22" IsEnabled="{Binding CanEditSettings}">
                 <StackPanel>
                     <TextBlock Text="{DynamicResource CommunicationSettings}" Style="{StaticResource SectionTitleStyle}" />
 
@@ -36,6 +69,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="8" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox Grid.Column="0"
                                  Text="{Binding ExchangeFolder, UpdateSourceTrigger=PropertyChanged}"
@@ -43,6 +78,14 @@
                         <ui:Button Grid.Column="2"
                                    Content="{DynamicResource Browse}"
                                    Command="{Binding BrowseFolderCommand}">
+                            <ui:Button.Icon>
+                                <ui:SymbolIcon Symbol="FolderSearch24" />
+                            </ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Grid.Column="4"
+                                   Command="{Binding OpenFolderCommand}"
+                                   ToolTip="{DynamicResource OpenExchangeFolder}"
+                                   AutomationProperties.Name="{DynamicResource OpenExchangeFolder}">
                             <ui:Button.Icon>
                                 <ui:SymbolIcon Symbol="FolderOpen24" />
                             </ui:Button.Icon>
@@ -132,19 +175,8 @@
                         </StackPanel>
                     </Grid>
 
-                    <TextBlock Text="{DynamicResource Language}" Style="{StaticResource FieldLabelStyle}" />
-                    <ComboBox SelectedValue="{Binding Language}"
-                              SelectedValuePath="Tag"
-                              Width="300"
-                              HorizontalAlignment="Left"
-                              Margin="0,0,0,18">
-                        <ComboBoxItem Tag="Auto" Content="{DynamicResource LanguageAuto}" />
-                        <ComboBoxItem Tag="ko-KR" Content="{DynamicResource LanguageKorean}" />
-                        <ComboBoxItem Tag="en-US" Content="{DynamicResource LanguageEnglish}" />
-                    </ComboBox>
-
                     <TextBlock Text="{Binding ValidationMessage}"
-                               Foreground="{StaticResource DrillDangerBrush}"
+                               Foreground="{DynamicResource DrillDangerBrush}"
                                Margin="0,0,0,10"
                                Visibility="{Binding ValidationMessage, Converter={StaticResource StringToVisibility}}" />
 
@@ -167,7 +199,7 @@
                 </StackPanel>
             </ui:Card>
 
-            <ui:InfoBar Grid.Row="4"
+            <ui:InfoBar Grid.Row="6"
                         IsOpen="True"
                         IsClosable="False"
                         Title="{Binding StatusMessage}" />
