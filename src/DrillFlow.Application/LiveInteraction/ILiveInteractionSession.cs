@@ -19,8 +19,12 @@ public interface ILiveInteractionSession
     /// <summary>Raised whenever <see cref="IsBusy"/> changes.</summary>
     event EventHandler? BusyChanged;
 
-    /// <summary>Requests one low-latency camera frame.</summary>
+    /// <summary>
+    /// Requests one low-latency camera frame at the supplied horizontal field width in metres.
+    /// A smaller width represents greater magnification.
+    /// </summary>
     Task<EquipmentResponseMessage> RequestFrameAsync(
+        double horizontalFieldWidthMetres,
         CancellationToken cancellationToken = default);
 
     /// <summary>Moves the stage by the supplied offsets in metres.</summary>

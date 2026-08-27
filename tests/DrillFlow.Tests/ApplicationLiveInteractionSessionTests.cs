@@ -24,7 +24,7 @@ public sealed class ApplicationLiveInteractionSessionTests
                     : @"C:\camera\image.png")));
         using var session = CreateSession(transport);
 
-        var frame = await session.RequestFrameAsync();
+        var frame = await session.RequestFrameAsync(12.5E-3);
         var move = await session.MoveRelativeAsync(2.5E-4, -3E-4);
         var capture = await session.CaptureAsync();
 
@@ -38,7 +38,10 @@ public sealed class ApplicationLiveInteractionSessionTests
             },
             transport.Requests.Select(item => item.Command));
 
-        Assert.Empty(transport.Requests[0].Parameters);
+        Assert.Equal(
+            12.5E-3,
+            transport.Requests[0].Parameters[
+                LiveInteractionProtocol.HorizontalFieldWidthParameter]);
         Assert.Equal(
             LiveInteractionProtocol.RelativeMoveMode,
             transport.Requests[1].Parameters[LiveInteractionProtocol.MoveModeParameter]);
@@ -62,7 +65,7 @@ public sealed class ApplicationLiveInteractionSessionTests
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             command == "frame"
-                ? session.RequestFrameAsync()
+                ? session.RequestFrameAsync(10E-3)
                 : session.CaptureAsync());
 
         Assert.Contains("image_path", exception.Message, StringComparison.Ordinal);
@@ -91,6 +94,25 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.Empty(transport.Requests);
     }
 
+    [Theory]
+    [InlineData(0d)]
+    [InlineData(-1E-3)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void Frame_RejectsNonPositiveOrNonFiniteHfwBeforeExchange(double hfw)
+    {
+        var transport = new RecordingTransport((request, _) =>
+            Task.FromResult(Response(request, @"C:\camera\frame.png")));
+        using var session = CreateSession(transport);
+
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.RequestFrameAsync(hfw);
+        });
+        Assert.Empty(transport.Requests);
+    }
+
     [Fact]
     public async Task ConcurrentCalls_AreSerializedForTheWholeRequestResponseExchange()
     {
@@ -112,7 +134,7 @@ public sealed class ApplicationLiveInteractionSessionTests
         var busyStates = new List<bool>();
         session.BusyChanged += (_, _) => busyStates.Add(session.IsBusy);
 
-        var first = session.RequestFrameAsync();
+        var first = session.RequestFrameAsync(10E-3);
         await firstObserved.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         Assert.True(session.IsBusy);
         var second = session.CaptureAsync();
@@ -147,7 +169,7 @@ public sealed class ApplicationLiveInteractionSessionTests
         using var session = CreateSession(transport);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            session.RequestFrameAsync());
+            session.RequestFrameAsync(10E-3));
 
         Assert.Contains("does not match", exception.Message, StringComparison.Ordinal);
     }
@@ -162,7 +184,7 @@ public sealed class ApplicationLiveInteractionSessionTests
         session.BusyChanged += (_, _) => throw new InvalidOperationException("Observer failed.");
         session.BusyChanged += (_, _) => Interlocked.Increment(ref notifications);
 
-        await session.RequestFrameAsync();
+        await session.RequestFrameAsync(10E-3);
         await session.CaptureAsync();
 
         Assert.False(session.IsBusy);
@@ -184,14 +206,15 @@ public sealed class ApplicationLiveInteractionSessionTests
         });
         var session = CreateSession(transport);
 
-        var exchange = session.RequestFrameAsync();
+        var exchange = session.RequestFrameAsync(10E-3);
         var request = await observed.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         session.Dispose();
         response.SetResult(Response(request, @"C:\camera\frame.png"));
 
         Assert.Equal(request.Index, (await exchange).Index);
         Assert.False(session.IsBusy);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.RequestFrameAsync());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            session.RequestFrameAsync(10E-3));
     }
 
     private static LiveInteractionSession CreateSession(IEquipmentFileTransport transport)

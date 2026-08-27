@@ -7,6 +7,7 @@
       VerticalAlignment="Stretch"
       ScrollViewer.CanContentScroll="False"
       ShowsNavigationUI="False"
+      PreviewKeyDown="Page_PreviewKeyDown"
       Loaded="Page_Loaded"
       Unloaded="Page_Unloaded">
     <Page.Resources>
@@ -175,14 +176,26 @@
                 <Grid x:Name="ImageViewport"
                       MinHeight="420"
                       Background="{DynamicResource DrillOpaqueSurfaceBrush}"
+                      MouseWheel="ImageViewport_MouseWheel"
                       ClipToBounds="True">
                     <Image x:Name="LiveImage"
                            Source="{Binding LiveImageSource}"
                            Stretch="Uniform"
                            RenderOptions.BitmapScalingMode="HighQuality"
                            MouseLeftButtonDown="LiveImage_MouseLeftButtonDown"
+                           PreviewMouseRightButtonDown="LiveImage_PreviewMouseRightButtonDown"
+                           ContextMenuOpening="LiveImage_ContextMenuOpening"
                            SizeChanged="LiveImage_SizeChanged"
-                           Cursor="Cross" />
+                           Cursor="Cross">
+                        <Image.ContextMenu>
+                            <ContextMenu Closed="LiveImageContextMenu_Closed">
+                                <MenuItem x:Name="MoveHereMenuItem"
+                                          Header="{DynamicResource LiveMoveHere}"
+                                          Click="MoveHereMenuItem_Click"
+                                          AutomationProperties.Name="{DynamicResource LiveMoveHere}" />
+                            </ContextMenu>
+                        </Image.ContextMenu>
+                    </Image>
 
                     <Border IsHitTestVisible="False"
                             HorizontalAlignment="Center"
@@ -209,6 +222,20 @@
                                        Foreground="{DynamicResource DrillSecondaryTextBrush}"
                                        TextAlignment="Center" />
                         </StackPanel>
+                    </Border>
+
+                    <Border IsHitTestVisible="False"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Top"
+                            Margin="12"
+                            Padding="12,7"
+                            CornerRadius="7"
+                            Background="#CC202020"
+                            Visibility="{Binding IsFrameCalibrationPending, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="{DynamicResource LiveFrameCalibrationPending}"
+                                   Foreground="White"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap" />
                     </Border>
 
                     <Canvas x:Name="TargetOverlay" IsHitTestVisible="False">
@@ -260,6 +287,66 @@
                           HorizontalScrollBarVisibility="Disabled"
                           PanningMode="VerticalOnly">
                 <StackPanel>
+                    <ui:Card Padding="18" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource LiveFrameMagnification}"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="{DynamicResource LiveHorizontalFieldWidth}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="82" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:Button Grid.Column="0"
+                                           Width="36"
+                                           Height="34"
+                                           Padding="0"
+                                           Command="{Binding ZoomFrameOutCommand}"
+                                           ToolTip="{DynamicResource LiveZoomOutHint}"
+                                           AutomationProperties.Name="{DynamicResource LiveZoomOutHint}">
+                                    <ui:Button.Icon>
+                                        <ui:SymbolIcon Symbol="ZoomOut24" />
+                                    </ui:Button.Icon>
+                                </ui:Button>
+                                <TextBox Grid.Column="2"
+                                         Text="{Binding HorizontalFieldWidthText, UpdateSourceTrigger=PropertyChanged, Delay=300}" />
+                                <ComboBox Grid.Column="4"
+                                          SelectedValue="{Binding HorizontalFieldWidthUnit}"
+                                          SelectedValuePath="Tag">
+                                    <ComboBoxItem Tag="m" Content="m" />
+                                    <ComboBoxItem Tag="mm" Content="mm" />
+                                    <ComboBoxItem Tag="um" Content="µm" />
+                                    <ComboBoxItem Tag="nm" Content="nm" />
+                                </ComboBox>
+                                <ui:Button Grid.Column="6"
+                                           Width="36"
+                                           Height="34"
+                                           Padding="0"
+                                           Command="{Binding ZoomFrameInCommand}"
+                                           ToolTip="{DynamicResource LiveZoomInHint}"
+                                           AutomationProperties.Name="{DynamicResource LiveZoomInHint}">
+                                    <ui:Button.Icon>
+                                        <ui:SymbolIcon Symbol="ZoomIn24" />
+                                    </ui:Button.Icon>
+                                </ui:Button>
+                            </Grid>
+                            <TextBlock Text="{Binding HorizontalFieldWidthValidationMessage}"
+                                       Foreground="{DynamicResource DrillDangerBrush}"
+                                       FontSize="12"
+                                       Margin="0,6,0,0" />
+                            <TextBlock Text="{DynamicResource LiveHorizontalFieldWidthHint}"
+                                       Style="{StaticResource CaptionTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                        </StackPanel>
+                    </ui:Card>
+
                     <ui:Card Padding="18" Margin="0,0,0,12">
                         <StackPanel>
                             <TextBlock Text="{DynamicResource LivePixelCalibration}"

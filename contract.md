@@ -16,10 +16,13 @@ Designer 내부의 Delay/Repeat/Conditional 및 HTTP Action은 이 장비 파일
 2. 앱이 request 파일을 임시 파일에 완전히 기록한 후 설정된 request 파일명으로 원자적으로 게시한다.
 3. 장비가 request를 감지하고 동작한다.
 4. 장비가 같은 `index`의 response 파일을 만든다.
-5. 앱은 안정적으로 기록된 response 중 `index`가 일치하고 `command`가 정확히 `return`인 파일만 현재 요청의 응답으로 인정한다.
-6. `ApplicationRequestLifecycle = DeleteAfterResponse`이면 앱은 처리 완료된 request 파일을 best-effort로 삭제한다. 이미 없거나 삭제할 수 없어도 정상 response 처리는 실패시키지 않는다.
-7. response의 확장 필드는 현재 Run의 해당 Action 결과 또는 Live Interaction의 최신 상태로 보존된다. “이 Action만 실행”은 현재 Run 결과 세션을 이어 쓰며, 새 전체 Workflow Run·New/Open·명시적 전체 결과 초기화에서만 이전 결과 세션을 비운다.
-8. 사용자가 실행을 정지하면 현재 response 대기를 즉시 취소한다. request가 이미 게시되었다면 앱은 process/SMB exchange lock을 유지한 채 **게시한 byte와 현재 request가 정확히 같은 경우에만** 해당 파일을 best-effort로 삭제한다. 이미 없으면 성공으로 보고, 내용이 다르면 다른 주체의 파일로 간주해 보존하며, 잠금·권한 문제는 제한 시간 동안 재시도한 뒤 경고만 남긴다. 이 취소 정리는 `ApplicationRequestLifecycle` 설정과 무관하게 적용된다.
+5. 앱은 안정적으로 기록된 response를 메모리에 확보하고, `index`가 일치하며 `command`가 정확히 `return`이고 필수 필드가 유효한 파일만 현재 요청의 응답으로 인정한다. correlation을 확인하려면 response를 읽어야 하므로 이 stable snapshot 확보는 다음 파일 정리보다 먼저 일어난다.
+6. `ApplicationRequestLifecycle = DeleteAfterResponse`이면 앱은 matching response를 감지한 직후 처리 완료된 request 파일을 먼저 best-effort로 삭제한다. 이미 없거나 삭제할 수 없어도 정상 response 처리는 실패시키지 않는다.
+7. 앱은 확보해 둔 response snapshot을 런타임 결과로 materialize한 뒤, `ApplicationResponseLifecycle = DeleteAfterRead`이면 response 파일을 best-effort로 삭제하고 materialize한 결과를 호출자에게 반환한다. 따라서 기본 순서는 **matching response 감지 → request 삭제 시도 → 결과 materialize → response 삭제 시도 → 결과 반환**이며, 두 삭제는 각각 설정에서 retain/overwrite 방식으로 바꿀 수 있다.
+8. response의 확장 필드는 현재 Run의 해당 Action 결과 또는 Live Interaction의 최신 상태로 보존된다. “이 Action만 실행”은 현재 Run 결과 세션을 이어 쓰며, 새 전체 Workflow Run·New/Open·명시적 전체 결과 초기화에서만 이전 결과 세션을 비운다.
+9. 사용자가 실행을 정지하면 현재 response 대기를 즉시 취소한다. request가 이미 게시되었다면 앱은 process/SMB exchange lock을 유지한 채 **게시한 byte와 현재 request가 정확히 같은 경우에만** 해당 파일을 best-effort로 삭제한다. 이미 없으면 성공으로 보고, 내용이 다르면 다른 주체의 파일로 간주해 보존하며, 잠금·권한 문제는 제한 시간 동안 재시도한 뒤 경고만 남긴다. 이 취소 정리는 `ApplicationRequestLifecycle` 설정과 무관하게 적용된다. 일반 Stop/HFW 전환은 UI를 먼저 반환하지만, 앱 종료 시에는 이미 예약된 정리 작업을 그 작업의 원래 2초 deadline 중 남은 시간까지만 join해 프로세스 종료가 정상 로컬 정리보다 앞서지 않게 한다. 중단할 수 없는 UNC/SMB OS 호출이 deadline을 넘으면 종료를 계속한다.
+
+현재 프로토콜에는 별도의 완료 신호 파일이나 상태 비트가 없다. 같은 `index`를 가진 유효한 response가 안정적으로 게시되는 것이 해당 request의 완료 신호다.
 
 현재 장비 동작은 모두 성공한다고 가정한다. 오류 코드, 성공 여부, 오류 응답 및 보상 동작은 계약에 없다. 툴바의 Stop은 장비 명령이 아니며 실행기를 즉시 멈춘다. request 삭제도 아직 장비가 읽지 않은 파일의 회수일 뿐, 이미 시작한 물리 동작을 취소하지 않는다. Canvas의 명시적인 Abort Action만 `command: "abort"` request를 전송한다.
 
@@ -119,12 +122,19 @@ Correlation ID 저장소는 마지막 발급값이 아니라 **영구 예약된 
 
 ### 2.5 Frame — Live 저지연 1프레임
 
-추가 파라미터가 없다. Live Interaction 페이지가 동영상과 유사한 미리보기를 만들기 위해 한 번에 한 요청씩 순차적으로 사용한다. 장비는 프레임 파일 기록을 완료한 뒤 `image_path`가 포함된 공통 response를 게시해야 한다.
+| 필드 | JSON 타입 | 필수 | 범위/의미 |
+|---|---:|:---:|---|
+| `index` | integer | 예 | 공통 envelope |
+| `command` | string | 예 | `frame` |
+| `hfw` | number | 예 | metre 기준 Horizontal Field Width. 0보다 큰 유한값이며, 작을수록 높은 배율 |
+
+Live Interaction 페이지가 동영상과 유사한 미리보기를 만들기 위해 한 번에 한 요청씩 순차적으로 사용한다. 장비는 요청된 `hfw`로 프레임 파일 기록을 완료한 뒤 `image_path`가 포함된 공통 response를 게시해야 한다.
 
 ```json
 {
   "index": 105,
-  "command": "frame"
+  "command": "frame",
+  "hfw": 1E-2
 }
 ```
 
@@ -156,11 +166,13 @@ Correlation ID 저장소는 마지막 발급값이 아니라 **영구 예약된 
 
 Live 페이지는 `frame response 수신 → image_path 파일을 완전히 메모리에 로드하고 파일 handle 해제 → 화면 갱신 → 다음 frame request` 순서를 지킨다. 장비가 매 프레임 같은 이미지 경로를 덮어쓸 수 있으므로 이미지 로드 전에 다음 request를 게시하지 않는다.
 
+Designer의 HFW 기본값은 편집 가능한 `10 mm`이며 metre 환산 결과가 0보다 큰 유한값일 때만 frame request에 사용한다. 이미지 위 마우스 휠 또는 편집 컨트롤 밖의 `+`/`-` 키는 HFW를 각각 절반(확대)/2배(축소)로 변경한다. 유효한 Pixel Pitch가 입력되어 있으면 같은 HFW 비율로 자동 보정한다. HFW가 바뀌면 이전 HFW로 이미 게시된 frame exchange를 즉시 취소·회수하고 최신 HFW로 다시 요청한다. 화면에 남은 이전 프레임은 새 HFW 프레임이 수신·디코딩될 때까지 보정 대기 상태이며, 이 동안 더블클릭/오른쪽 클릭 Stage 이동을 차단한다.
+
 하나의 물리 장비와 `ExchangeDirectory`에는 동시에 **하나의 active controller만** 연결해야 한다. `.drillflow.exchange.lock`은 개별 exchange가 섞이는 것만 막으며 여러 운전자가 장비를 번갈아 움직이는 장기 session ownership을 대신하지 않는다. 일반 Workflow Action의 `image_path`는 현재 Run이 끝날 때까지 correlation별로 고유하거나 내용이 변하지 않아야 한다. Live `frame`만 위의 순차 읽기 경계 안에서 같은 경로 덮어쓰기를 허용한다.
 
-이미지 더블클릭 이동은 마지막 정상 이미지의 **중심**을 카메라 기준점으로 사용한다. 원본 이미지의 오른쪽이 기본 `+X`, 아래쪽이 기본 `+Y`이며 장비의 카메라 설치 방향에 따라 각 축을 UI에서 반전할 수 있다. WPF가 BitmapSource의 pixel 크기뿐 아니라 X/Y DPI로 자연 DIP 크기를 정한다는 점까지 반영해 `Stretch=Uniform` letterbox를 제거하며, letterbox 영역은 이동 지점이 아니다. 원본 pixel 좌표 차이에 사용자가 입력한 pixel pitch를 metre로 환산해 곱하고, 기존 `move`의 `relative` request로 전송한다. 계산된 각 축 이동량도 `-0.5 m < value < 0.5 m` 범위를 만족해야 하며 범위를 넘으면 clamp하지 않고 요청을 차단한다.
+이미지 더블클릭 또는 오른쪽 클릭 메뉴의 “해당 위치로 이동”은 마지막 정상 이미지의 **중심**을 카메라 기준점으로 사용한다. 두 입력 경로는 동일한 좌표 mapper를 사용한다. 원본 이미지의 오른쪽이 기본 `+X`, 아래쪽이 기본 `+Y`이며 장비의 카메라 설치 방향에 따라 각 축을 UI에서 반전할 수 있다. WPF가 BitmapSource의 pixel 크기뿐 아니라 X/Y DPI로 자연 DIP 크기를 정한다는 점까지 반영해 `Stretch=Uniform` letterbox를 제거하며, letterbox 영역은 이동 지점이 아니다. 원본 pixel 좌표 차이에 사용자가 입력한 pixel pitch를 metre로 환산해 곱하고, 기존 `move`의 `relative` request로 전송한다. 계산된 각 축 이동량도 `-0.5 m < value < 0.5 m` 범위를 만족해야 하며 범위를 넘으면 clamp하지 않고 요청을 차단한다.
 
-이동 또는 고화질 촬영을 시작할 때는 새 frame 예약을 먼저 멈추고 이미 게시된 frame의 matching response를 끝까지 소비한다. 그 뒤 `move` 또는 `capture`를 하나만 실행하며, 직전 Live 상태가 재생 중이었다면 완료 후 frame 루프를 다시 시작한다. 앱 종료를 제외한 일반 Pause와 페이지 이탈은 게시된 장비 요청을 앱에서만 강제 취소하지 않는다.
+이동 또는 고화질 촬영을 시작할 때는 새 frame 예약을 멈추고 현재 frame exchange를 즉시 취소한다. transport가 자신이 게시한 correlation·command·payload와 현재 request가 모두 일치할 때만 그 request를 회수하며, 이 cleanup이 소유한 exchange gate가 풀린 뒤에만 `move` 또는 `capture` 하나를 게시한다. 따라서 frame과 interactive request는 파일 경로에서 겹치지 않는다. 이미지 지점 이동은 matching move response가 성공한 뒤 페이지가 활성 상태이면 이전 Stop 상태와 관계없이 frame 루프를 시작하고, 실패·취소·페이지 이탈 때는 재개하지 않는다. Capture는 직전 Live 상태가 재생 중이었을 때 후속 처리가 끝난 뒤 frame 루프를 복원한다. Stop은 활성 frame을, 페이지 이탈과 앱 종료는 앱이 소유한 활성 frame/move/capture를 취소하지만 장비가 이미 읽어 실행한 명령을 되돌리는 `abort`는 게시하지 않는다.
 
 `capture` response를 받으면 앱은 장비 소유 `image_path`를 bounded stable-read로 전용 LocalAppData 스냅샷에 원본 바이트 그대로 확보한다. WIC 검증에 실패하면 장비 경로에서 다시 스냅샷을 얻는 과정까지 bounded retry하며, 미리보기와 사용자 저장은 검증된 동일 스냅샷만 사용한다. 장비가 이후 원본을 교체·삭제해도 저장 내용은 변하지 않는다. UNC 파일 open 자체는 Windows 네트워크 공급자에 의해 OS timeout까지 지연될 수 있어 UI thread 밖에서 수행한다. 취소 시 앱은 그 worker를 더 기다리지 않아 UI 종료를 진행하지만, 이미 시작된 open 자체가 즉시 중단된다고 보장하지 않으며 뒤늦게 남은 staging 파일은 worker 완료 또는 다음 앱 시작에서 정리한다.
 

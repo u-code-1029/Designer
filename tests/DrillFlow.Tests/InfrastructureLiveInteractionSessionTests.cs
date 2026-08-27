@@ -58,7 +58,7 @@ public sealed class InfrastructureLiveInteractionSessionTests
                 CancellationToken.None);
             await WaitForTextContainingAsync(requestPath, "\"index\": 501");
 
-            var liveExchange = live.RequestFrameAsync();
+            var liveExchange = live.RequestFrameAsync(10E-3);
             await Task.Delay(60);
             Assert.Contains("\"index\": 501", File.ReadAllText(requestPath), StringComparison.Ordinal);
             Assert.False(liveExchange.IsCompleted);
@@ -70,6 +70,7 @@ public sealed class InfrastructureLiveInteractionSessionTests
 
             await WaitForTextContainingAsync(requestPath, "\"index\": 502");
             Assert.Contains("\"command\": \"frame\"", File.ReadAllText(requestPath), StringComparison.Ordinal);
+            Assert.Contains("\"hfw\": 1E-2", File.ReadAllText(requestPath), StringComparison.Ordinal);
             await WriteReplacingAsync(
                 responsePath,
                 "{\"index\":502,\"command\":\"return\",\"stage_x\":0.01,\"stage_y\":0.02,"
@@ -123,7 +124,7 @@ public sealed class InfrastructureLiveInteractionSessionTests
                 NullLogger<LiveInteractionSession>.Instance);
             using var cancellation = new CancellationTokenSource();
             var requestPath = Path.Combine(directory, options.RequestFileName);
-            var exchange = live.RequestFrameAsync(cancellation.Token);
+            var exchange = live.RequestFrameAsync(10E-3, cancellation.Token);
             await WaitForTextContainingAsync(requestPath, "\"index\": 601");
 
             cancellation.Cancel();
@@ -132,6 +133,71 @@ public sealed class InfrastructureLiveInteractionSessionTests
             Assert.Same(exchange, completed);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exchange);
             await WaitForFileMissingAsync(requestPath);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CanceledFrame_IsReclaimedBeforeImmediateInteractiveMoveIsPublished()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "DrillFlow.LiveTransportTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var options = new EquipmentCommunicationOptions
+            {
+                ExchangeDirectory = directory,
+                RequestFileName = "request.json",
+                ResponseFileName = "response.json",
+                EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.RetainUntilOverwritten,
+                ResponseTimeout = TimeSpan.FromSeconds(2),
+                PollingInterval = TimeSpan.FromMilliseconds(10),
+                StableReadDelay = TimeSpan.FromMilliseconds(5),
+            };
+            using var transport = new FileEquipmentTransport(
+                Options.Create(options),
+                NullLogger<FileEquipmentTransport>.Instance);
+            using var live = new LiveInteractionSession(
+                transport,
+                new IncrementingCorrelationProvider(700),
+                NullLogger<LiveInteractionSession>.Instance);
+            var requestPath = Path.Combine(directory, options.RequestFileName);
+            var responsePath = Path.Combine(directory, options.ResponseFileName);
+            using var frameCancellation = new CancellationTokenSource();
+            var frame = live.RequestFrameAsync(10E-3, frameCancellation.Token);
+            await WaitForTextContainingAsync(requestPath, "\"index\": 701");
+
+            frameCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => frame);
+            var move = live.MoveRelativeAsync(1E-3, -2E-3);
+            var movePayload = await WaitForTextContainingAsync(requestPath, "\"index\": 702");
+
+            Assert.Contains("\"command\": \"move\"", movePayload, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"index\": 701", movePayload, StringComparison.Ordinal);
+            await WriteReplacingAsync(
+                responsePath,
+                "{\"index\":702,\"command\":\"return\",\"stage_x\":0.001,"
+                + "\"stage_y\":-0.002}");
+            var response = await move.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+            Assert.Equal(702, response.Index);
+            Assert.Equal(1E-3, response.StageX);
+            Assert.Equal(-2E-3, response.StageY);
         }
         finally
         {
@@ -214,6 +280,22 @@ public sealed class InfrastructureLiveInteractionSessionTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_index);
+        }
+    }
+
+    private sealed class IncrementingCorrelationProvider : ICorrelationIdProvider
+    {
+        private int _value;
+
+        public IncrementingCorrelationProvider(int initialValue)
+        {
+            _value = initialValue;
+        }
+
+        public Task<int> NextAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Interlocked.Increment(ref _value));
         }
     }
 }

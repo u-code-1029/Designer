@@ -225,7 +225,15 @@
     <system:String x:Key="LiveFrameCount">프레임</system:String>
     <system:String x:Key="LiveLastFrame">최근 수신</system:String>
     <system:String x:Key="LiveNoImage">수신한 카메라 이미지가 없습니다.</system:String>
-    <system:String x:Key="LiveDoubleClickHint">실제 이미지 안의 지점을 더블클릭하면 해당 위치로 이동합니다.</system:String>
+    <system:String x:Key="LiveDoubleClickHint">이미지 안의 지점을 더블클릭하거나 오른쪽 클릭하면 해당 위치로 이동합니다.</system:String>
+    <system:String x:Key="LiveMoveHere">해당 위치로 이동</system:String>
+    <system:String x:Key="LiveFrameMagnification">프레임 배율</system:String>
+    <system:String x:Key="LiveHorizontalFieldWidth">hfw (수평 시야 폭)</system:String>
+    <system:String x:Key="LiveHorizontalFieldWidthHint">작은 HFW일수록 더 확대됩니다. 이미지 위 마우스 휠 또는 +/− 키로 HFW를 절반/2배 조절하며, 유효한 Pixel Pitch도 같은 비율로 자동 보정됩니다.</system:String>
+    <system:String x:Key="LiveHorizontalFieldWidthInvalid">0보다 큰 유한 숫자를 입력하세요. 과학적 표기법도 사용할 수 있습니다.</system:String>
+    <system:String x:Key="LiveZoomInHint">확대: HFW 절반 (+ 또는 휠 위)</system:String>
+    <system:String x:Key="LiveZoomOutHint">축소: HFW 2배 (− 또는 휠 아래)</system:String>
+    <system:String x:Key="LiveFrameCalibrationPending">새 HFW 프레임을 기다리는 중입니다. 수신 전에는 이미지 위치 이동이 잠깁니다.</system:String>
     <system:String x:Key="LivePixelCalibration">픽셀 보정</system:String>
     <system:String x:Key="LivePixelPitch">Pixel pitch</system:String>
     <system:String x:Key="LiveInvertX">X축 방향 반전</system:String>
@@ -260,6 +268,7 @@
     <system:String x:Key="LiveStatusMoveOutOfRange">계산된 이동량(X {0:0.########E+0}m, Y {1:0.########E+0}m)이 허용 범위(-0.5m 초과, 0.5m 미만)를 벗어납니다.</system:String>
     <system:String x:Key="LiveStatusMoveOutOfRangeGeneric">계산된 이동량이 허용 범위(-0.5m 초과, 0.5m 미만)를 벗어납니다.</system:String>
     <system:String x:Key="LiveStatusOutsideImage">검은 여백이 아닌 실제 이미지 안을 더블클릭하세요.</system:String>
+    <system:String x:Key="LiveStatusFrameCalibrationPending">새 HFW로 촬영한 프레임을 받은 뒤 위치를 선택하세요.</system:String>
     <system:String x:Key="LiveStatusWorkflowBusy">워크플로 실행 중에는 라이브 장비 명령을 시작할 수 없습니다.</system:String>
     <system:String x:Key="LiveStatusExchangeFolderOpened">장비 통신 폴더를 열었습니다: {0}</system:String>
     <system:String x:Key="LiveStatusExchangeFolderOpenFailed">장비 통신 폴더를 열지 못했습니다. {0}</system:String>

@@ -104,6 +104,83 @@ public sealed class InfrastructureFileTransportTests
                 CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Dispose_DrainsCanceledRequestCleanupBeforeProcessExit()
+    {
+        using var directory = new InfrastructureTestDirectory();
+        var options = CreateOptions(directory.Path);
+        options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.RetainUntilOverwritten;
+        // Make the ownership verification observably asynchronous. Without a disposal drain the
+        // process boundary returns while this exact request is still present.
+        options.StableReadDelay = TimeSpan.FromMilliseconds(750);
+        var transport = CreateTransport(options);
+        using var cancellation = new CancellationTokenSource();
+        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
+
+        try
+        {
+            var exchange = transport.ExchangeAsync(
+                new EquipmentRequestMessage(
+                    410,
+                    "frame",
+                    new Dictionary<string, object?> { ["hfw"] = 5E-3d }),
+                cancellation.Token);
+            await WaitForTextAsync(requestPath);
+
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exchange);
+
+            var disposeElapsed = Stopwatch.StartNew();
+            transport.Dispose();
+            disposeElapsed.Stop();
+
+            Assert.False(File.Exists(requestPath));
+            Assert.True(
+                disposeElapsed.Elapsed < TimeSpan.FromSeconds(3),
+                "Transport disposal exceeded the canceled-request cleanup budget: "
+                + disposeElapsed.Elapsed.TotalMilliseconds
+                + " ms.");
+        }
+        finally
+        {
+            transport.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_DrainPreservesMismatchedNewerRequestPayload()
+    {
+        using var directory = new InfrastructureTestDirectory();
+        var options = CreateOptions(directory.Path);
+        options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.RetainUntilOverwritten;
+        options.StableReadDelay = TimeSpan.FromMilliseconds(200);
+        var transport = CreateTransport(options);
+        using var cancellation = new CancellationTokenSource();
+        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
+        const string newerPayload =
+            "{\"index\":999,\"command\":\"move\",\"move_mode\":\"relative\","
+            + "\"move_x\":0,\"move_y\":0}";
+
+        try
+        {
+            var exchange = transport.ExchangeAsync(
+                new EquipmentRequestMessage(411, "frame"),
+                cancellation.Token);
+            await WaitForTextAsync(requestPath);
+            await WriteReplacingAsync(requestPath, newerPayload);
+
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exchange);
+            transport.Dispose();
+
+            Assert.Equal(newerPayload, File.ReadAllText(requestPath));
+        }
+        finally
+        {
+            transport.Dispose();
+        }
+    }
+
     [Theory]
     [InlineData(EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead)]
     [InlineData(EquipmentRequestFileLifecycle.RetainUntilOverwritten)]
@@ -553,6 +630,55 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_DefaultCleanup_DeletesRequestBeforeDeletingReadResponse()
+    {
+        using var directory = new InfrastructureTestDirectory();
+        var options = CreateOptions(directory.Path);
+        options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.RetainUntilOverwritten;
+        options.PollingInterval = TimeSpan.FromMilliseconds(100);
+        using var transport = CreateTransport(options);
+        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
+        var responsePath = Path.Combine(directory.Path, options.ResponseFileName);
+
+        var exchange = transport.ExchangeAsync(
+            new EquipmentRequestMessage(115, "measure"),
+            CancellationToken.None);
+        await WaitForTextAsync(requestPath);
+
+        // Keep the completed response readable while denying delete sharing. This exposes the
+        // cleanup boundary: after capturing and validating the response, the app must first remove
+        // its completed request, materialize the result, and only then retry response cleanup.
+        using (var equipmentResponse = new FileStream(
+                   responsePath,
+                   FileMode.CreateNew,
+                   FileAccess.ReadWrite,
+                   FileShare.Read))
+        using (var writer = new StreamWriter(
+                   equipmentResponse,
+                   new System.Text.UTF8Encoding(false),
+                   1024,
+                   true))
+        {
+            await writer.WriteAsync(
+                "{\"index\":115,\"command\":\"return\",\"stage_x\":0.25,\"stage_y\":-0.5}");
+            await writer.FlushAsync();
+            equipmentResponse.Flush(true);
+
+            await WaitForMissingAsync(requestPath);
+
+            Assert.True(File.Exists(responsePath));
+            Assert.False(exchange.IsCompleted);
+        }
+
+        var response = await exchange;
+
+        Assert.Equal(115, response.Index);
+        Assert.Equal(0.25d, response.StageX);
+        Assert.Equal(-0.5d, response.StageY);
+        Assert.False(File.Exists(responsePath));
+    }
+
+    [Fact]
     public async Task Exchange_RequestCleanupFailure_DoesNotFailResponseOrNextExchange()
     {
         using var directory = new InfrastructureTestDirectory();
@@ -581,6 +707,7 @@ public sealed class InfrastructureFileTransportTests
 
             Assert.Equal(108, (await firstExchange).Index);
             Assert.True(File.Exists(requestPath));
+            Assert.False(File.Exists(responsePath));
         }
 
         var secondExchange = transport.ExchangeAsync(

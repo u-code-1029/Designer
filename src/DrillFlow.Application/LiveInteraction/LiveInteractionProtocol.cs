@@ -9,6 +9,8 @@ public static class LiveInteractionProtocol
 
     public const string CaptureCommand = "capture";
 
+    public const string HorizontalFieldWidthParameter = "hfw";
+
     public const string MoveModeParameter = "move_mode";
 
     public const string MoveXParameter = "move_x";

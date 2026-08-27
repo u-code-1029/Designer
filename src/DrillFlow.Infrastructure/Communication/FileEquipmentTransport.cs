@@ -31,8 +31,11 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private readonly Func<DateTime> _utcNow;
     private readonly SemaphoreSlim _exchangeGate = new(1, 1);
     private readonly object _cleanupWarningGate = new();
+    private readonly object _pendingCleanupGate = new();
     private readonly Dictionary<string, CleanupWarningState> _cleanupWarningStates =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<PendingCanceledRequestCleanup> _pendingCanceledRequestCleanups =
+        new();
     private int _disposeState;
 
     public FileEquipmentTransport(
@@ -163,6 +166,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                                 requestPath,
                                 responsePath,
                                 responseBeforeRetry,
+                                request.Index,
                                 request.Command,
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -204,6 +208,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             requestPath,
                             responsePath,
                             response,
+                            request.Index,
                             request.Command,
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -230,6 +235,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             requestPath,
                             responsePath,
                             lateResponse,
+                            request.Index,
                             request.Command,
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -298,7 +304,20 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
     public void Dispose()
     {
-        Interlocked.Exchange(ref _disposeState, 1);
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+        {
+            return;
+        }
+
+        // Canceled exchanges intentionally return before their ownership-safe file cleanup so
+        // Stop, HFW changes, and exclusive Live commands remain responsive. Process shutdown is
+        // the one boundary where that detached work must be joined: otherwise the CLR can exit
+        // after the Live task has observed cancellation but before its request file is removed.
+        // Each cleanup already owns a fixed two-second deadline. Wait only for its remaining
+        // budget, never a fresh interval, so host disposal cannot extend the existing shutdown
+        // budget. A blocked UNC/SMB system call may outlive this wait, but never blocks exit beyond
+        // the same bounded deadline.
+        DrainPendingCanceledRequestCleanups();
 
         // A network open can remain inside the operating system after application shutdown has
         // stopped awaiting it. Do not dispose the semaphore: the abandoned worker must still be
@@ -316,7 +335,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         var cleanupDeadline = DateTime.UtcNow + CanceledRequestCleanupTimeout;
         try
         {
-            _ = Task.Run(
+            var cleanupTask = Task.Run(
                 () => CleanupCanceledRequestAsync(
                     exchangeLock,
                     requestPath,
@@ -325,6 +344,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     command,
                     cleanupDeadline),
                 CancellationToken.None);
+            TrackCanceledRequestCleanup(cleanupTask, cleanupDeadline);
         }
         catch (Exception exception)
         {
@@ -349,6 +369,116 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 requestPath,
                 correlationId,
                 command);
+        }
+    }
+
+    private void TrackCanceledRequestCleanup(Task cleanupTask, DateTime deadline)
+    {
+        var pending = new PendingCanceledRequestCleanup(cleanupTask, deadline);
+        lock (_pendingCleanupGate)
+        {
+            _pendingCanceledRequestCleanups.Add(pending);
+        }
+
+        _ = cleanupTask.ContinueWith(
+            _ =>
+            {
+                lock (_pendingCleanupGate)
+                {
+                    _pendingCanceledRequestCleanups.Remove(pending);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void DrainPendingCanceledRequestCleanups()
+    {
+        while (true)
+        {
+            PendingCanceledRequestCleanup[] pending;
+            lock (_pendingCleanupGate)
+            {
+                // Do not rely on the ExecuteSynchronously continuation having run before this
+                // thread is scheduled again. A completed cleanup can otherwise remain in the set
+                // for one or more iterations and turn the shutdown drain into a tight spin.
+                _pendingCanceledRequestCleanups.RemoveWhere(item => item.Task.IsCompleted);
+                if (_pendingCanceledRequestCleanups.Count == 0)
+                {
+                    return;
+                }
+
+                pending = new PendingCanceledRequestCleanup[
+                    _pendingCanceledRequestCleanups.Count];
+                _pendingCanceledRequestCleanups.CopyTo(pending);
+            }
+
+            var latestDeadline = pending[0].Deadline;
+            for (var index = 1; index < pending.Length; index++)
+            {
+                if (pending[index].Deadline > latestDeadline)
+                {
+                    latestDeadline = pending[index].Deadline;
+                }
+            }
+
+            var remainingBudget = latestDeadline - DateTime.UtcNow;
+            if (remainingBudget <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            if (remainingBudget > CanceledRequestCleanupTimeout)
+            {
+                // Wall-clock adjustment or concurrently registered work must never turn this
+                // shutdown join into an interval longer than the established cleanup budget.
+                remainingBudget = CanceledRequestCleanupTimeout;
+            }
+
+            var tasks = new Task[pending.Length];
+            for (var index = 0; index < pending.Length; index++)
+            {
+                tasks[index] = pending[index].Task;
+            }
+
+            try
+            {
+                if (!Task.WaitAll(tasks, remainingBudget))
+                {
+                    return;
+                }
+            }
+            catch (AggregateException exception)
+            {
+                // Cleanup owns full exception containment, but retain a defensive boundary here
+                // so an unexpected task fault can never prevent application exit.
+                TryLogCanceledRequestCleanupDrainFailure(exception.Flatten());
+                return;
+            }
+            catch (Exception exception)
+            {
+                TryLogCanceledRequestCleanupDrainFailure(exception);
+                return;
+            }
+
+            // A cleanup may have been registered while the snapshot was being joined. Re-check
+            // under the gate and use that cleanup's original deadline as well.
+        }
+    }
+
+    private void TryLogCanceledRequestCleanupDrainFailure(Exception exception)
+    {
+        try
+        {
+            _logger.LogWarning(
+                exception,
+                "Canceled equipment request cleanup could not be drained during shutdown; "
+                + "application exit will continue.");
+        }
+        catch (Exception)
+        {
+            // Logging providers can already be disposing during host shutdown.
         }
     }
 
@@ -725,7 +855,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task<EquipmentResponseMessage> CompleteResponseAsync(
         string requestPath,
         string responsePath,
-        EquipmentResponseMessage response,
+        string responseSnapshot,
+        int correlationId,
         string requestCommand,
         CancellationToken cancellationToken)
     {
@@ -735,12 +866,27 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 cancellationToken)
             .ConfigureAwait(false);
 
-        // Once a matching response exists, the equipment has completed this request and the app
-        // may safely remove a retained request. Cleanup is deliberately best-effort: a share lock,
-        // permission change, or an equipment-side race must not turn a successful command into a
-        // failed exchange or stop a live-frame loop.
-        TryDeleteCompletedRequest(requestPath, response.Index, requestCommand);
+        // Stable polling has already captured and validated a matching response snapshot, so the
+        // equipment has completed this request. Remove the completed request before materializing
+        // the runtime result or deleting the captured response. This ordering is part of the file
+        // handshake: the controller can observe request removal as the acknowledgement that its
+        // response was detected. Cleanup remains deliberately best-effort; a share lock,
+        // permission change, or equipment-side race must not discard a valid response or stop a
+        // live-frame loop.
+        TryDeleteCompletedRequest(requestPath, correlationId, requestCommand);
 
+        // Validation and materialization are deterministic for the immutable snapshot. Keeping
+        // the second parse at this boundary makes the lifecycle explicit: detect a valid matching
+        // response, acknowledge it by cleaning the request, then expose its values to callers.
+        if (!TryParseMatchingResponse(responseSnapshot, correlationId, out var response)
+            || response is null)
+        {
+            throw new InvalidDataException(
+                "A validated equipment response snapshot could not be materialized.");
+        }
+
+        // The response object is fully materialized before its source file is removed. Consumers
+        // therefore never depend on the response pathname remaining present after this method.
         if (_options.ApplicationResponseLifecycle == ApplicationResponseFileLifecycle.DeleteAfterRead)
         {
             await DeleteResponseAsync(
@@ -867,7 +1013,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
     }
 
-    private async Task<EquipmentResponseMessage?> TryReadMatchingResponseOnceAsync(
+    private async Task<string?> TryReadMatchingResponseOnceAsync(
         string responsePath,
         int expectedIndex,
         string? baselineResponse,
@@ -877,12 +1023,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             .ConfigureAwait(false);
         return json is not null
                && !string.Equals(json, baselineResponse, StringComparison.Ordinal)
-               && TryParseMatchingResponse(json, expectedIndex, out var response)
-            ? response
+               && TryParseMatchingResponse(json, expectedIndex, out _)
+            ? json
             : null;
     }
 
-    private async Task<EquipmentResponseMessage?> WaitForMatchingResponseAsync(
+    private async Task<string?> WaitForMatchingResponseAsync(
         string responsePath,
         int expectedIndex,
         string? baselineResponse,
@@ -897,9 +1043,9 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
             if (json is not null
                 && !string.Equals(json, baselineResponse, StringComparison.Ordinal)
-                && TryParseMatchingResponse(json, expectedIndex, out var response))
+                && TryParseMatchingResponse(json, expectedIndex, out _))
             {
-                return response;
+                return json;
             }
 
             var remaining = deadline - DateTime.UtcNow;
@@ -1472,6 +1618,19 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         public DateTime LastLoggedUtc { get; set; }
 
         public int SuppressedCount { get; set; }
+    }
+
+    private sealed class PendingCanceledRequestCleanup
+    {
+        public PendingCanceledRequestCleanup(Task task, DateTime deadline)
+        {
+            Task = task;
+            Deadline = deadline;
+        }
+
+        public Task Task { get; }
+
+        public DateTime Deadline { get; }
     }
 
     private sealed class ScientificNotationJsonTextWriter : JsonTextWriter

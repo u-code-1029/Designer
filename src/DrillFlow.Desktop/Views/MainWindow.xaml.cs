@@ -83,7 +83,11 @@ public partial class MainWindow : FluentWindow
             {
                 await _liveInteractionPageViewModel.ShutdownAsync();
                 _allowClose = true;
-                Close();
+                // PrepareForCloseAsync/ShutdownAsync can both complete synchronously. Calling
+                // Close() from inside the original Closing event then violates WPF's closing
+                // guard. Defer the approved close until this event has returned; the next event
+                // observes _allowClose and proceeds without another prompt or shutdown pass.
+                _ = Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Normal);
             }
         }
         finally

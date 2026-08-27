@@ -41,8 +41,13 @@ x64 virtual machines and verify:
 - nested drag/drop, breakpoint, Step, Continue, first-click immediate Stop, and stopped-card state;
 - Action 1 results remain visible and expression-addressable after a selected Action 2 execution, then clear only on a new full Run, New/Open, or explicit result reset;
 - Live right-panel scrolling at small window sizes/high DPI, exchange-folder access, one-frame/continuous test responses, and bounded temporary-image growth during a long continuous test;
-- Live Stop and page navigation release the Designer before response timeout and clean up only the still-matching frame request;
+- Live Stop and page navigation release the Designer before response timeout and clean up only the still-matching frame request; closing the app with a local active frame drains that owned cleanup within its original bounded deadline and leaves no request behind;
+- every `frame` request contains the current positive finite metre-based `hfw`; image-wheel and keyboard `+`/`-` changes halve/double it, replace an active old-HFW request, and persist for later frames;
+- after an HFW change, the old image remains visible but both double-click and context-menu movement stay disabled until the matching new-HFW frame is decoded;
+- image double-click and **Move to this position** cancel/reclaim the active frame before publishing `move`, keep frames paused through the move response, and resume automatically after success even from a manually stopped preview; failure, cancellation, and navigation must not resume;
+- high-quality capture likewise preempts the active frame, never overlaps request files, and restores only the prior streaming intent;
 - local-folder and real SMB-share exchanges in every configured request-consumption, post-response cleanup, and response-lifecycle combination;
+- with both application cleanup defaults, a validated matching response causes request deletion first and response deletion after result materialization; denied/share-locked cleanup remains non-fatal and later exchanges still proceed;
 - post-response and canceled-request cleanup with an already-missing file and with denied/share-locked deletion; both must preserve mismatched/newer request content and allow later work to continue;
 - canceled cleanup with stable-read delay longer than its two-second budget, plus an immediate next exchange whose response timeout is shorter than that cleanup budget;
 - response timeout, retry warning, sharing violations, and controller lock contention;

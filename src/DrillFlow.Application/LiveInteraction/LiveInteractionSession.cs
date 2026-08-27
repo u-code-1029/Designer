@@ -47,11 +47,25 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
     public event EventHandler? BusyChanged;
 
     public Task<EquipmentResponseMessage> RequestFrameAsync(
+        double horizontalFieldWidthMetres,
         CancellationToken cancellationToken = default)
     {
+        if (double.IsNaN(horizontalFieldWidthMetres)
+            || double.IsInfinity(horizontalFieldWidthMetres)
+            || horizontalFieldWidthMetres <= 0d)
+        {
+            throw new ParameterValidationException(
+                $"{LiveInteractionProtocol.HorizontalFieldWidthParameter} must be a finite "
+                + "number greater than zero metres.");
+        }
+
         return ExchangeAsync(
             LiveInteractionProtocol.FrameCommand,
-            null,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [LiveInteractionProtocol.HorizontalFieldWidthParameter] =
+                    horizontalFieldWidthMetres,
+            },
             requireImagePath: true,
             cancellationToken);
     }

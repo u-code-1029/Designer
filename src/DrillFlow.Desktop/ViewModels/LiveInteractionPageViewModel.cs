@@ -55,6 +55,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private const int InitialErrorBackoffMilliseconds = 500;
     private const int MaximumErrorBackoffMilliseconds = 5000;
     private const double MaximumMoveMagnitudeMetres = 0.5d;
+    private const double DefaultHorizontalFieldWidthMetres = 10E-3d;
     private static readonly TimeSpan ShutdownDrainTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ILiveInteractionSession _session;
@@ -78,6 +79,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private Task? _shutdownTask;
     private CancellationTokenSource? _streamDelayCancellation;
     private CancellationTokenSource? _capturePostResponseCancellation;
+    private CancellationTokenSource? _moveOperationCancellation;
     private CancellationTokenSource? _continuousResponseCancellation;
     private bool _isPageActive;
     private bool _isStreamingRequested;
@@ -87,6 +89,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private bool _isCapturing;
     private bool _invertXAxis;
     private bool _invertYAxis;
+    private string _horizontalFieldWidthText = "10";
+    private string _horizontalFieldWidthUnit = "mm";
+    private double _horizontalFieldWidthMetres = DefaultHorizontalFieldWidthMetres;
+    private string _horizontalFieldWidthValidationMessage = string.Empty;
     private string _pixelPitchText = string.Empty;
     private string _pixelPitchUnit = "m";
     private double _pixelPitchMetres;
@@ -97,6 +103,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private int _imagePixelHeight;
     private double _imageDpiX = 96d;
     private double _imageDpiY = 96d;
+    private bool _isDisplayedFrameCalibrationCurrent;
     private long _frameCount;
     private DateTime? _lastFrameAt;
     private double _stageX;
@@ -156,7 +163,9 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         StartCommand = new RelayCommand(StartStreaming, CanStartStreaming);
-        StopCommand = new RelayCommand(StopStreaming, () => IsStreamingRequested);
+        StopCommand = new RelayCommand(
+            StopStreaming,
+            () => IsStreamingRequested || _restartWhenStreamStops);
         CaptureCommand = new AsyncRelayCommand(CaptureAsync, CanCapture);
         MoveToTargetCommand = new AsyncRelayCommand<LiveImageTarget>(MoveToTargetAsync, CanMoveToTarget);
         OpenSavedImageCommand = new RelayCommand(OpenSavedImage, CanOpenSavedImage);
@@ -164,10 +173,13 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         GenerateSingleFrameResponseCommand = new AsyncRelayCommand(
             GenerateSingleFrameResponseAsync,
             CanGenerateSingleFrameResponse);
+        ZoomFrameInCommand = new RelayCommand(ZoomFrameIn, CanZoomFrameIn);
+        ZoomFrameOutCommand = new RelayCommand(ZoomFrameOut, CanZoomFrameOut);
 
         _localization.LanguageChanged += OnLanguageChanged;
         _session.BusyChanged += OnSessionBusyChanged;
         _workflowExecution.RunStateChanged += OnWorkflowRunStateChanged;
+        ValidateHorizontalFieldWidth(restartStreaming: false);
         ValidatePixelPitch();
     }
 
@@ -184,6 +196,12 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     public IRelayCommand OpenExchangeFolderCommand { get; }
 
     public IAsyncRelayCommand GenerateSingleFrameResponseCommand { get; }
+
+    /// <summary>Halves HFW, increasing optical magnification for subsequent frames.</summary>
+    public IRelayCommand ZoomFrameInCommand { get; }
+
+    /// <summary>Doubles HFW, decreasing optical magnification for subsequent frames.</summary>
+    public IRelayCommand ZoomFrameOutCommand { get; }
 
     /// <summary>
     /// When enabled, each distinct active frame request receives at most one generated response.
@@ -288,6 +306,56 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
     public bool IsLive => IsStreamingRequested && !IsMoving && !IsCapturing;
 
+    public double HorizontalFieldWidthMetres => _horizontalFieldWidthMetres;
+
+    public string HorizontalFieldWidthText
+    {
+        get => _horizontalFieldWidthText;
+        set
+        {
+            if (SetProperty(ref _horizontalFieldWidthText, value ?? string.Empty))
+            {
+                ValidateHorizontalFieldWidth(restartStreaming: true);
+                RefreshCommands();
+            }
+        }
+    }
+
+    public string HorizontalFieldWidthUnit
+    {
+        get => _horizontalFieldWidthUnit;
+        set
+        {
+            var normalized = NormalizeUnit(value);
+            if (string.Equals(_horizontalFieldWidthUnit, normalized, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var hadValidWidth = TryParsePositiveLength(
+                _horizontalFieldWidthText,
+                _horizontalFieldWidthUnit,
+                out var metres);
+            _horizontalFieldWidthUnit = normalized;
+            OnPropertyChanged();
+            if (hadValidWidth)
+            {
+                _horizontalFieldWidthMetres = metres;
+                _horizontalFieldWidthText = FormatLength(metres, normalized);
+                OnPropertyChanged(nameof(HorizontalFieldWidthText));
+            }
+
+            ValidateHorizontalFieldWidth(restartStreaming: false);
+            RefreshCommands();
+        }
+    }
+
+    public string HorizontalFieldWidthValidationMessage
+    {
+        get => _horizontalFieldWidthValidationMessage;
+        private set => SetProperty(ref _horizontalFieldWidthValidationMessage, value);
+    }
+
     public double PixelPitchMetres => _pixelPitchMetres;
 
     public int XAxisSign => InvertXAxis ? -1 : 1;
@@ -359,12 +427,32 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             if (SetProperty(ref _liveImageSource, value))
             {
                 OnPropertyChanged(nameof(HasImage));
+                OnPropertyChanged(nameof(IsFrameCalibrationPending));
                 RefreshCommands();
             }
         }
     }
 
     public bool HasImage => LiveImageSource is not null;
+
+    /// <summary>
+    /// True only when the displayed image was requested with the current HFW. Movement remains
+    /// disabled while an older image is visible after a magnification change.
+    /// </summary>
+    public bool IsDisplayedFrameCalibrationCurrent
+    {
+        get => _isDisplayedFrameCalibrationCurrent;
+        private set
+        {
+            if (SetProperty(ref _isDisplayedFrameCalibrationCurrent, value))
+            {
+                OnPropertyChanged(nameof(IsFrameCalibrationPending));
+                MoveToTargetCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool IsFrameCalibrationPending => HasImage && !IsDisplayedFrameCalibrationCurrent;
 
     public string ImagePath
     {
@@ -549,6 +637,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         _isPageActive = false;
         _activationGeneration++;
         _capturePostResponseCancellation?.Cancel();
+        _moveOperationCancellation?.Cancel();
         _resumeAfterWorkflow = false;
         SetRestartWhenStreamStops(false);
         IsContinuousResponseGenerationEnabled = false;
@@ -563,7 +652,18 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         out LiveImageTarget? target)
     {
         target = null;
-        if (!HasImage || !TryParsePitch(PixelPitchText, PixelPitchUnit, out var pitchMetres))
+        if (!HasImage)
+        {
+            return false;
+        }
+
+        if (!IsDisplayedFrameCalibrationCurrent)
+        {
+            SetStatusWarning("LiveStatusFrameCalibrationPending");
+            return false;
+        }
+
+        if (!TryParsePitch(PixelPitchText, PixelPitchUnit, out var pitchMetres))
         {
             ValidatePixelPitch();
             return false;
@@ -642,8 +742,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             _continuousResponseCancellation?.Cancel();
         }
 
-        // Unlike normal navigation/Stop, an approved application shutdown has no following
-        // equipment command. It is therefore safe to cancel an in-flight wait immediately.
+        // Shutdown cancels every app-owned Live operation. Navigation uses the operation-specific
+        // frame/move/capture tokens, while the Live Stop command owns only the active frame loop.
         _shutdownCancellation.Cancel();
 
         Task streamTask;
@@ -743,6 +843,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         && !IsStreamingRequested
         && !IsStreaming
         && !_isExclusiveOperation
+        && string.IsNullOrEmpty(HorizontalFieldWidthValidationMessage)
         && !IsWorkflowBusy();
 
     private void StartStreaming()
@@ -769,6 +870,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
     private void StopStreaming()
     {
+        SetRestartWhenStreamStops(false);
         IsStreamingRequested = false;
         lock (_streamSync)
         {
@@ -797,7 +899,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             {
                 try
                 {
-                    var response = await _session.RequestFrameAsync(postResponseCancellation.Token);
+                    var requestedHorizontalFieldWidthMetres = _horizontalFieldWidthMetres;
+                    var response = await _session.RequestFrameAsync(
+                        requestedHorizontalFieldWidthMetres,
+                        postResponseCancellation.Token);
                     if (_isShuttingDown)
                     {
                         break;
@@ -840,7 +945,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
                         break;
                     }
 
-                    ApplyImageResponse(response, image);
+                    ApplyImageResponse(
+                        response,
+                        image,
+                        requestedHorizontalFieldWidthMetres);
                     FrameCount++;
                     LastFrameAt = DateTime.Now;
                     consecutiveErrors = 0;
@@ -1230,7 +1338,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
             IsCapturing = true;
             SetStatus("LiveStatusCapturing");
-            var response = await _session.CaptureAsync(_shutdownCancellation.Token);
+            var response = await _session.CaptureAsync(capturePostResponse.Token);
             if (_isShuttingDown)
             {
                 return;
@@ -1316,8 +1424,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         }
         catch (OperationCanceledException) when (capturePostResponse.IsCancellationRequested)
         {
-            // The equipment response has already been consumed. Navigation/shutdown may skip
-            // only the subsequent image snapshot/decode/save work.
+            // Navigation/shutdown can cancel either the owned capture exchange or subsequent
+            // image snapshot/decode/save work. The transport removes only this exact request.
         }
         catch (Exception exception)
         {
@@ -1370,6 +1478,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
                && !_isExclusiveOperation
                && !IsWorkflowBusy()
                && HasImage
+               && IsDisplayedFrameCalibrationCurrent
                && string.IsNullOrEmpty(PixelPitchValidationMessage);
     }
 
@@ -1391,12 +1500,15 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         }
 
         var activationGeneration = _activationGeneration;
-        var resumeStreaming = false;
+        var moveCompleted = false;
+        var moveCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _shutdownCancellation.Token);
+        _moveOperationCancellation = moveCancellation;
         SetExclusiveOperation(true);
         RefreshCommands();
         try
         {
-            resumeStreaming = await PauseStreamingForExclusiveOperationAsync();
+            await PauseStreamingForExclusiveOperationAsync();
             if (!CanPublishExclusiveCommand(activationGeneration))
             {
                 return;
@@ -1407,8 +1519,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             var response = await _session.MoveRelativeAsync(
                 moveX,
                 moveY,
-                _shutdownCancellation.Token);
-            if (_isShuttingDown)
+                moveCancellation.Token);
+            if (_isShuttingDown
+                || !_isPageActive
+                || activationGeneration != _activationGeneration)
             {
                 return;
             }
@@ -1416,6 +1530,11 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             ApplyStageResponse(response);
             IsTargetMarkerVisible = false;
             SetStatus("LiveStatusMoveCompleted", response.StageX, response.StageY);
+            moveCompleted = true;
+        }
+        catch (OperationCanceledException) when (moveCancellation.IsCancellationRequested)
+        {
+            // Navigation/shutdown canceled the request owned by this move operation.
         }
         catch (Exception exception)
         {
@@ -1424,10 +1543,27 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         }
         finally
         {
+            if (ReferenceEquals(_moveOperationCancellation, moveCancellation))
+            {
+                _moveOperationCancellation = null;
+            }
+
+            moveCancellation.Dispose();
             IsMoving = false;
             SetExclusiveOperation(false);
             RefreshCommands();
-            ResumeStreamingAfterExclusiveOperation(resumeStreaming);
+            if (moveCompleted)
+            {
+                // A deliberate image move always returns to live framing after its matching
+                // response, even when the operator initiated it from a manually stopped preview.
+                ResumeStreamingAfterExclusiveOperation(resume: true);
+            }
+            else
+            {
+                // A failed/canceled move is a decision boundary. Keep framing stopped so the
+                // operator can inspect the error instead of immediately issuing another request.
+                SetRestartWhenStreamStops(false);
+            }
         }
     }
 
@@ -1479,7 +1615,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
                && activationGeneration == _activationGeneration;
     }
 
-    private void ApplyImageResponse(EquipmentResponseMessage response, LiveImageDecodeResult image)
+    private void ApplyImageResponse(
+        EquipmentResponseMessage response,
+        LiveImageDecodeResult image,
+        double? frameHorizontalFieldWidthMetres = null)
     {
         ImagePath = response.ImagePath ?? string.Empty;
         ImagePixelWidth = image.OriginalPixelWidth;
@@ -1487,6 +1626,13 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         ImageDpiX = image.OriginalDpiX;
         ImageDpiY = image.OriginalDpiY;
         LiveImageSource = image.ImageSource;
+        IsDisplayedFrameCalibrationCurrent =
+            frameHorizontalFieldWidthMetres.HasValue
+            && frameHorizontalFieldWidthMetres.Value == _horizontalFieldWidthMetres;
+        if (!IsDisplayedFrameCalibrationCurrent)
+        {
+            IsTargetMarkerVisible = false;
+        }
     }
 
     private void ApplyStageResponse(EquipmentResponseMessage response)
@@ -1511,6 +1657,149 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         OnPropertyChanged(nameof(TargetMoveText));
     }
 
+    private bool CanZoomFrameIn()
+    {
+        return _isPageActive
+               && !_isShuttingDown
+               && TryParsePositiveLength(
+                   _horizontalFieldWidthText,
+                   _horizontalFieldWidthUnit,
+                   out var metres)
+               && metres / 2d > 0d;
+    }
+
+    private bool CanZoomFrameOut()
+    {
+        return _isPageActive
+               && !_isShuttingDown
+               && TryParsePositiveLength(
+                   _horizontalFieldWidthText,
+                   _horizontalFieldWidthUnit,
+                   out var metres)
+               && !double.IsInfinity(metres * 2d);
+    }
+
+    private void ZoomFrameIn()
+    {
+        if (CanZoomFrameIn()
+            && TryParsePositiveLength(
+                _horizontalFieldWidthText,
+                _horizontalFieldWidthUnit,
+                out var metres))
+        {
+            ApplyHorizontalFieldWidth(metres / 2d);
+        }
+    }
+
+    private void ZoomFrameOut()
+    {
+        if (CanZoomFrameOut()
+            && TryParsePositiveLength(
+                _horizontalFieldWidthText,
+                _horizontalFieldWidthUnit,
+                out var metres))
+        {
+            ApplyHorizontalFieldWidth(metres * 2d);
+        }
+    }
+
+    private void ApplyHorizontalFieldWidth(double metres)
+    {
+        var previousMetres = _horizontalFieldWidthMetres;
+        var changed = previousMetres != metres;
+        _horizontalFieldWidthMetres = metres;
+        _horizontalFieldWidthText = FormatLength(metres, _horizontalFieldWidthUnit);
+        HorizontalFieldWidthValidationMessage = string.Empty;
+        OnPropertyChanged(nameof(HorizontalFieldWidthMetres));
+        OnPropertyChanged(nameof(HorizontalFieldWidthText));
+        RefreshCommands();
+        if (changed)
+        {
+            HandleHorizontalFieldWidthChange(previousMetres, metres);
+            RestartStreamingForHorizontalFieldWidthChange();
+        }
+    }
+
+    private void ValidateHorizontalFieldWidth(bool restartStreaming)
+    {
+        if (TryParsePositiveLength(
+                _horizontalFieldWidthText,
+                _horizontalFieldWidthUnit,
+                out var metres))
+        {
+            var previousMetres = _horizontalFieldWidthMetres;
+            var changed = previousMetres != metres;
+            _horizontalFieldWidthMetres = metres;
+            HorizontalFieldWidthValidationMessage = string.Empty;
+            OnPropertyChanged(nameof(HorizontalFieldWidthMetres));
+            if (changed)
+            {
+                HandleHorizontalFieldWidthChange(previousMetres, metres);
+                if (restartStreaming)
+                {
+                    RestartStreamingForHorizontalFieldWidthChange();
+                }
+            }
+        }
+        else
+        {
+            HorizontalFieldWidthValidationMessage =
+                _localization["LiveHorizontalFieldWidthInvalid"];
+        }
+    }
+
+    private void HandleHorizontalFieldWidthChange(double previousMetres, double currentMetres)
+    {
+        if (HasImage)
+        {
+            IsDisplayedFrameCalibrationCurrent = false;
+            IsTargetMarkerVisible = false;
+        }
+
+        if (!TryParsePitch(_pixelPitchText, _pixelPitchUnit, out var pitchMetres))
+        {
+            return;
+        }
+
+        var scaledPitch = pitchMetres * (currentMetres / previousMetres);
+        if (scaledPitch <= 0d || double.IsNaN(scaledPitch) || double.IsInfinity(scaledPitch))
+        {
+            _pixelPitchMetres = 0d;
+            _pixelPitchText = string.Empty;
+            PixelPitchValidationMessage = _localization["LivePixelPitchInvalid"];
+        }
+        else
+        {
+            _pixelPitchMetres = scaledPitch;
+            _pixelPitchText = FormatPitch(scaledPitch, _pixelPitchUnit);
+            PixelPitchValidationMessage = string.Empty;
+        }
+
+        OnPropertyChanged(nameof(PixelPitchMetres));
+        OnPropertyChanged(nameof(PixelPitchText));
+    }
+
+    private void RestartStreamingForHorizontalFieldWidthChange()
+    {
+        if (!_isPageActive
+            || !IsStreamingRequested
+            || _isExclusiveOperation
+            || IsWorkflowBusy()
+            || _isShuttingDown)
+        {
+            return;
+        }
+
+        // An already-published frame still contains the old HFW. Cancel that owned exchange so
+        // the transport can remove only its exact payload, then restart with the latest value.
+        SetRestartWhenStreamStops(true);
+        IsStreamingRequested = false;
+        lock (_streamSync)
+        {
+            _streamDelayCancellation?.Cancel();
+        }
+    }
+
     private void ValidatePixelPitch()
     {
         if (TryParsePitch(_pixelPitchText, _pixelPitchUnit, out var metres))
@@ -1526,6 +1815,11 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
     private static bool TryParsePitch(string raw, string unit, out double metres)
     {
+        return TryParsePositiveLength(raw, unit, out metres);
+    }
+
+    private static bool TryParsePositiveLength(string raw, string unit, out double metres)
+    {
         var styles = NumberStyles.Float;
         var parsed = double.TryParse(raw, styles, CultureInfo.CurrentCulture, out var value)
                      || double.TryParse(raw, styles, CultureInfo.InvariantCulture, out value);
@@ -1538,6 +1832,11 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     }
 
     private static string FormatPitch(double metres, string unit)
+    {
+        return FormatLength(metres, unit);
+    }
+
+    private static string FormatLength(double metres, string unit)
     {
         return (metres / UnitScale(unit)).ToString("G12", CultureInfo.CurrentCulture);
     }
@@ -1620,6 +1919,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         _restartWhenStreamStops = value;
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(IsInteractionActive));
+        StopCommand.NotifyCanExecuteChanged();
     }
 
     private bool IsWorkflowBusy()
@@ -1661,11 +1961,14 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         MoveToTargetCommand.NotifyCanExecuteChanged();
         OpenExchangeFolderCommand.NotifyCanExecuteChanged();
         GenerateSingleFrameResponseCommand.NotifyCanExecuteChanged();
+        ZoomFrameInCommand.NotifyCanExecuteChanged();
+        ZoomFrameOutCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsLive));
     }
 
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
+        ValidateHorizontalFieldWidth(restartStreaming: false);
         ValidatePixelPitch();
         OnPropertyChanged(nameof(StatusMessage));
     }

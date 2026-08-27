@@ -225,7 +225,15 @@
     <system:String x:Key="LiveFrameCount">Frames</system:String>
     <system:String x:Key="LiveLastFrame">Last received</system:String>
     <system:String x:Key="LiveNoImage">No camera image has been received.</system:String>
-    <system:String x:Key="LiveDoubleClickHint">Double-click a point inside the actual image to move there.</system:String>
+    <system:String x:Key="LiveDoubleClickHint">Double-click or right-click a point inside the image to move there.</system:String>
+    <system:String x:Key="LiveMoveHere">Move to this position</system:String>
+    <system:String x:Key="LiveFrameMagnification">Frame magnification</system:String>
+    <system:String x:Key="LiveHorizontalFieldWidth">hfw (horizontal field width)</system:String>
+    <system:String x:Key="LiveHorizontalFieldWidthHint">A smaller HFW gives greater magnification. Use the mouse wheel over the image or the +/− keys to halve/double HFW; a valid Pixel Pitch is scaled by the same ratio.</system:String>
+    <system:String x:Key="LiveHorizontalFieldWidthInvalid">Enter a finite number greater than zero. Scientific notation is supported.</system:String>
+    <system:String x:Key="LiveZoomInHint">Zoom in: halve HFW (+ or wheel up)</system:String>
+    <system:String x:Key="LiveZoomOutHint">Zoom out: double HFW (− or wheel down)</system:String>
+    <system:String x:Key="LiveFrameCalibrationPending">Waiting for a frame at the new HFW. Image-point movement is locked until it arrives.</system:String>
     <system:String x:Key="LivePixelCalibration">Pixel calibration</system:String>
     <system:String x:Key="LivePixelPitch">Pixel pitch</system:String>
     <system:String x:Key="LiveInvertX">Invert X axis</system:String>
@@ -260,6 +268,7 @@
     <system:String x:Key="LiveStatusMoveOutOfRange">The calculated move (X {0:0.########E+0}m, Y {1:0.########E+0}m) is outside the exclusive -0.5m to 0.5m limit.</system:String>
     <system:String x:Key="LiveStatusMoveOutOfRangeGeneric">The calculated move is outside the exclusive -0.5m to 0.5m limit.</system:String>
     <system:String x:Key="LiveStatusOutsideImage">Double-click inside the actual image, not its letterbox area.</system:String>
+    <system:String x:Key="LiveStatusFrameCalibrationPending">Wait for a frame captured at the new HFW before selecting a position.</system:String>
     <system:String x:Key="LiveStatusWorkflowBusy">Live equipment commands are unavailable while a workflow is running.</system:String>
     <system:String x:Key="LiveStatusExchangeFolderOpened">Opened the equipment exchange folder: {0}</system:String>
     <system:String x:Key="LiveStatusExchangeFolderOpenFailed">Could not open the equipment exchange folder. {0}</system:String>

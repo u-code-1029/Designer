@@ -58,13 +58,15 @@ Action 앞의 붉은 점은 브레이크포인트다. 시작 pill 아래부터 �
 
 ### Live Interaction 페이지
 
-페이지에 들어가면 `frame` request를 한 번에 하나씩 보내고, 같은 `index`의 response와 `image_path` 파일을 완전히 메모리에 읽은 다음 화면을 갱신한다. 그 뒤에만 다음 frame을 요청하므로 장비가 같은 이미지 경로를 계속 덮어써도 읽는 중인 파일과 다음 촬영이 충돌하지 않는다. 하나의 장비·통신 폴더에는 active controller 하나만 허용하고, 일반 Workflow Action의 이미지 파일은 현재 Run 동안 correlation별 고유 경로나 불변 내용을 유지한다. 신규 설치의 polling 기본값은 50ms이며 설정에서 조절할 수 있다. WIC 메타데이터 확인과 미리보기 decode는 UI Dispatcher가 아니라 앱 전용 background STA queue에서 수행하고 결과를 Freeze해 전달한다. Action 카드와 Inspector의 실행 결과 이미지도 같은 stable read/STA decode 경로를 사용하며 표시 실패가 workflow 성공을 바꾸지는 않는다. 취소된 대기 작업은 decode하지 않으며, 64MiB 파일·축당 16,384 pixel·총 6,400만 pixel을 넘는 비정상 입력은 명확한 오류로 차단한다. response 이후 이미지 I/O에는 현재 response timeout(최소 1초)을 별도 예산으로 적용한다. 기본 사후 정리 정책은 matching response마다 완료된 frame request를 삭제해 고빈도 요청 파일이 남지 않게 한다. 라이브 정지나 페이지 이동은 현재 response 대기를 즉시 취소하고 Designer 잠금을 해제한다. transport는 게시 byte가 그대로인 request만 background에서 제한 시간 내 best-effort로 지우며 timeout까지 UI를 붙잡지 않는다. 일시적 실패나 image timeout 시 마지막 정상 화면을 유지하면서 500ms~5초 범위의 backoff로 재시도한다.
+페이지에 들어가면 `frame` request를 한 번에 하나씩 보내고, 같은 `index`의 response와 `image_path` 파일을 완전히 메모리에 읽은 다음 화면을 갱신한다. 그 뒤에만 다음 frame을 요청하므로 장비가 같은 이미지 경로를 계속 덮어써도 읽는 중인 파일과 다음 촬영이 충돌하지 않는다. 하나의 장비·통신 폴더에는 active controller 하나만 허용하고, 일반 Workflow Action의 이미지 파일은 현재 Run 동안 correlation별 고유 경로나 불변 내용을 유지한다. 신규 설치의 polling 기본값은 50ms이며 설정에서 조절할 수 있다. WIC 메타데이터 확인과 미리보기 decode는 UI Dispatcher가 아니라 앱 전용 background STA queue에서 수행하고 결과를 Freeze해 전달한다. Action 카드와 Inspector의 실행 결과 이미지도 같은 stable read/STA decode 경로를 사용하며 표시 실패가 workflow 성공을 바꾸지는 않는다. 취소된 대기 작업은 decode하지 않으며, 64MiB 파일·축당 16,384 pixel·총 6,400만 pixel을 넘는 비정상 입력은 명확한 오류로 차단한다. response 이후 이미지 I/O에는 현재 response timeout(최소 1초)을 별도 예산으로 적용한다. 기본 사후 정리 정책은 matching response마다 완료된 frame request를 삭제해 고빈도 요청 파일이 남지 않게 한다. 라이브 정지나 페이지 이동은 현재 response 대기를 즉시 취소하고 Designer 잠금을 해제한다. transport는 게시 byte가 그대로인 request만 background에서 제한 시간 내 best-effort로 지우며 timeout까지 UI를 붙잡지 않는다. 앱 종료 시에는 이미 예약된 정리 task만 기존 2초 deadline의 남은 시간 동안 drain해 정상 로컬 request가 프로세스와 함께 남지 않게 하되, 중단 불가능한 UNC 호출 때문에 deadline을 넘기지는 않는다. 일시적 실패나 image timeout 시 마지막 정상 화면을 유지하면서 500ms~5초 범위의 backoff로 재시도한다.
+
+모든 `frame` request에는 metre 기준의 필수 `hfw`가 포함된다. UI 기본값은 편집 가능한 10mm이며 0보다 큰 유한값만 허용하고 임의의 장비 한계는 두지 않는다. 이미지 위 마우스 휠 또는 입력 컨트롤 밖의 `+`/`-` 키와 버튼으로 HFW를 절반(확대)/2배(축소) 조절한다. 유효한 Pixel Pitch는 같은 비율로 함께 보정된다. 유효 HFW가 바뀌면 이전 값으로 게시된 frame을 즉시 취소·회수하고 새 값으로 재요청한다. 텍스트 편집은 300ms debounce하고 휠/키/버튼은 즉시 적용한다. 새 HFW 응답 이미지를 decode하기 전에는 이전 이미지를 보정 대기로 표시하고 이미지 지점 이동을 잠가 stale 이미지·새 Pixel Pitch 조합의 오이동을 막는다.
 
 라이브 페이지의 오른쪽 파라미터·Stage·결과 영역은 `CanContentScroll=False`인 독립 수직 ScrollViewer를 사용한다. 상단에는 설정된 통신 폴더 열기, 현재 active `frame` request 하나에 768×512 모자이크 응답을 만드는 “1프레임 테스트 생성”, 이후 각 frame index에 새 모자이크 응답을 만드는 “연속 response 결과 생성” 토글이 있다. 테스트 생성기는 같은 index의 response가 이미 있으면 실제 장비 결과일 수 있으므로 덮어쓰지 않는다. 연속 모드의 직전 이미지는 다음 request를 관찰한 뒤 해제하여 LocalAppData 파일 수를 제한하고, 남은 앱 소유 이미지는 종료 또는 다음 시작 때 정리한다.
 
-이미지를 더블클릭하면 원본 pixel 크기와 X/Y DPI를 함께 사용해 WPF `Stretch=Uniform`의 실제 표시 영역과 letterbox를 계산한 뒤 원본 pixel 좌표로 되돌린다. 따라서 X/Y DPI가 다른 이미지도 화면 지점과 이동 지점이 일치한다. 이미지 중심을 이동량 `(0, 0)`으로 하고, 사용자가 입력한 pixel pitch와 m/mm/µm/nm 단위를 metre로 환산해 기존 `move_mode: "relative"` request를 만든다. 기본 축은 오른쪽 +X, 아래쪽 +Y이며 설치 방향에 맞춰 각 축을 반전할 수 있다. 계산 결과가 각 축의 strict ±0.5m 범위를 벗어나면 장비 명령을 보내지 않는다.
+이미지를 더블클릭하거나 오른쪽 클릭 메뉴에서 “해당 위치로 이동”을 선택하면 동일한 좌표 mapper가 원본 pixel 크기와 X/Y DPI를 함께 사용해 WPF `Stretch=Uniform`의 실제 표시 영역과 letterbox를 계산한 뒤 원본 pixel 좌표로 되돌린다. 따라서 X/Y DPI가 다른 이미지도 화면 지점과 이동 지점이 일치한다. 이미지 중심을 이동량 `(0, 0)`으로 하고, 사용자가 입력한 pixel pitch와 m/mm/µm/nm 단위를 metre로 환산해 기존 `move_mode: "relative"` request를 만든다. 기본 축은 오른쪽 +X, 아래쪽 +Y이며 설치 방향에 맞춰 각 축을 반전할 수 있다. 계산 결과가 각 축의 strict ±0.5m 범위를 벗어나면 장비 명령을 보내지 않는다.
 
-이동 중에는 frame 요청을 멈추고 이동 response를 받은 뒤 이전 재생 상태를 자동 복원한다. `촬영`은 별도의 `capture` request로 고화질 `image_path`를 받은 즉시 원본 바이트 그대로 전용 LocalAppData 스냅샷에 확보한다. 스냅샷 확보까지만 현재 response timeout의 image I/O 예산을 적용하고 저장 Dialog에서 사용자가 결정하는 시간에는 timer를 적용하지 않는다. 미리보기와 Windows 저장 Dialog의 로컬 복사는 모두 이 동일 스냅샷을 사용하므로 장비가 원본을 덮어쓰거나 삭제해도 결과가 바뀌지 않는다. 작업이 끝난 스냅샷은 즉시 지우며 종료/다음 시작에서도 남은 전용 파일을 정리한다. 스트리밍·이동·촬영 중에는 일반 워크플로 실행, Response 테스트, 통신 설정 변경을 막고, 반대로 워크플로 실행 중에는 라이브 명령을 막는다.
+이동이나 촬영을 시작하면 현재 frame exchange를 즉시 취소하고, transport가 그 exchange가 게시한 정확한 request를 회수해 gate를 놓을 때까지 기다린 뒤 interactive request를 하나만 보낸다. 이미지 지점 이동은 matching response 성공 뒤 페이지가 활성 상태이면 이전 Stop 여부와 관계없이 frame을 자동 재개하지만, 실패·취소·페이지 이탈 때는 오류 확인을 위해 멈춘 상태를 유지한다. Capture는 이전 재생 상태를 복원한다. 페이지를 이탈하면 진행 중인 앱 소유 move/capture도 취소하고 frame을 재개하지 않는다. `촬영`은 별도의 `capture` request로 고화질 `image_path`를 받은 즉시 원본 바이트 그대로 전용 LocalAppData 스냅샷에 확보한다. 스냅샷 확보까지만 현재 response timeout의 image I/O 예산을 적용하고 저장 Dialog에서 사용자가 결정하는 시간에는 timer를 적용하지 않는다. 미리보기와 Windows 저장 Dialog의 로컬 복사는 모두 이 동일 스냅샷을 사용하므로 장비가 원본을 덮어쓰거나 삭제해도 결과가 바뀌지 않는다. 작업이 끝난 스냅샷은 즉시 지우며 종료/다음 시작에서도 남은 전용 파일을 정리한다. 스트리밍·이동·촬영 중에는 일반 워크플로 실행, Response 테스트, 통신 설정 변경을 막고, 반대로 워크플로 실행 중에는 라이브 명령을 막는다.
 
 ## 3. Action 모델
 
@@ -166,7 +168,7 @@ request와 response는 같은 통신 폴더의 서로 다른 설정 파일명을
 
 파일 게시에는 같은 디렉터리의 temp 파일과 atomic replace/move를 사용한다. `.drillflow.exchange.lock`을 `FileShare.None`으로 열어 로컬 프로세스와 SMB 클라이언트의 전체 exchange를 직렬화한다. polling은 파일 크기와 수정 시간이 안정된 뒤 읽고 일시적인 share violation을 재시도한다.
 
-request에는 서로 독립적인 두 lifecycle이 있다. 장비 lifecycle은 장비가 읽은 파일을 즉시 삭제하는지 유지하는지를 나타내고, 앱 lifecycle은 matching response를 받은 뒤 남은 request를 정리할지를 나타낸다. 앱의 기본값은 `DeleteAfterResponse`다. 파일이 이미 없으면 정리된 것으로 보며, 권한·공유 문제 등으로 삭제하지 못해도 warning만 기록하고 정상 response와 다음 실행을 계속한다. `RetainUntilOverwritten`을 선택하면 앱은 request를 남기고 이후 요청이 원자적으로 교체한다.
+request에는 서로 독립적인 두 lifecycle이 있다. 장비 lifecycle은 장비가 읽은 파일을 즉시 삭제하는지 유지하는지를 나타내고, 앱 lifecycle은 matching response를 받은 뒤 남은 request를 정리할지를 나타낸다. 앱의 기본값은 `DeleteAfterResponse`다. 기본 handshake는 stable matching response 감지, 완료 request 삭제 시도, 메모리에 확보한 결과 materialize, response 삭제 시도 순서다. response의 `index`를 확인하려면 먼저 파일 snapshot을 읽어야 하지만, request 정리는 response 파일 정리와 결과 반환보다 항상 먼저 시도한다. 파일이 이미 없으면 정리된 것으로 보며, 권한·공유 문제 등으로 삭제하지 못해도 warning만 기록하고 정상 response와 다음 실행을 계속한다. `RetainUntilOverwritten`을 선택하면 앱은 request를 남기고 이후 요청이 원자적으로 교체한다. response도 `DeleteAfterRead`가 기본이며 설정에서 `RetainUntilOverwritten`으로 바꿀 수 있다.
 
 timeout retry는 기본으로 꺼져 있다. 켜면 같은 payload와 `index`를 다시 게시하므로 장비가 `index`를 내구성 있는 idempotency key로 처리하지 않는 한 물리 동작은 at-least-once다.
 
@@ -198,9 +200,9 @@ Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI Con
 | Ctrl+Space | 현재 범위의 Expression completion popup 표시 |
 | 통신 폴더 버튼 | 최신 설정 경로를 Windows Explorer로 열고 상태 표시 |
 | Window 닫기 | 실행 중이면 Stop을 요청하고, 미저장 변경은 저장/폐기/취소 확인 |
-| Live 페이지 진입 / 이탈 | 순차 frame loop 시작 / 이미 보낸 응답을 소비한 뒤 정지 |
-| Live Start / Stop | 프레임 연속 갱신 시작 / 다음 frame 예약 중단 |
-| Live 이미지 더블클릭 | 원본 중심 대비 pixel 이동량을 계산해 상대 stage 이동, 완료 후 frame 재개 |
+| Live 페이지 진입 / 이탈 | 순차 frame loop 시작 / 앱 소유 활성 요청을 취소하고 재개 없이 정지 |
+| Live Start / Stop | 프레임 연속 갱신 시작 / 활성 frame 취소 및 소유 request 회수 |
+| Live 이미지 더블클릭·오른쪽 클릭 이동 | 동일 mapper로 원본 중심 대비 pixel 이동량을 계산해 상대 stage 이동, 완료 후 frame 재개 |
 | Live 촬영 | frame 일시정지, 고화질 capture 응답 수신, 로컬 저장 Dialog, 이전 재생 상태 복원 |
 
 구조 변경은 실행 전 serialized snapshot을 Undo stack에 넣고 Redo stack을 비운다. 붙여넣기·Ctrl-drag·재정렬·중첩 이동도 같은 경로를 사용해 저장 모델과 화면 컬렉션을 함께 갱신한다. 자기 자신의 하위 Repeat/Conditional 컬렉션으로 이동하는 순환 구조는 허용하지 않는다.
