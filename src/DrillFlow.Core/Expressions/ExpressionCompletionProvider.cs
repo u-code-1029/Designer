@@ -249,20 +249,13 @@ namespace DrillFlow.Core.Expressions
             switch (node.Kind)
             {
                 case WorkflowNodeKind.Move:
-                    members.Add("command");
-                    members.Add("position_x");
-                    members.Add("position_y");
-                    break;
                 case WorkflowNodeKind.Measure:
-                    members.Add("command");
-                    members.Add("measured_distance");
-                    break;
                 case WorkflowNodeKind.Drill:
-                    members.Add("command");
-                    members.Add("drill_result_path");
-                    break;
                 case WorkflowNodeKind.Abort:
                     members.Add("command");
+                    members.Add("stage_x");
+                    members.Add("stage_y");
+                    members.Add("image_path");
                     break;
                 case WorkflowNodeKind.Http:
                     members.Add("status_code");

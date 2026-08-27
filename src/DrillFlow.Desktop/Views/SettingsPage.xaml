@@ -119,10 +119,26 @@
                             <ComboBox SelectedValue="{Binding EquipmentRequestHandling}"
                                       SelectedValuePath="Tag">
                                 <ComboBoxItem Tag="EquipmentDeletesAfterRead" Content="{DynamicResource DeleteAfterRead}" />
-                                <ComboBoxItem Tag="RetainUntilOverwritten" Content="{DynamicResource RetainAndOverwrite}" />
+                                <ComboBoxItem Tag="RetainUntilOverwritten" Content="{DynamicResource RetainRequestAndOverwrite}" />
                             </ComboBox>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource AppRequestHandling}" Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox SelectedValue="{Binding AppRequestHandling}"
+                                      SelectedValuePath="Tag">
+                                <ComboBoxItem Tag="DeleteAfterResponse" Content="{DynamicResource DeleteAfterResponse}" />
+                                <ComboBoxItem Tag="RetainUntilOverwritten" Content="{DynamicResource RetainRequestAndOverwrite}" />
+                            </ComboBox>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
                             <TextBlock Text="{DynamicResource AppResponseHandling}" Style="{StaticResource FieldLabelStyle}" />
                             <ComboBox SelectedValue="{Binding AppResponseHandling}"
                                       SelectedValuePath="Tag">

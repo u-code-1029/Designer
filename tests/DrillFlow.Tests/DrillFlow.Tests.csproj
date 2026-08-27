@@ -6,10 +6,13 @@
     <RootNamespace>DrillFlow.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="PresentationCore" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="WindowsBase" />
     <ProjectReference Include="..\..\src\DrillFlow.Core\DrillFlow.Core.csproj" />
     <ProjectReference Include="..\..\src\DrillFlow.Application\DrillFlow.Application.csproj" />
     <ProjectReference Include="..\..\src\DrillFlow.Infrastructure\DrillFlow.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\DrillFlow.Desktop\DrillFlow.Desktop.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">

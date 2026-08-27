@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -11,17 +12,21 @@ public sealed class WorkflowBranchViewModel : ObservableObject
     private readonly ConditionalBranch _branch;
     private readonly ILocalizationService _localization;
 
-    public WorkflowBranchViewModel(ConditionalBranch branch, ILocalizationService localization)
+    public WorkflowBranchViewModel(
+        ConditionalBranch branch,
+        ILocalizationService localization,
+        ILiveImageDecoder imageDecoder)
     {
-        _branch = branch;
-        _localization = localization;
+        _branch = branch ?? throw new ArgumentNullException(nameof(branch));
+        _localization = localization ?? throw new ArgumentNullException(nameof(localization));
+        imageDecoder = imageDecoder ?? throw new ArgumentNullException(nameof(imageDecoder));
         Children = new ObservableCollection<WorkflowActionViewModel>();
 
         if (branch.Body is not null)
         {
             foreach (var child in branch.Body)
             {
-                Children.Add(new WorkflowActionViewModel(child, localization));
+                Children.Add(new WorkflowActionViewModel(child, localization, imageDecoder));
             }
         }
 

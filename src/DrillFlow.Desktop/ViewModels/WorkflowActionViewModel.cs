@@ -4,6 +4,10 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Media;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DrillFlow.Application.Execution;
 using DrillFlow.Core.Runtime;
@@ -15,22 +19,41 @@ namespace DrillFlow.Desktop.ViewModels;
 
 public sealed class WorkflowActionViewModel : ObservableObject
 {
+    internal const double MinimumResultImageZoom = 0.5;
+    internal const double MaximumResultImageZoom = 3.0;
+    internal const double ResultImageZoomStep = 0.25;
+
     private static readonly Regex AliasPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
     private readonly ILocalizationService _localization;
+    private readonly ILiveImageDecoder _imageDecoder;
+    private readonly object _imageLoadSync = new();
     private bool _isSelected;
     private bool _isCurrent;
     private bool _isEditingEnabled = true;
     private string _aliasValidationMessage = string.Empty;
     private WorkflowNodeExecutionState _runtimeState = WorkflowNodeExecutionState.Waiting;
+    private CancellationTokenSource? _latestImageLoadCancellation;
+    private long _latestImageLoadGeneration;
+    private ImageSource? _latestImageSource;
+    private bool _isLatestImageLoading;
+    private bool _hasLatestImageLoadError;
+    private bool _isResultExpanded = true;
+    private double _resultImageZoom = 1.0;
+    private bool _suppressLatestImageRefresh;
 
-    public WorkflowActionViewModel(WorkflowNode model, ILocalizationService localization)
+    public WorkflowActionViewModel(
+        WorkflowNode model,
+        ILocalizationService localization,
+        ILiveImageDecoder imageDecoder)
     {
         Model = model ?? throw new ArgumentNullException(nameof(model));
-        _localization = localization;
+        _localization = localization ?? throw new ArgumentNullException(nameof(localization));
+        _imageDecoder = imageDecoder ?? throw new ArgumentNullException(nameof(imageDecoder));
         Parameters = new ObservableCollection<ActionParameterViewModel>();
         Children = new ObservableCollection<WorkflowActionViewModel>();
         Branches = new ObservableCollection<WorkflowBranchViewModel>();
         Results = new ObservableCollection<RuntimeResultViewModel>();
+        Results.CollectionChanged += OnResultsChanged;
 
         foreach (var pair in model.GetParameterBindings())
         {
@@ -46,7 +69,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
         {
             foreach (var child in repeat.Body)
             {
-                Children.Add(new WorkflowActionViewModel(child, localization));
+                Children.Add(new WorkflowActionViewModel(child, localization, imageDecoder));
             }
 
             Children.CollectionChanged += OnRepeatChildrenChanged;
@@ -55,7 +78,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
         {
             foreach (var branch in conditional.Branches)
             {
-                Branches.Add(new WorkflowBranchViewModel(branch, localization));
+                Branches.Add(new WorkflowBranchViewModel(branch, localization, imageDecoder));
             }
 
             Branches.CollectionChanged += OnBranchesChanged;
@@ -65,8 +88,14 @@ public sealed class WorkflowActionViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(Title));
             OnPropertyChanged(nameof(RuntimeStateText));
+            OnPropertyChanged(nameof(RunningStatusText));
             OnPropertyChanged(nameof(ParameterObjectLabel));
             OnPropertyChanged(nameof(ResultObjectLabel));
+            OnPropertyChanged(nameof(LatestImageStatusText));
+            foreach (var result in Results)
+            {
+                result.NotifyLanguageChanged();
+            }
         };
     }
 
@@ -196,6 +225,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
             if (SetProperty(ref _runtimeState, value))
             {
                 OnPropertyChanged(nameof(RuntimeStateText));
+                OnPropertyChanged(nameof(IsRunning));
             }
         }
     }
@@ -211,6 +241,15 @@ public sealed class WorkflowActionViewModel : ObservableObject
         _ => "StatusIdle"
     }];
 
+    public bool IsRunning => RuntimeState == WorkflowNodeExecutionState.Running;
+
+    public string RunningStatusText => _localization[Kind is WorkflowNodeKind.Move
+        or WorkflowNodeKind.Measure
+        or WorkflowNodeKind.Drill
+        or WorkflowNodeKind.Abort
+            ? "ActionRunning"
+            : "DesignerActionRunning"];
+
     public ObservableCollection<ActionParameterViewModel> Parameters { get; }
 
     public ObservableCollection<WorkflowActionViewModel> Children { get; }
@@ -218,6 +257,57 @@ public sealed class WorkflowActionViewModel : ObservableObject
     public ObservableCollection<WorkflowBranchViewModel> Branches { get; }
 
     public ObservableCollection<RuntimeResultViewModel> Results { get; }
+
+    public RuntimeResultViewModel? LatestResult => Results.Count == 0 ? null : Results[Results.Count - 1];
+
+    public bool HasLatestResultSummary => LatestResult?.HasSummaryFields == true;
+
+    public bool HasRuntimeResults => Results.Count > 0;
+
+    public bool IsResultExpanded
+    {
+        get => _isResultExpanded;
+        set => SetProperty(ref _isResultExpanded, value);
+    }
+
+    public string LatestImagePath => LatestResult?.ImagePath ?? string.Empty;
+
+    public bool HasLatestImagePath => !string.IsNullOrWhiteSpace(LatestImagePath);
+
+    public ImageSource? LatestImageSource => _latestImageSource;
+
+    public bool HasLatestImage => LatestImageSource is not null;
+
+    public double ResultImageZoom
+    {
+        get => _resultImageZoom;
+        private set
+        {
+            var normalized = Math.Max(
+                MinimumResultImageZoom,
+                Math.Min(MaximumResultImageZoom, Math.Round(value, 2)));
+            if (SetProperty(ref _resultImageZoom, normalized))
+            {
+                OnPropertyChanged(nameof(CanZoomResultImageIn));
+                OnPropertyChanged(nameof(CanZoomResultImageOut));
+                OnPropertyChanged(nameof(ResultImageZoomText));
+            }
+        }
+    }
+
+    public bool CanZoomResultImageIn => HasLatestImage && ResultImageZoom < MaximumResultImageZoom;
+
+    public bool CanZoomResultImageOut => HasLatestImage && ResultImageZoom > MinimumResultImageZoom;
+
+    public string ResultImageZoomText => ResultImageZoom.ToString("P0");
+
+    public bool IsLatestImageLoading => _isLatestImageLoading;
+
+    public bool HasLatestImageLoadError => _hasLatestImageLoadError;
+
+    public string LatestImageStatusText => HasLatestImagePath
+        ? _localization[HasLatestImageLoadError ? "ResultImageLoadFailed" : "ResultImageLoading"]
+        : _localization["NoResultImage"];
 
     public bool HasChildrenContainer => Model is RepeatNode;
 
@@ -291,6 +381,8 @@ public sealed class WorkflowActionViewModel : ObservableObject
     {
         RuntimeState = WorkflowNodeExecutionState.Waiting;
         IsCurrent = false;
+        IsResultExpanded = true;
+        ResetResultImageZoom();
         Results.Clear();
 
         foreach (var child in Children)
@@ -309,8 +401,62 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
     public void AddResult(ActionExecutionResult result)
     {
+        ResetResultImageZoom();
         Results.Add(new RuntimeResultViewModel(result, Alias, _localization));
-        OnPropertyChanged(nameof(Results));
+    }
+
+    public void ZoomResultImageIn()
+    {
+        if (CanZoomResultImageIn)
+        {
+            ResultImageZoom += ResultImageZoomStep;
+        }
+    }
+
+    public void ZoomResultImageOut()
+    {
+        if (CanZoomResultImageOut)
+        {
+            ResultImageZoom -= ResultImageZoomStep;
+        }
+    }
+
+    internal void RestoreRuntimeFrom(WorkflowActionViewModel source)
+    {
+        if (source is null)
+        {
+            throw new ArgumentNullException(nameof(source));
+        }
+
+        RuntimeState = source.RuntimeState;
+        IsCurrent = false;
+        IsResultExpanded = source.IsResultExpanded;
+        _suppressLatestImageRefresh = true;
+        try
+        {
+            foreach (var result in source.Results)
+            {
+                result.UpdateActionAlias(Alias);
+                Results.Add(result);
+            }
+        }
+        finally
+        {
+            _suppressLatestImageRefresh = false;
+        }
+
+        ResultImageZoom = source.ResultImageZoom;
+        if (source.LatestImageSource is not null)
+        {
+            ReplaceLatestImageState(
+                source.LatestImageSource,
+                isLoading: false,
+                hasLoadError: false);
+        }
+        else
+        {
+            RefreshLatestImage();
+        }
     }
 
     public void SetEditingEnabled(bool enabled)
@@ -362,6 +508,181 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
         conditional.Branches.Clear();
         conditional.Branches.AddRange(Branches.Select(branch => branch.Model));
+    }
+
+    private void OnResultsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (!_suppressLatestImageRefresh)
+        {
+            RefreshLatestImage();
+        }
+        OnPropertyChanged(nameof(LatestResult));
+        OnPropertyChanged(nameof(HasLatestResultSummary));
+        OnPropertyChanged(nameof(HasRuntimeResults));
+        OnPropertyChanged(nameof(LatestImagePath));
+        OnPropertyChanged(nameof(HasLatestImagePath));
+        OnPropertyChanged(nameof(LatestImageStatusText));
+    }
+
+    private void RefreshLatestImage()
+    {
+        var latestResult = LatestResult;
+        CancellationTokenSource? cancellation = null;
+        long generation;
+
+        lock (_imageLoadSync)
+        {
+            _latestImageLoadCancellation?.Cancel();
+            _latestImageLoadCancellation = null;
+            generation = ++_latestImageLoadGeneration;
+            if (!string.IsNullOrWhiteSpace(latestResult?.ImagePath))
+            {
+                cancellation = new CancellationTokenSource();
+                _latestImageLoadCancellation = cancellation;
+            }
+        }
+
+        PublishLatestImageState(
+            image: null,
+            isLoading: cancellation is not null,
+            hasLoadError: false,
+            generation: generation);
+        if (cancellation is not null)
+        {
+            _ = LoadLatestImageAsync(latestResult!, cancellation, generation);
+        }
+    }
+
+    private void ResetResultImageZoom()
+    {
+        ResultImageZoom = 1.0;
+    }
+
+    private void ReplaceLatestImageState(
+        ImageSource? image,
+        bool isLoading,
+        bool hasLoadError)
+    {
+        long generation;
+        lock (_imageLoadSync)
+        {
+            _latestImageLoadCancellation?.Cancel();
+            _latestImageLoadCancellation = null;
+            generation = ++_latestImageLoadGeneration;
+        }
+
+        PublishLatestImageState(image, isLoading, hasLoadError, generation);
+    }
+
+    private async Task LoadLatestImageAsync(
+        RuntimeResultViewModel result,
+        CancellationTokenSource cancellation,
+        long generation)
+    {
+        try
+        {
+            var image = await result
+                .LoadImageAsync(_imageDecoder, cancellation.Token)
+                .ConfigureAwait(false);
+            if (!cancellation.IsCancellationRequested)
+            {
+                PublishLatestImageState(
+                    image,
+                    isLoading: false,
+                    hasLoadError: image is null,
+                    generation: generation);
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            // Image failures do not change the action result or interrupt the workflow UI.
+            PublishLatestImageState(
+                image: null,
+                isLoading: false,
+                hasLoadError: true,
+                generation: generation);
+        }
+        finally
+        {
+            lock (_imageLoadSync)
+            {
+                if (ReferenceEquals(_latestImageLoadCancellation, cancellation))
+                {
+                    _latestImageLoadCancellation = null;
+                }
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private void PublishLatestImageState(
+        ImageSource? image,
+        bool isLoading,
+        bool hasLoadError,
+        long generation)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            ApplyLatestImageState(image, isLoading, hasLoadError, generation);
+            return;
+        }
+
+        dispatcher.BeginInvoke(
+            new Action(() => ApplyLatestImageState(image, isLoading, hasLoadError, generation)),
+            DispatcherPriority.DataBind);
+    }
+
+    private void ApplyLatestImageState(
+        ImageSource? image,
+        bool isLoading,
+        bool hasLoadError,
+        long generation)
+    {
+        bool imageChanged;
+        bool loadingChanged;
+        bool errorChanged;
+        lock (_imageLoadSync)
+        {
+            if (generation != _latestImageLoadGeneration)
+            {
+                return;
+            }
+
+            imageChanged = !ReferenceEquals(_latestImageSource, image);
+            loadingChanged = _isLatestImageLoading != isLoading;
+            errorChanged = _hasLatestImageLoadError != hasLoadError;
+            _latestImageSource = image;
+            _isLatestImageLoading = isLoading;
+            _hasLatestImageLoadError = hasLoadError;
+        }
+
+        if (imageChanged)
+        {
+            OnPropertyChanged(nameof(LatestImageSource));
+            OnPropertyChanged(nameof(HasLatestImage));
+            OnPropertyChanged(nameof(CanZoomResultImageIn));
+            OnPropertyChanged(nameof(CanZoomResultImageOut));
+        }
+
+        if (loadingChanged)
+        {
+            OnPropertyChanged(nameof(IsLatestImageLoading));
+        }
+
+        if (errorChanged)
+        {
+            OnPropertyChanged(nameof(HasLatestImageLoadError));
+        }
+
+        if (imageChanged || loadingChanged || errorChanged)
+        {
+            OnPropertyChanged(nameof(LatestImageStatusText));
+        }
     }
 
     private static string GetParameterLabelKey(string name) => name switch

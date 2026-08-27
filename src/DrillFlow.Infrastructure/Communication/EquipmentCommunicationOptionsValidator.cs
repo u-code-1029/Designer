@@ -73,6 +73,11 @@ public sealed class EquipmentCommunicationOptionsValidator
             failures.Add("EquipmentRequestLifecycle has an unsupported value.");
         }
 
+        if (!Enum.IsDefined(typeof(ApplicationRequestFileLifecycle), options.ApplicationRequestLifecycle))
+        {
+            failures.Add("ApplicationRequestLifecycle has an unsupported value.");
+        }
+
         if (!Enum.IsDefined(typeof(ApplicationResponseFileLifecycle), options.ApplicationResponseLifecycle))
         {
             failures.Add("ApplicationResponseLifecycle has an unsupported value.");

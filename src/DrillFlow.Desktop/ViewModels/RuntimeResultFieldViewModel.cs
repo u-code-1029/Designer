@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DrillFlow.Desktop.Services;
 using Newtonsoft.Json;
@@ -8,6 +9,8 @@ namespace DrillFlow.Desktop.ViewModels;
 
 public sealed class RuntimeResultFieldViewModel : ObservableObject
 {
+    private const int MaximumSummaryLength = 160;
+    private static readonly Regex SummaryWhitespacePattern = new("\\s+", RegexOptions.CultureInvariant);
     private readonly ILocalizationService _localization;
     private string _actionAlias;
 
@@ -21,11 +24,7 @@ public sealed class RuntimeResultFieldViewModel : ObservableObject
         _actionAlias = actionAlias ?? string.Empty;
         Name = name ?? string.Empty;
         Value = FormatValue(value);
-        _localization.LanguageChanged += (_, _) =>
-        {
-            OnPropertyChanged(nameof(Description));
-            OnPropertyChanged(nameof(Label));
-        };
+        SummaryValue = FormatSummaryValue(Value);
     }
 
     public string Name { get; }
@@ -34,12 +33,17 @@ public sealed class RuntimeResultFieldViewModel : ObservableObject
 
     public string Value { get; }
 
+    public string SummaryValue { get; }
+
     public string Description => _localization[Name switch
     {
         "command" => "ResultCommandDescription",
         "drill_result_path" => "ParamResultPath",
         "position_x" => "ResultPositionXDescription",
         "position_y" => "ResultPositionYDescription",
+        "stage_x" => "ResultStageXDescription",
+        "stage_y" => "ResultStageYDescription",
+        "image_path" => "ResultImagePathDescription",
         "measured_distance" => "ResultMeasuredDistanceDescription",
         "request_json" => "RequestJson",
         "response_json" => "ResponseJson",
@@ -54,6 +58,12 @@ public sealed class RuntimeResultFieldViewModel : ObservableObject
     }];
 
     public string Label => ExpressionPath + " (" + Description + ")";
+
+    internal void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(Label));
+    }
 
     public void UpdateActionAlias(string actionAlias)
     {
@@ -86,5 +96,13 @@ public sealed class RuntimeResultFieldViewModel : ObservableObject
         }
 
         return JsonConvert.SerializeObject(value, Formatting.Indented);
+    }
+
+    private static string FormatSummaryValue(string value)
+    {
+        var summary = SummaryWhitespacePattern.Replace(value ?? string.Empty, " ").Trim();
+        return summary.Length <= MaximumSummaryLength
+            ? summary
+            : summary.Substring(0, MaximumSummaryLength - 1) + "\u2026";
     }
 }

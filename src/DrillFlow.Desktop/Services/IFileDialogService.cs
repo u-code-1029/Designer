@@ -6,5 +6,7 @@ public interface IFileDialogService
 
     string? ShowSaveWorkflowDialog(string suggestedFileName);
 
+    string? ShowSaveImageDialog(string sourceImagePath, string detectedExtension);
+
     string? ShowSelectFolderDialog(string initialFolder);
 }

@@ -20,6 +20,8 @@ public interface IWorkflowExecutionFacade
 
     Task RunAsync(WorkflowDocument document);
 
+    Task RunSelectedAsync(WorkflowDocument document, Guid actionId);
+
     void Continue();
 
     void Step();

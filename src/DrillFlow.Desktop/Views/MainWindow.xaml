@@ -45,6 +45,12 @@
                     <ui:SymbolIcon Symbol="DocumentFlowchart24" />
                 </ui:NavigationViewItem.Icon>
             </ui:NavigationViewItem>
+            <ui:NavigationViewItem Content="{DynamicResource NavLiveInteraction}"
+                                   TargetPageType="{x:Type views:LiveInteractionPage}">
+                <ui:NavigationViewItem.Icon>
+                    <ui:SymbolIcon Symbol="Image24" />
+                </ui:NavigationViewItem.Icon>
+            </ui:NavigationViewItem>
         </ui:NavigationView.MenuItems>
 
         <ui:NavigationView.FooterMenuItems>

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -20,13 +21,18 @@ namespace DrillFlow.Desktop.ViewModels;
 
 public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionSource
 {
+    private static readonly TimeSpan CloseStopTimeout = TimeSpan.FromSeconds(2);
+
     private readonly ILocalizationService _localization;
     private readonly IWorkflowDocumentService _documentService;
     private readonly IWorkflowExecutionFacade _execution;
+    private readonly LiveInteractionPageViewModel _liveInteraction;
+    private readonly ILiveImageDecoder _imageDecoder;
     private readonly IFileDialogService _fileDialogs;
     private readonly IUserDialogService _userDialogs;
     private readonly IResponseSimulationDialogService _responseSimulationDialogs;
     private readonly IExchangeFolderLauncher _exchangeFolderLauncher;
+    private readonly IDefaultFileLauncher _defaultFileLauncher;
     private readonly WorkflowValidator _workflowValidator;
     private readonly ExpressionCompletionProvider _expressionCompletions = new();
     private readonly ILogger<MainPageViewModel> _logger;
@@ -45,26 +51,33 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private TaskCompletionSource<bool>? _terminalStateWaiter;
     private string? _clipboardSnapshot;
     private bool _clipboardIsCut;
+    private CutActionRuntimeSnapshot? _cutRuntimeSnapshot;
     private object? _explicitPasteTarget;
 
     public MainPageViewModel(
         ILocalizationService localization,
         IWorkflowDocumentService documentService,
         IWorkflowExecutionFacade execution,
+        LiveInteractionPageViewModel liveInteraction,
+        ILiveImageDecoder imageDecoder,
         IFileDialogService fileDialogs,
         IUserDialogService userDialogs,
         IResponseSimulationDialogService responseSimulationDialogs,
         IExchangeFolderLauncher exchangeFolderLauncher,
+        IDefaultFileLauncher defaultFileLauncher,
         WorkflowValidator workflowValidator,
         ILogger<MainPageViewModel> logger)
     {
         _localization = localization;
         _documentService = documentService;
         _execution = execution;
+        _liveInteraction = liveInteraction;
+        _imageDecoder = imageDecoder ?? throw new ArgumentNullException(nameof(imageDecoder));
         _fileDialogs = fileDialogs;
         _userDialogs = userDialogs;
         _responseSimulationDialogs = responseSimulationDialogs;
         _exchangeFolderLauncher = exchangeFolderLauncher;
+        _defaultFileLauncher = defaultFileLauncher ?? throw new ArgumentNullException(nameof(defaultFileLauncher));
         _workflowValidator = workflowValidator;
         _logger = logger;
 
@@ -92,20 +105,39 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         SaveAsCommand = new AsyncRelayCommand(SaveAsAsync, () => IsWorkflowEditingEnabled);
         UndoCommand = new RelayCommand(Undo, () => _undo.Count > 0 && IsWorkflowEditingEnabled);
         RedoCommand = new RelayCommand(Redo, () => _redo.Count > 0 && IsWorkflowEditingEnabled);
-        ValidateCommand = new RelayCommand(() => ValidateWorkflow(true), () => !IsExecutionBusy);
+        ValidateCommand = new RelayCommand(
+            () => ValidateWorkflow(true),
+            () => !IsExecutionBusy && !_liveInteraction.IsInteractionActive);
         RunCommand = new AsyncRelayCommand(RunAsync, () => Actions.Count > 0 && IsWorkflowEditingEnabled);
         RunSelectedCommand = new AsyncRelayCommand(
             RunSelectedAsync,
             () => SelectedAction is { IsNodeEnabled: true } && IsWorkflowEditingEnabled);
         TestResponseCommand = new AsyncRelayCommand(
             TestResponseAsync,
-            () => SelectedAction is not null && IsEquipmentAction(SelectedAction.Kind));
+            () => SelectedAction is not null
+                  && IsEquipmentAction(SelectedAction.Kind)
+                  && !_liveInteraction.IsInteractionActive);
         OpenExchangeFolderCommand = new RelayCommand(OpenExchangeFolder);
+        OpenResultImageCommand = new RelayCommand(
+            OpenResultImage,
+            () => !string.IsNullOrWhiteSpace(SelectedAction?.LatestImagePath));
         ContinueCommand = new RelayCommand(Continue, () => RunState == WorkflowRunState.Paused);
         StepCommand = new RelayCommand(Step, () => RunState == WorkflowRunState.Paused);
         StopCommand = new RelayCommand(
             Stop,
             () => RunState is WorkflowRunState.Running or WorkflowRunState.Paused or WorkflowRunState.Stopping);
+        CollapseAllResultsCommand = new RelayCommand(
+            CollapseAllResults,
+            () => EnumerateActions().Any(action => action.HasRuntimeResults && action.IsResultExpanded));
+        ClearAllResultsCommand = new RelayCommand(
+            ClearAllResults,
+            () => IsWorkflowEditingEnabled && HasAnyRuntimeResults());
+        ZoomSelectedResultImageInCommand = new RelayCommand(
+            () => SelectedAction?.ZoomResultImageIn(),
+            () => SelectedAction?.CanZoomResultImageIn == true);
+        ZoomSelectedResultImageOutCommand = new RelayCommand(
+            () => SelectedAction?.ZoomResultImageOut(),
+            () => SelectedAction?.CanZoomResultImageOut == true);
         ToggleBreakpointCommand = new RelayCommand(ToggleBreakpoint, () => SelectedAction is not null && IsWorkflowEditingEnabled);
         ClearBreakpointsCommand = new RelayCommand(ClearBreakpoints, () => EnumerateActions().Any(action => action.HasBreakpoint) && IsWorkflowEditingEnabled);
         DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedActionCount > 0 && IsWorkflowEditingEnabled);
@@ -121,6 +153,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
         _execution.RunStateChanged += OnRunStateChanged;
         _execution.NodeStateChanged += OnNodeStateChanged;
+        _liveInteraction.PropertyChanged += OnLiveInteractionPropertyChanged;
         _localization.LanguageChanged += OnLanguageChanged;
 
         ReplaceDocument(new WorkflowDocument { Name = _localization["DocumentUntitled"] }, null, false);
@@ -154,11 +187,21 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     public IRelayCommand OpenExchangeFolderCommand { get; }
 
+    public IRelayCommand OpenResultImageCommand { get; }
+
     public IRelayCommand ContinueCommand { get; }
 
     public IRelayCommand StepCommand { get; }
 
     public IRelayCommand StopCommand { get; }
+
+    public IRelayCommand CollapseAllResultsCommand { get; }
+
+    public IRelayCommand ClearAllResultsCommand { get; }
+
+    public IRelayCommand ZoomSelectedResultImageInCommand { get; }
+
+    public IRelayCommand ZoomSelectedResultImageOutCommand { get; }
 
     public IRelayCommand ToggleBreakpointCommand { get; }
 
@@ -192,9 +235,15 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
             _selectedAction = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(CanStopSelectedCurrentEquipmentAction));
             NotifyCommandStates();
         }
     }
+
+    public bool CanStopSelectedCurrentEquipmentAction =>
+        SelectedAction is { IsCurrent: true, IsRunning: true } action
+        && IsEquipmentAction(action.Kind)
+        && RunState is WorkflowRunState.Running or WorkflowRunState.Stopping;
 
     public IReadOnlyList<WorkflowActionViewModel> SelectedActions =>
         GetSelectedActionsInDisplayOrder();
@@ -233,6 +282,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 OnPropertyChanged(nameof(RuntimeStatusText));
                 OnPropertyChanged(nameof(IsExecutionBusy));
                 OnPropertyChanged(nameof(IsWorkflowEditingEnabled));
+                OnPropertyChanged(nameof(CanStopSelectedCurrentEquipmentAction));
                 SetWorkflowEditingEnabled(IsWorkflowEditingEnabled);
                 NotifyCommandStates();
             }
@@ -256,7 +306,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         or WorkflowRunState.Paused
         or WorkflowRunState.Stopping;
 
-    public bool IsWorkflowEditingEnabled => !IsExecutionBusy && !IsBusyState(_execution.State);
+    public bool IsWorkflowEditingEnabled => !IsExecutionBusy
+                                            && !IsBusyState(_execution.State)
+                                            && !_liveInteraction.IsInteractionActive;
 
     public bool CanCompleteExpressions => IsWorkflowEditingEnabled;
 
@@ -406,12 +458,24 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         {
             _terminalStateWaiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _execution.RequestStop();
-            RunState = WorkflowRunState.Stopping;
-            StatusMessage = _localization["StatusStopping"];
+            if (!IsTerminalState(_execution.State))
+            {
+                StatusMessage = _localization["StatusStopping"];
+            }
 
             if (!IsTerminalState(_execution.State))
             {
-                await _terminalStateWaiter.Task;
+                var terminalTask = _terminalStateWaiter.Task;
+                var stopCompletion = await Task.WhenAny(
+                    terminalTask,
+                    Task.Delay(CloseStopTimeout));
+                if (!ReferenceEquals(stopCompletion, terminalTask))
+                {
+                    _logger.LogWarning(
+                        "Application close is abandoning a workflow exchange that did not "
+                        + "reach a terminal state within the bounded immediate-stop period. No "
+                        + "equipment abort command was published.");
+                }
             }
 
             _terminalStateWaiter = null;
@@ -444,7 +508,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
         CaptureUndoCheckpoint();
         var node = WorkflowNodeFactory.Create(kind, EnumerateActions().Select(action => action.Alias));
-        var viewModel = new WorkflowActionViewModel(node, _localization);
+        var viewModel = new WorkflowActionViewModel(node, _localization, _imageDecoder);
         AttachAction(viewModel);
         destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), viewModel);
         SelectAction(viewModel);
@@ -618,7 +682,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             roots.Select(action => action.Model),
             EnumerateActions().Select(candidate => candidate.Alias));
         var clones = clonedNodes
-            .Select(node => new WorkflowActionViewModel(node, _localization))
+            .Select(node => new WorkflowActionViewModel(node, _localization, _imageDecoder))
             .ToList();
         var insertionIndex = Math.Max(0, Math.Min(index, destination.Count));
         foreach (var clone in clones)
@@ -787,7 +851,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private void RestoreSnapshot(string json)
     {
         var path = _documentPath;
-        ReplaceDocument(_documentService.Deserialize(json), path, true);
+        ReplaceDocument(_documentService.Deserialize(json), path, true, preserveRuntime: true);
         NotifyCommandStates();
     }
 
@@ -869,6 +933,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         {
             action.ClearRuntime();
         }
+        ReleaseCutRuntimeSnapshot();
+        _execution.Results.Clear();
+        NotifyCommandStates();
 
         try
         {
@@ -903,16 +970,24 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
         try
         {
-            // Preserve node ids so execution events and results continue to light up the
-            // cards being inspected, while isolating the runner from editor mutations.
-            var selectionDocument = new WorkflowDocument
+            // Preserve the complete document as the expression context while isolating the
+            // runner from editor mutations. Only the selected subtree is scheduled below.
+            var executionDocument = _documentService.Deserialize(
+                _documentService.Serialize(_document));
+            var selectedExecutionNode = executionDocument
+                .EnumerateNodesDepthFirst()
+                .FirstOrDefault(node => node.Id == selected.Id);
+            if (selectedExecutionNode is null)
+            {
+                throw new InvalidOperationException("The selected action no longer exists in the workflow.");
+            }
+
+            var selectedExecutionDocument = new WorkflowDocument
             {
                 Name = selected.Alias,
-                Nodes = new List<WorkflowNode> { selected.Model }
+                Nodes = new List<WorkflowNode> { selectedExecutionNode }
             };
-            var executionDocument = _documentService.Deserialize(
-                _documentService.Serialize(selectionDocument));
-            foreach (var node in executionDocument.EnumerateNodesDepthFirst())
+            foreach (var node in selectedExecutionDocument.EnumerateNodesDepthFirst())
             {
                 // "Run only this Action" is an explicit command and must not immediately
                 // stop at an authored breakpoint on the same subtree.
@@ -934,12 +1009,10 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 return;
             }
 
-            foreach (var action in Actions)
-            {
-                action.ClearRuntime();
-            }
-
-            await _execution.RunAsync(executionDocument);
+            // A selected action is an operation inside the current result session. Earlier
+            // action results and their decoded images remain available for inspection and
+            // expression references until a full run, New/Open, or explicit Clear All.
+            await _execution.RunSelectedAsync(executionDocument, selected.Id);
         }
         catch (Exception exception)
         {
@@ -956,19 +1029,48 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     private void Stop()
     {
-        if (RunState == WorkflowRunState.Stopping)
+        _execution.RequestStop();
+        if (!IsTerminalState(_execution.State))
         {
-            _execution.ForceStop();
-            StatusMessage = _localization["ForceStopping"];
+            StatusMessage = _localization["StatusStopping"];
             StatusIsError = false;
+        }
+    }
+
+    private void CollapseAllResults()
+    {
+        foreach (var action in EnumerateActions())
+        {
+            action.IsResultExpanded = false;
+        }
+
+        StatusMessage = _localization["AllResultsCollapsed"];
+        StatusIsError = false;
+        NotifyCommandStates();
+    }
+
+    private void ClearAllResults()
+    {
+        if (!IsWorkflowEditingEnabled)
+        {
             return;
         }
 
-        _execution.RequestStop();
-        RunState = WorkflowRunState.Stopping;
-        StatusMessage = _localization["StatusStopping"];
+        foreach (var action in Actions)
+        {
+            action.ClearRuntime();
+        }
+        ReleaseCutRuntimeSnapshot();
+        _execution.Results.Clear();
+
+        StatusMessage = _localization["AllResultsCleared"];
         StatusIsError = false;
+        NotifyCommandStates();
     }
+
+    private bool HasAnyRuntimeResults() =>
+        EnumerateActions().Any(action => action.HasRuntimeResults)
+        || _execution.Results.GetAllChronologically().Count > 0;
 
     private async Task TestResponseAsync()
     {
@@ -1048,6 +1150,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return;
         }
 
+        ReleaseCutRuntimeSnapshot();
         var clipboardDocument = new WorkflowDocument
         {
             Name = "Clipboard",
@@ -1071,8 +1174,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         }
 
         CopySelected();
+        _cutRuntimeSnapshot = CutActionRuntimeSnapshot.Capture(selected);
         _clipboardIsCut = true;
-        DeleteSelected();
+        RemoveSelected(releaseRuntime: false);
         StatusMessage = selected.Count == 1
             ? string.Format(_localization["ActionCut"], selected[0].Alias)
             : string.Format(_localization["ActionsCut"], selected.Count);
@@ -1115,6 +1219,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             _logger.LogWarning(exception, "The in-memory Action clipboard could not be read");
             _clipboardSnapshot = null;
             _clipboardIsCut = false;
+            ReleaseCutRuntimeSnapshot();
             StatusMessage = _localization["ClipboardInvalid"];
             StatusIsError = true;
             NotifyCommandStates();
@@ -1126,6 +1231,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         {
             _clipboardSnapshot = null;
             _clipboardIsCut = false;
+            ReleaseCutRuntimeSnapshot();
             StatusMessage = _localization["ClipboardInvalid"];
             StatusIsError = true;
             NotifyCommandStates();
@@ -1140,8 +1246,13 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 sources,
                 EnumerateActions().Select(candidate => candidate.Alias));
         var clones = pastedNodes
-            .Select(node => new WorkflowActionViewModel(node, _localization))
+            .Select(node => new WorkflowActionViewModel(node, _localization, _imageDecoder))
             .ToList();
+        if (preserveCutIdentity)
+        {
+            _cutRuntimeSnapshot?.RestoreTo(clones);
+        }
+
         index = Math.Max(0, Math.Min(index, destination.Count));
         foreach (var clone in clones)
         {
@@ -1150,12 +1261,19 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         }
 
         _clipboardIsCut = false;
+        ReleaseCutRuntimeSnapshot();
         SetSelectedActions(clones, clones.Last());
         IsDirty = true;
         StatusMessage = clones.Count == 1
             ? string.Format(_localization["ActionPasted"], clones[0].Alias)
             : string.Format(_localization["ActionsPasted"], clones.Count);
         StatusIsError = false;
+    }
+
+    private void ReleaseCutRuntimeSnapshot()
+    {
+        _cutRuntimeSnapshot?.Clear();
+        _cutRuntimeSnapshot = null;
     }
 
     private void ToggleEnabled()
@@ -1171,7 +1289,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         NotifyCommandStates();
     }
 
-    private void DeleteSelected()
+    private void DeleteSelected() => RemoveSelected(releaseRuntime: true);
+
+    private void RemoveSelected(bool releaseRuntime)
     {
         var selected = GetSelectedActionRootsInDisplayOrder();
         if (selected.Count == 0 || !IsWorkflowEditingEnabled)
@@ -1197,6 +1317,14 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         }
 
         CaptureUndoCheckpoint();
+        if (releaseRuntime)
+        {
+            foreach (var location in locations)
+            {
+                location.Action.ClearRuntime();
+            }
+        }
+
         ClearSelection();
         foreach (var group in locations.GroupBy(location => location.Collection))
         {
@@ -1230,7 +1358,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             Kind = ConditionalBranchKind.ElseIf,
             Condition = ParameterBinding.Expression("true")
         };
-        var vm = new WorkflowBranchViewModel(branch, _localization);
+        var vm = new WorkflowBranchViewModel(branch, _localization, _imageDecoder);
         AttachBranch(vm);
         var elseIndex = SelectedAction.Branches.ToList().FindIndex(candidate => candidate.Kind == ConditionalBranchKind.Else);
         SelectedAction.Branches.Insert(elseIndex < 0 ? SelectedAction.Branches.Count : elseIndex, vm);
@@ -1252,7 +1380,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         CaptureUndoCheckpoint();
         var branch = new WorkflowBranchViewModel(
             new ConditionalBranch { Kind = ConditionalBranchKind.Else, Condition = null },
-            _localization);
+            _localization,
+            _imageDecoder);
         AttachBranch(branch);
         SelectedAction.Branches.Add(branch);
         IsDirty = true;
@@ -1263,8 +1392,26 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         && !SelectedAction.Branches.Any(branch => branch.Kind == ConditionalBranchKind.Else)
         && IsWorkflowEditingEnabled;
 
-    private void ReplaceDocument(WorkflowDocument document, string? path, bool dirty)
+    private void ReplaceDocument(
+        WorkflowDocument document,
+        string? path,
+        bool dirty,
+        bool preserveRuntime = false)
     {
+        var previousRootActions = Actions.ToArray();
+        var previousRuntimeById = preserveRuntime
+            ? previousRootActions
+                .SelectMany(action => action.EnumerateDepthFirst())
+                .GroupBy(action => action.Id)
+                .ToDictionary(group => group.Key, group => group.Last())
+            : new Dictionary<Guid, WorkflowActionViewModel>();
+
+        if (!preserveRuntime)
+        {
+            ReleaseCutRuntimeSnapshot();
+            _execution.Results.Clear();
+        }
+
         _document = document ?? new WorkflowDocument();
         _document.Nodes ??= new List<WorkflowNode>();
         _documentPath = path;
@@ -1275,7 +1422,25 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             Actions.Clear();
             foreach (var node in _document.Nodes)
             {
-                var action = new WorkflowActionViewModel(node, _localization);
+                var action = new WorkflowActionViewModel(node, _localization, _imageDecoder);
+                if (preserveRuntime)
+                {
+                    foreach (var candidate in action.EnumerateDepthFirst())
+                    {
+                        if (previousRuntimeById.TryGetValue(candidate.Id, out var source))
+                        {
+                            candidate.RestoreRuntimeFrom(source);
+                        }
+                        else
+                        {
+                            foreach (var result in _execution.Results.GetAll(candidate.Id))
+                            {
+                                candidate.AddResult(result);
+                            }
+                        }
+                    }
+                }
+
                 action.SetEditingEnabled(IsWorkflowEditingEnabled);
                 AttachAction(action);
                 Actions.Add(action);
@@ -1284,6 +1449,10 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         finally
         {
             _suppressCollectionSync = false;
+            foreach (var previousAction in previousRootActions)
+            {
+                previousAction.ClearRuntime();
+            }
         }
 
         ClearSelection();
@@ -1304,6 +1473,18 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 or nameof(WorkflowActionViewModel.IsNodeEnabled))
             {
                 IsDirty = true;
+                NotifyCommandStates();
+            }
+            else if (eventArgs.PropertyName is nameof(WorkflowActionViewModel.HasRuntimeResults)
+                     or nameof(WorkflowActionViewModel.IsResultExpanded)
+                     or nameof(WorkflowActionViewModel.HasLatestImage)
+                     or nameof(WorkflowActionViewModel.ResultImageZoom)
+                     or nameof(WorkflowActionViewModel.CanZoomResultImageIn)
+                     or nameof(WorkflowActionViewModel.CanZoomResultImageOut)
+                     or nameof(WorkflowActionViewModel.IsCurrent)
+                     or nameof(WorkflowActionViewModel.IsRunning))
+            {
+                OnPropertyChanged(nameof(CanStopSelectedCurrentEquipmentAction));
                 NotifyCommandStates();
             }
         };
@@ -1384,6 +1565,48 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         });
     }
 
+    private void OpenResultImage()
+    {
+        var path = SelectedAction?.LatestImagePath ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var openedPath = _defaultFileLauncher.Open(path);
+            StatusMessage = string.Format(_localization["ResultImageOpened"], openedPath);
+            StatusIsError = false;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Could not open action result image {ImagePath}", path);
+            StatusMessage = _localization["ResultImageOpenFailed"] + " " + exception.Message;
+            StatusIsError = true;
+        }
+    }
+
+    private void OnLiveInteractionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(e.PropertyName)
+            && !string.Equals(
+                e.PropertyName,
+                nameof(LiveInteractionPageViewModel.IsInteractionActive),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Dispatch(() =>
+        {
+            OnPropertyChanged(nameof(IsWorkflowEditingEnabled));
+            OnPropertyChanged(nameof(CanCompleteExpressions));
+            SetWorkflowEditingEnabled(IsWorkflowEditingEnabled);
+            NotifyCommandStates();
+        });
+    }
+
     private void OnNodeStateChanged(object? sender, WorkflowNodeStateChangedEventArgs e)
     {
         Dispatch(() =>
@@ -1404,6 +1627,16 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             if (e.Result is not null)
             {
                 action.AddResult(e.Result);
+                OpenResultImageCommand.NotifyCanExecuteChanged();
+            }
+
+            if (e.State == WorkflowNodeExecutionState.Running
+                && IsEquipmentAction(action.Kind))
+            {
+                StatusMessage = string.Format(
+                    _localization["EquipmentResponseWaiting"],
+                    action.Alias);
+                StatusIsError = false;
             }
 
             if (e.Exception is not null)
@@ -1623,9 +1856,14 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         RunCommand.NotifyCanExecuteChanged();
         RunSelectedCommand.NotifyCanExecuteChanged();
         TestResponseCommand.NotifyCanExecuteChanged();
+        OpenResultImageCommand.NotifyCanExecuteChanged();
         ContinueCommand.NotifyCanExecuteChanged();
         StepCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
+        CollapseAllResultsCommand.NotifyCanExecuteChanged();
+        ClearAllResultsCommand.NotifyCanExecuteChanged();
+        ZoomSelectedResultImageInCommand.NotifyCanExecuteChanged();
+        ZoomSelectedResultImageOutCommand.NotifyCanExecuteChanged();
         ToggleBreakpointCommand.NotifyCanExecuteChanged();
         ClearBreakpointsCommand.NotifyCanExecuteChanged();
         DeleteSelectedCommand.NotifyCanExecuteChanged();
@@ -1716,5 +1954,64 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         public ObservableCollection<WorkflowActionViewModel> Collection { get; }
 
         public int Index { get; }
+    }
+}
+
+internal sealed class CutActionRuntimeSnapshot
+{
+    private readonly WorkflowActionViewModel[] _roots;
+    private readonly Dictionary<Guid, WorkflowActionViewModel> _sourcesById;
+    private bool _isCleared;
+
+    private CutActionRuntimeSnapshot(WorkflowActionViewModel[] roots)
+    {
+        _roots = roots;
+        _sourcesById = roots
+            .SelectMany(action => action.EnumerateDepthFirst())
+            .GroupBy(action => action.Id)
+            .ToDictionary(group => group.Key, group => group.Last());
+    }
+
+    public static CutActionRuntimeSnapshot Capture(
+        IEnumerable<WorkflowActionViewModel> roots)
+    {
+        if (roots is null)
+        {
+            throw new ArgumentNullException(nameof(roots));
+        }
+
+        return new CutActionRuntimeSnapshot(roots.Where(action => action is not null).ToArray());
+    }
+
+    public void RestoreTo(IEnumerable<WorkflowActionViewModel> roots)
+    {
+        if (_isCleared)
+        {
+            return;
+        }
+
+        foreach (var action in roots.SelectMany(root => root.EnumerateDepthFirst()))
+        {
+            if (_sourcesById.TryGetValue(action.Id, out var source))
+            {
+                action.RestoreRuntimeFrom(source);
+            }
+        }
+    }
+
+    public void Clear()
+    {
+        if (_isCleared)
+        {
+            return;
+        }
+
+        _isCleared = true;
+        foreach (var root in _roots)
+        {
+            root.ClearRuntime();
+        }
+
+        _sourcesById.Clear();
     }
 }

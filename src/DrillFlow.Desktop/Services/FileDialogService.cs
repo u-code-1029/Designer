@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using Microsoft.Extensions.Logging;
@@ -50,6 +51,50 @@ public sealed class FileDialogService : IFileDialogService
         var owner = System.Windows.Application.Current?.MainWindow;
         var result = owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
         return result == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveImageDialog(string sourceImagePath, string detectedExtension)
+    {
+        var extension = Path.GetExtension(sourceImagePath);
+        if (string.IsNullOrWhiteSpace(extension) || extension.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            extension = NormalizeImageExtension(detectedExtension);
+        }
+
+        var normalizedExtension = extension.TrimStart('.');
+        var sourceFileName = Path.GetFileNameWithoutExtension(sourceImagePath);
+        var suggestedName = string.IsNullOrWhiteSpace(sourceFileName)
+            ? "capture-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")
+            : sourceFileName;
+
+        var dialog = new SaveFileDialog
+        {
+            Filter = $"{normalizedExtension.ToUpperInvariant()} (*.{normalizedExtension})|*.{normalizedExtension}",
+            AddExtension = true,
+            DefaultExt = extension,
+            FileName = suggestedName + extension,
+            OverwritePrompt = true,
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+            Title = _localization["SaveCapturedImage"]
+        };
+
+        var owner = System.Windows.Application.Current?.MainWindow;
+        var result = owner is null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
+        return result == true ? dialog.FileName : null;
+    }
+
+    private static string NormalizeImageExtension(string extension)
+    {
+        var normalized = (extension ?? string.Empty).Trim();
+        if (!normalized.StartsWith(".", StringComparison.Ordinal))
+        {
+            normalized = "." + normalized.TrimStart('*', '.');
+        }
+
+        return normalized.Length > 1
+               && normalized.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+            ? normalized
+            : ".png";
     }
 
     public string? ShowSelectFolderDialog(string initialFolder)

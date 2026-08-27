@@ -2,10 +2,15 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-             MinWidth="560"
-             MinHeight="430">
+             MinWidth="800"
+             MinHeight="500">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </UserControl.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -15,7 +20,7 @@
         </Grid.RowDefinitions>
 
         <ui:InfoBar Grid.Row="0"
-                    IsOpen="{Binding HasValidationError}"
+                    IsOpen="{Binding HasValidationError, Mode=OneWay}"
                     IsClosable="False"
                     Severity="Error"
                     Message="{Binding ValidationMessage}"
@@ -39,7 +44,14 @@
             <TextBlock Grid.Column="1" Text="{Binding ActiveRequestSummary}" TextWrapping="Wrap" />
         </Grid>
 
-        <Grid Grid.Row="3" Margin="0,0,0,8">
+        <ui:InfoBar Grid.Row="3"
+                    IsOpen="{Binding HasGeneratedImage, Mode=OneWay}"
+                    IsClosable="False"
+                    Severity="Informational"
+                    Message="{DynamicResource ResponseTestGeneratedImage}"
+                    Margin="0,0,0,10" />
+
+        <Grid Grid.Row="4" Margin="0,0,0,8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
@@ -48,7 +60,7 @@
             <TextBlock Grid.Column="1" Text="{Binding PayloadFormat}" />
         </Grid>
 
-        <StackPanel Grid.Row="4" Margin="0,0,0,10">
+        <StackPanel Grid.Row="5" Margin="0,0,0,10">
             <TextBlock Text="{DynamicResource ResponseTestDestination}" FontWeight="SemiBold" Margin="0,0,0,4" />
             <TextBox Text="{Binding ResponsePath, Mode=OneWay}"
                      IsReadOnly="True"
@@ -56,22 +68,113 @@
                      HorizontalScrollBarVisibility="Auto" />
         </StackPanel>
 
-        <Grid Grid.Row="5">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-            <TextBlock Text="{DynamicResource ResponseTestPayload}" FontWeight="SemiBold" Margin="0,0,0,4" />
-            <TextBox Grid.Row="1"
-                     Text="{Binding Payload, UpdateSourceTrigger=PropertyChanged}"
-                     AcceptsReturn="True"
-                     AcceptsTab="True"
-                     FontFamily="Consolas"
-                     FontSize="12"
-                     MinHeight="220"
-                     VerticalScrollBarVisibility="Auto"
-                     HorizontalScrollBarVisibility="Auto"
-                     TextWrapping="NoWrap" />
+        <Grid Grid.Row="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="310" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ui:Card Grid.Column="0"
+                     Padding="10"
+                     HorizontalContentAlignment="Stretch"
+                     VerticalContentAlignment="Stretch">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{DynamicResource ResponseTestImagePreview}"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <ui:ProgressRing Width="16"
+                                             Height="16"
+                                             Margin="0,0,8,0"
+                                             IsIndeterminate="True"
+                                             Visibility="{Binding RegenerateImageCommand.IsRunning, Converter={StaticResource BoolToVisibility}}" />
+                            <ui:Button Content="{DynamicResource ResponseTestRegenerateImage}"
+                                       Command="{Binding RegenerateImageCommand}">
+                                <ui:Button.Icon>
+                                    <ui:SymbolIcon Symbol="Image24" />
+                                </ui:Button.Icon>
+                            </ui:Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Grid.Row="2"
+                            MinHeight="188"
+                            Background="{DynamicResource DrillSubtleBrush}"
+                            BorderBrush="{DynamicResource DrillBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            ClipToBounds="True">
+                        <Grid>
+                            <Image Source="{Binding PreviewImage}"
+                                   Stretch="Uniform"
+                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                            <StackPanel HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        IsHitTestVisible="False">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasGeneratedImage}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <ui:SymbolIcon Symbol="Image24"
+                                               FontSize="32"
+                                               Foreground="{DynamicResource DrillSecondaryTextBrush}" />
+                                <TextBlock Text="{DynamicResource ResponseTestNoImagePreview}"
+                                           Margin="0,8,0,0"
+                                           Foreground="{DynamicResource DrillSecondaryTextBrush}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Grid.Row="3"
+                               Text="{Binding GeneratedImagePath}"
+                               ToolTip="{Binding GeneratedImagePath}"
+                               Margin="0,8,0,0"
+                               FontSize="11"
+                               Foreground="{DynamicResource DrillSecondaryTextBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                </Grid>
+            </ui:Card>
+
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <TextBlock Text="{DynamicResource ResponseTestPayload}"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,4" />
+                <TextBox Grid.Row="1"
+                         Text="{Binding Payload, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True"
+                         AcceptsTab="True"
+                         FontFamily="Consolas"
+                         FontSize="12"
+                         MinHeight="250"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         TextWrapping="NoWrap" />
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>

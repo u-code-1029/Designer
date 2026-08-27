@@ -112,21 +112,32 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<IFileDialogService, FileDialogService>();
                     services.AddSingleton<IContentDialogGate, ContentDialogGate>();
                     services.AddSingleton<IUserDialogService, UserDialogService>();
+                    services.AddSingleton<ITemporaryResponseImageService, TemporaryResponseImageService>();
+                    services.AddSingleton<ILiveCaptureSnapshotStore, LiveCaptureSnapshotStore>();
+                    services.AddSingleton<ILiveImageDecoder, LiveImageDecoder>();
+                    services.AddSingleton<IDefaultFileLauncher, DefaultFileLauncher>();
                     services.AddSingleton<IResponseSimulationDialogService, ResponseSimulationDialogService>();
                     services.AddSingleton<IExchangeFolderLauncher, ExchangeFolderLauncher>();
 
                     services.AddSingleton<MainWindowViewModel>();
                     services.AddSingleton<MainPageViewModel>();
+                    services.AddSingleton<LiveInteractionPageViewModel>();
                     services.AddSingleton<SettingsPageViewModel>();
 
                     services.AddSingleton<MainWindow>();
                     services.AddSingleton<MainPage>();
+                    services.AddSingleton<LiveInteractionPage>();
                     services.AddSingleton<SettingsPage>();
                     services.AddNavigationViewPageProvider();
                 })
                 .Build();
 
             await _host.StartAsync().ConfigureAwait(true);
+
+            // Resolve this host-owned singleton at startup so it can remove images left behind by
+            // an abnormal termination even when the response simulator is not opened this run.
+            _host.Services.GetRequiredService<ITemporaryResponseImageService>();
+            _host.Services.GetRequiredService<ILiveCaptureSnapshotStore>();
 
             var localization = _host.Services.GetRequiredService<ILocalizationService>();
             localization.Initialize();
@@ -152,32 +163,44 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        try
+        var host = _host;
+        _host = null;
+        if (host is not null)
         {
-            if (_host is not null)
+            try
             {
-                _host.StopAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
-                _host.Dispose();
+                host.StopAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "Host stop failed");
+            }
+            finally
+            {
+                try
+                {
+                    // Disposable singletons (including temporary response images) must be
+                    // released even when hosted-service shutdown times out or throws.
+                    host.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    Log.Error(exception, "Host disposal failed");
+                }
             }
         }
-        catch (Exception exception)
-        {
-            Log.Error(exception, "Host shutdown failed");
-        }
-        finally
-        {
-            Log.Information("DrillFlow Designer stopped");
-            Log.CloseAndFlush();
 
-            if (_ownsSingleInstanceMutex)
-            {
-                _singleInstanceMutex?.ReleaseMutex();
-                _ownsSingleInstanceMutex = false;
-            }
+        Log.Information("DrillFlow Designer stopped");
+        Log.CloseAndFlush();
 
-            _singleInstanceMutex?.Dispose();
-            _singleInstanceMutex = null;
+        if (_ownsSingleInstanceMutex)
+        {
+            _singleInstanceMutex?.ReleaseMutex();
+            _ownsSingleInstanceMutex = false;
         }
+
+        _singleInstanceMutex?.Dispose();
+        _singleInstanceMutex = null;
 
         base.OnExit(e);
     }
@@ -300,6 +323,12 @@ public partial class App : System.Windows.Application
             out var requestLifecycle)
             ? requestLifecycle
             : (EquipmentRequestFileLifecycle)(-1);
+        options.ApplicationRequestLifecycle = Enum.TryParse<ApplicationRequestFileLifecycle>(
+            communication.AppRequestHandling,
+            true,
+            out var applicationRequestLifecycle)
+            ? applicationRequestLifecycle
+            : (ApplicationRequestFileLifecycle)(-1);
         options.ApplicationResponseLifecycle = Enum.TryParse<ApplicationResponseFileLifecycle>(
             communication.AppResponseHandling,
             true,

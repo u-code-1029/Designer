@@ -25,6 +25,14 @@ public sealed class EquipmentCommunicationOptions
     public EquipmentRequestFileLifecycle EquipmentRequestLifecycle { get; set; }
         = EquipmentRequestFileLifecycle.RetainUntilOverwritten;
 
+    /// <summary>
+    /// Controls application-side cleanup after a matching response has been received. This is
+    /// separate from <see cref="EquipmentRequestLifecycle"/> so an installation can describe the
+    /// equipment's ownership behavior and the application's post-response cleanup independently.
+    /// </summary>
+    public ApplicationRequestFileLifecycle ApplicationRequestLifecycle { get; set; }
+        = ApplicationRequestFileLifecycle.DeleteAfterResponse;
+
     public ApplicationResponseFileLifecycle ApplicationResponseLifecycle { get; set; }
         = ApplicationResponseFileLifecycle.DeleteAfterRead;
 
@@ -39,7 +47,7 @@ public sealed class EquipmentCommunicationOptions
 
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(1);
 
-    public TimeSpan PollingInterval { get; set; } = TimeSpan.FromMilliseconds(100);
+    public TimeSpan PollingInterval { get; set; } = TimeSpan.FromMilliseconds(50);
 
     public TimeSpan StableReadDelay { get; set; } = TimeSpan.FromMilliseconds(50);
 }

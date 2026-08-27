@@ -42,7 +42,21 @@ namespace DrillFlow.Core.Validation
 
         public static double GetMoveCoordinate(ExpressionValue value, string parameterName)
         {
-            var number = GetFiniteNumber(value, parameterName);
+            return GetMoveCoordinate(GetFiniteNumber(value, parameterName), parameterName);
+        }
+
+        /// <summary>
+        /// Validates a move coordinate that already has a numeric value. Live equipment
+        /// interaction uses this overload so it shares the workflow request limits without
+        /// manufacturing an expression value.
+        /// </summary>
+        public static double GetMoveCoordinate(double number, string parameterName)
+        {
+            if (double.IsNaN(number) || double.IsInfinity(number))
+            {
+                throw new ParameterValidationException($"{parameterName} must be finite.");
+            }
+
             if (number <= -MoveCoordinateLimitMetres || number >= MoveCoordinateLimitMetres)
             {
                 throw new ParameterValidationException(

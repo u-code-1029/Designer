@@ -58,6 +58,7 @@ public partial class MainPage : Page
         WorkflowCanvasScrollViewer.ScrollToHome();
         ParameterScrollViewer.ScrollToHome();
         ResultScrollViewer.ScrollToHome();
+        ImageScrollViewer.ScrollToHome();
         InspectorTabControl.SelectedIndex = 0;
         SetCanvasZoom(1.0);
     }
@@ -536,6 +537,11 @@ public partial class MainPage : Page
         var isContinueShortcut = Keyboard.Modifiers == ModifierKeys.None
                                  && (e.Key == Key.F10
                                      || (e.Key == Key.System && e.SystemKey == Key.F10));
+        var isResultImageZoomInShortcut =
+            (Keyboard.Modifiers == ModifierKeys.None && e.Key == Key.Add)
+            || (Keyboard.Modifiers == ModifierKeys.Shift && e.Key == Key.OemPlus);
+        var isResultImageZoomOutShortcut = Keyboard.Modifiers == ModifierKeys.None
+                                           && (e.Key == Key.OemMinus || e.Key == Key.Subtract);
         if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S && ViewModel.SaveCommand.CanExecute(null))
         {
             ViewModel.SaveCommand.Execute(null);
@@ -592,6 +598,20 @@ public partial class MainPage : Page
         else if (!isTextEditorFocused && e.Key == Key.Escape)
         {
             ViewModel.ClearActionSelection();
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && isResultImageZoomInShortcut
+                 && ViewModel.ZoomSelectedResultImageInCommand.CanExecute(null))
+        {
+            ViewModel.ZoomSelectedResultImageInCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (!isTextEditorFocused
+                 && isResultImageZoomOutShortcut
+                 && ViewModel.ZoomSelectedResultImageOutCommand.CanExecute(null))
+        {
+            ViewModel.ZoomSelectedResultImageOutCommand.Execute(null);
             e.Handled = true;
         }
         else if (!isTextEditorFocused

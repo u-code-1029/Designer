@@ -13,17 +13,22 @@ using Microsoft.Extensions.Options;
 namespace DrillFlow.Infrastructure.Persistence;
 
 /// <summary>
-/// Allocates positive Int32 correlation IDs from an atomically replaced state file. A sidecar
-/// file lock serializes allocations made by multiple processes using the same state path.
+/// Allocates positive Int32 correlation IDs from blocks reserved in an atomically replaced
+/// high-water-mark file. A sidecar file lock serializes block reservations made by multiple
+/// processes using the same state path. Unused IDs in a reserved block are intentionally skipped
+/// after a process restart so that an ID which might have escaped the process is never reused.
 /// </summary>
 public sealed class PersistentCorrelationIdProvider : ICorrelationIdProvider, IDisposable
 {
+    private const int ReservationBlockSize = 256;
     private static readonly TimeSpan LockRetryDelay = TimeSpan.FromMilliseconds(25);
 
     private readonly string _stateFilePath;
     private readonly string _lockFilePath;
     private readonly ILogger<PersistentCorrelationIdProvider> _logger;
     private readonly SemaphoreSlim _instanceGate = new(1, 1);
+    private long _nextReservedId = 1;
+    private long _reservedThrough;
     private bool _disposed;
 
     public PersistentCorrelationIdProvider(
@@ -56,24 +61,15 @@ public sealed class PersistentCorrelationIdProvider : ICorrelationIdProvider, ID
         await _instanceGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var directory = Path.GetDirectoryName(_stateFilePath)!;
-            Directory.CreateDirectory(directory);
-
-            using (await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false))
+            if (_nextReservedId > _reservedThrough)
             {
-                var current = await ReadCurrentValueAsync(cancellationToken).ConfigureAwait(false);
-                if (current == int.MaxValue)
-                {
-                    throw new OverflowException(
-                        "The positive Int32 correlation ID range has been exhausted. "
-                        + "The state is not reset automatically because doing so could accept stale responses.");
-                }
-
-                var next = checked(current + 1);
-                await WriteValueAtomicallyAsync(next, cancellationToken).ConfigureAwait(false);
-                _logger.LogDebug("Allocated equipment correlation ID {CorrelationId}.", next);
-                return next;
+                await ReserveBlockAsync(cancellationToken).ConfigureAwait(false);
             }
+
+            var next = checked((int)_nextReservedId);
+            _nextReservedId++;
+            _logger.LogTrace("Allocated equipment correlation ID {CorrelationId}.", next);
+            return next;
         }
         finally
         {
@@ -90,6 +86,39 @@ public sealed class PersistentCorrelationIdProvider : ICorrelationIdProvider, ID
 
         _disposed = true;
         _instanceGate.Dispose();
+    }
+
+    private async Task ReserveBlockAsync(CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(_stateFilePath)!;
+        Directory.CreateDirectory(directory);
+
+        using (await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var currentHighWaterMark = await ReadCurrentValueAsync(cancellationToken).ConfigureAwait(false);
+            if (currentHighWaterMark == int.MaxValue)
+            {
+                throw new OverflowException(
+                    "The positive Int32 correlation ID range has been exhausted. "
+                    + "The state is not reset automatically because doing so could accept stale responses.");
+            }
+
+            var remaining = (long)int.MaxValue - currentHighWaterMark;
+            var reservedCount = (int)Math.Min(ReservationBlockSize, remaining);
+            var newHighWaterMark = checked(currentHighWaterMark + reservedCount);
+
+            // The high-water mark must be durable before any ID in this block can escape the
+            // provider. Cancellation is intentionally not observed between this write completing
+            // and publishing the first in-memory ID.
+            await WriteValueAtomicallyAsync(newHighWaterMark, cancellationToken).ConfigureAwait(false);
+            _nextReservedId = (long)currentHighWaterMark + 1;
+            _reservedThrough = newHighWaterMark;
+
+            _logger.LogDebug(
+                "Reserved equipment correlation ID block {FirstCorrelationId}-{LastCorrelationId}.",
+                _nextReservedId,
+                _reservedThrough);
+        }
     }
 
     private async Task<FileStream> AcquireProcessLockAsync(CancellationToken cancellationToken)

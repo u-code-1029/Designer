@@ -36,6 +36,9 @@ public sealed class WorkflowExecutionFacade : IWorkflowExecutionFacade
 
     public Task RunAsync(WorkflowDocument document) => _runner.RunAsync(document, CancellationToken.None);
 
+    public Task RunSelectedAsync(WorkflowDocument document, Guid actionId) =>
+        _runner.RunSelectedAsync(document, actionId, CancellationToken.None);
+
     public void Continue() => _runner.Continue();
 
     public void Step() => _runner.Step();

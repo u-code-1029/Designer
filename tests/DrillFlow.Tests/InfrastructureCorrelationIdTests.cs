@@ -15,12 +15,40 @@ namespace DrillFlow.Tests;
 public sealed class InfrastructureCorrelationIdTests
 {
     [Fact]
-    public async Task Provider_IsMonotonicAcrossInstancesAndConcurrentAllocations()
+    public async Task Provider_ReservesAHighWaterBlockAndConsumesItInMemory()
     {
         using var directory = new InfrastructureTestDirectory();
+        var statePath = Path.Combine(directory.Path, "correlation.txt");
         var options = Options.Create(new CorrelationIdStoreOptions
         {
-            StateFilePath = Path.Combine(directory.Path, "correlation.txt"),
+            StateFilePath = statePath,
+        });
+
+        using var provider = new PersistentCorrelationIdProvider(
+            options,
+            NullLogger<PersistentCorrelationIdProvider>.Instance);
+
+        Assert.Equal(1, await provider.NextAsync(CancellationToken.None));
+        Assert.Equal("256", File.ReadAllText(statePath));
+
+        for (var expected = 2; expected <= 256; expected++)
+        {
+            Assert.Equal(expected, await provider.NextAsync(CancellationToken.None));
+        }
+
+        Assert.Equal("256", File.ReadAllText(statePath));
+        Assert.Equal(257, await provider.NextAsync(CancellationToken.None));
+        Assert.Equal("512", File.ReadAllText(statePath));
+    }
+
+    [Fact]
+    public async Task Provider_UsesDisjointBlocksAcrossInstancesAndSkipsUnusedIdsAfterRestart()
+    {
+        using var directory = new InfrastructureTestDirectory();
+        var statePath = Path.Combine(directory.Path, "correlation.txt");
+        var options = Options.Create(new CorrelationIdStoreOptions
+        {
+            StateFilePath = statePath,
         });
 
         using var first = new PersistentCorrelationIdProvider(
@@ -29,6 +57,9 @@ public sealed class InfrastructureCorrelationIdTests
         using var second = new PersistentCorrelationIdProvider(
             options,
             NullLogger<PersistentCorrelationIdProvider>.Instance);
+
+        Assert.Equal(1, await first.NextAsync(CancellationToken.None));
+        Assert.Equal(257, await second.NextAsync(CancellationToken.None));
 
         var allocations = new List<Task<int>>();
         for (var index = 0; index < 40; index++)
@@ -39,12 +70,16 @@ public sealed class InfrastructureCorrelationIdTests
         }
 
         var ids = await Task.WhenAll(allocations);
-        Assert.Equal(Enumerable.Range(1, 40), ids.OrderBy(value => value));
+        Assert.Equal(ids.Length, ids.Distinct().Count());
+        Assert.DoesNotContain(1, ids);
+        Assert.DoesNotContain(257, ids);
+        Assert.Equal("512", File.ReadAllText(statePath));
 
         using var afterRestart = new PersistentCorrelationIdProvider(
             options,
             NullLogger<PersistentCorrelationIdProvider>.Instance);
-        Assert.Equal(41, await afterRestart.NextAsync(CancellationToken.None));
+        Assert.Equal(513, await afterRestart.NextAsync(CancellationToken.None));
+        Assert.Equal("768", File.ReadAllText(statePath));
     }
 
     [Fact]
@@ -59,6 +94,64 @@ public sealed class InfrastructureCorrelationIdTests
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => provider.NextAsync(CancellationToken.None));
+
+        Assert.Equal("not-an-id", File.ReadAllText(statePath));
+    }
+
+    [Fact]
+    public async Task Provider_UsesTheRemainingPositiveInt32IdsBeforeReportingExhaustion()
+    {
+        using var directory = new InfrastructureTestDirectory();
+        var statePath = Path.Combine(directory.Path, "correlation.txt");
+        File.WriteAllText(
+            statePath,
+            (int.MaxValue - 2).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var options = Options.Create(new CorrelationIdStoreOptions { StateFilePath = statePath });
+
+        using (var provider = new PersistentCorrelationIdProvider(
+                   options,
+                   NullLogger<PersistentCorrelationIdProvider>.Instance))
+        {
+            Assert.Equal(int.MaxValue - 1, await provider.NextAsync(CancellationToken.None));
+            Assert.Equal(int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                File.ReadAllText(statePath));
+            Assert.Equal(int.MaxValue, await provider.NextAsync(CancellationToken.None));
+            await Assert.ThrowsAsync<OverflowException>(
+                () => provider.NextAsync(CancellationToken.None));
+        }
+
+        using var afterRestart = new PersistentCorrelationIdProvider(
+            options,
+            NullLogger<PersistentCorrelationIdProvider>.Instance);
+        await Assert.ThrowsAsync<OverflowException>(
+            () => afterRestart.NextAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Provider_CancellationWhileWaitingForTheProcessLockDoesNotAdvanceState()
+    {
+        using var directory = new InfrastructureTestDirectory();
+        var statePath = Path.Combine(directory.Path, "correlation.txt");
+        var lockPath = statePath + ".lock";
+        var options = Options.Create(new CorrelationIdStoreOptions { StateFilePath = statePath });
+        using var provider = new PersistentCorrelationIdProvider(
+            options,
+            NullLogger<PersistentCorrelationIdProvider>.Instance);
+
+        using (var heldLock = new FileStream(
+                   lockPath,
+                   FileMode.OpenOrCreate,
+                   FileAccess.ReadWrite,
+                   FileShare.None))
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => provider.NextAsync(cancellation.Token));
+        }
+
+        Assert.False(File.Exists(statePath));
+        Assert.Equal(1, await provider.NextAsync(CancellationToken.None));
+        Assert.Equal("256", File.ReadAllText(statePath));
     }
 }
 
@@ -89,4 +182,3 @@ internal sealed class InfrastructureTestDirectory : IDisposable
         }
     }
 }
-

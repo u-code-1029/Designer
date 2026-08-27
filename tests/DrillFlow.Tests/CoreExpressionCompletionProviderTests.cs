@@ -120,14 +120,15 @@ public sealed class CoreExpressionCompletionProviderTests
 
         Assert.Contains(result.Items, item => item.DisplayText == "index");
         Assert.Contains(result.Items, item => item.DisplayText == "command");
-        Assert.Contains(result.Items, item => item.DisplayText == "position_x");
-        Assert.Contains(result.Items, item => item.DisplayText == "position_y");
+        Assert.Contains(result.Items, item => item.DisplayText == "stage_x");
+        Assert.Contains(result.Items, item => item.DisplayText == "stage_y");
+        Assert.Contains(result.Items, item => item.DisplayText == "image_path");
         Assert.Contains(result.Items, item => item.DisplayText == "laser_distance");
         Assert.Single(result.Items, item => item.DisplayText == "command");
     }
 
     [Fact]
-    public void ResultCompletion_UsesCommandSpecificTestResponseFields()
+    public void ResultCompletion_UsesCommonEquipmentResponseFields()
     {
         var move = Move("move_1");
         var measure = new MeasureNode { Key = "measure_1" };
@@ -140,8 +141,14 @@ public sealed class CoreExpressionCompletionProviderTests
         var drillItems = Complete(document, current, "=drill_1.result.")
             .Items.Select(item => item.DisplayText).ToArray();
 
-        Assert.Contains("measured_distance", measureItems);
-        Assert.Contains("drill_result_path", drillItems);
+        Assert.Contains("stage_x", measureItems);
+        Assert.Contains("stage_y", measureItems);
+        Assert.Contains("image_path", measureItems);
+        Assert.Contains("stage_x", drillItems);
+        Assert.Contains("stage_y", drillItems);
+        Assert.Contains("image_path", drillItems);
+        Assert.DoesNotContain("measured_distance", measureItems);
+        Assert.DoesNotContain("drill_result_path", drillItems);
     }
 
     [Fact]

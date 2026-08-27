@@ -89,11 +89,49 @@ public sealed class WorkflowRunner : IWorkflowRunner
 
     public event EventHandler<WorkflowNodeStateChangedEventArgs>? NodeStateChanged;
 
-    public async Task RunAsync(WorkflowDocument document, CancellationToken cancellationToken = default)
+    public Task RunAsync(WorkflowDocument document, CancellationToken cancellationToken = default)
+    {
+        return RunCoreAsync(document, selectedActionId: null, startNewRun: true, cancellationToken);
+    }
+
+    public Task RunSelectedAsync(
+        WorkflowDocument document,
+        Guid actionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (actionId == Guid.Empty)
+        {
+            throw new ArgumentException("A selected action must have a non-empty ID.", nameof(actionId));
+        }
+
+        return RunCoreAsync(document, actionId, startNewRun: false, cancellationToken);
+    }
+
+    private async Task RunCoreAsync(
+        WorkflowDocument document,
+        Guid? selectedActionId,
+        bool startNewRun,
+        CancellationToken cancellationToken)
     {
         if (document == null)
         {
             throw new ArgumentNullException(nameof(document));
+        }
+
+        var executionNodes = document.Nodes ?? new List<WorkflowNode>();
+        if (selectedActionId is Guid actionId)
+        {
+            var selectedNode = document
+                .EnumerateNodesDepthFirst()
+                .FirstOrDefault(node => node.Id == actionId);
+            if (selectedNode == null)
+            {
+                throw new ArgumentException(
+                    $"The selected action '{actionId}' does not exist in the workflow document.",
+                    nameof(selectedActionId));
+            }
+
+            executionNodes = new List<WorkflowNode> { selectedNode };
         }
 
         lock (_sync)
@@ -110,7 +148,10 @@ public sealed class WorkflowRunner : IWorkflowRunner
             _stepActive = false;
             _document = document;
             _currentNode = null;
-            _evaluatedParameters.Clear();
+            if (startNewRun || Results.CurrentRunId == null)
+            {
+                _evaluatedParameters.Clear();
+            }
             _localStopSource = new CancellationTokenSource();
             _forceStopSource = new CancellationTokenSource();
         }
@@ -138,12 +179,25 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 throw new WorkflowExecutionException(message);
             }
 
-            var runId = Results.StartNewRun();
-            _logger.LogInformation("Starting workflow {WorkflowId} as run {RunId}", document.Id, runId);
+            var runId = startNewRun || Results.CurrentRunId == null
+                ? Results.StartNewRun()
+                : Results.CurrentRunId.Value;
+            if (selectedActionId is Guid selectedId)
+            {
+                _logger.LogInformation(
+                    "Running selected action {ActionId} in workflow {WorkflowId} as continuing run {RunId}",
+                    selectedId,
+                    document.Id,
+                    runId);
+            }
+            else
+            {
+                _logger.LogInformation("Starting workflow {WorkflowId} as run {RunId}", document.Id, runId);
+            }
             ChangeState(WorkflowRunState.Running, "Workflow started.");
 
             var outcome = await ExecuteSequenceAsync(
-                    document.Nodes ?? new List<WorkflowNode>(),
+                    executionNodes,
                     new List<int>(),
                     runCancellation.Token)
                 .ConfigureAwait(false);
@@ -168,10 +222,10 @@ public sealed class WorkflowRunner : IWorkflowRunner
         }
         catch (OperationCanceledException) when (IsForceStopRequested())
         {
-            _logger.LogWarning(
-                "Workflow run {RunId} was force-stopped; no equipment abort command was published.",
+            _logger.LogInformation(
+                "Workflow run {RunId} was stopped immediately; no equipment abort command was published.",
                 CurrentRunId);
-            ChangeState(WorkflowRunState.Stopped, "Workflow force-stopped.");
+            ChangeState(WorkflowRunState.Stopped, "Workflow stopped.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -228,34 +282,6 @@ public sealed class WorkflowRunner : IWorkflowRunner
     {
         TaskCompletionSource<DebugResumeMode>? pauseSource;
         CancellationTokenSource? localStopSource;
-        var shouldChangeState = false;
-
-        lock (_sync)
-        {
-            if (!_runActive || IsTerminal(_state))
-            {
-                return;
-            }
-
-            _stopRequested = true;
-            pauseSource = _pauseSource;
-            localStopSource = _localStopSource;
-            shouldChangeState = _state != WorkflowRunState.Stopping;
-            localStopSource?.Cancel();
-        }
-
-        if (shouldChangeState)
-        {
-            ChangeState(WorkflowRunState.Stopping, "Finishing the current equipment action before stopping.");
-        }
-
-        pauseSource?.TrySetResult(DebugResumeMode.Continue);
-    }
-
-    public void ForceStop()
-    {
-        TaskCompletionSource<DebugResumeMode>? pauseSource;
-        CancellationTokenSource? localStopSource;
         CancellationTokenSource? forceStopSource;
 
         lock (_sync)
@@ -273,16 +299,16 @@ public sealed class WorkflowRunner : IWorkflowRunner
         }
 
         // Publish Stopping before cancellation can complete the run. ChangeState serializes
-        // state notifications and refuses a terminal-to-Stopping regression if normal completion
-        // won the race.
-        ChangeState(WorkflowRunState.Stopping, "Force-stopping workflow.");
+        // notifications and rejects a terminal-to-Stopping regression if completion won the race.
+        ChangeState(WorkflowRunState.Stopping, "Stopping the current action immediately.");
 
-        // Cancel outside the runner lock. Cancellation callbacks are allowed to execute
-        // synchronously and may themselves query runner state.
+        // Cancel outside the runner lock because callbacks may synchronously query runner state.
         TryCancel(localStopSource);
         TryCancel(forceStopSource);
         pauseSource?.TrySetCanceled();
     }
+
+    public void ForceStop() => RequestStop();
 
     private async Task<SequenceOutcome> ExecuteSequenceAsync(
         IEnumerable<WorkflowNode> nodes,
@@ -303,8 +329,24 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 continue;
             }
 
-            if (!await PauseBeforeNodeAsync(node, iterationPath, cancellationToken).ConfigureAwait(false))
+            bool shouldExecute;
+            try
             {
+                shouldExecute = await PauseBeforeNodeAsync(node, iterationPath, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // A breakpoint is raised before SetCurrentNode/ExecuteNodeAsync. Without an
+                // explicit transition here, an immediate Stop leaves the card permanently marked
+                // Paused even though the run itself is already terminal.
+                RaiseNodeState(node, WorkflowNodeExecutionState.Stopped, FormatPath(iterationPath));
+                throw;
+            }
+
+            if (!shouldExecute)
+            {
+                RaiseNodeState(node, WorkflowNodeExecutionState.Stopped, FormatPath(iterationPath));
                 return SequenceOutcome.Stop;
             }
 
@@ -424,7 +466,18 @@ public sealed class WorkflowRunner : IWorkflowRunner
             index,
             node.Key);
 
-        var response = await _transport.ExchangeAsync(request, cancellationToken).ConfigureAwait(false);
+        var exchange = _transport.ExchangeAsync(request, cancellationToken);
+        var response = await AwaitEquipmentExchangeOrStopAsync(
+                exchange,
+                request,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (response.Index != request.Index)
+        {
+            throw new WorkflowExecutionException(
+                $"Equipment response index {response.Index} does not match request index {request.Index}.");
+        }
+
         var values = response.Properties.ToDictionary(
             pair => pair.Key,
             pair => pair.Value,
@@ -434,6 +487,70 @@ public sealed class WorkflowRunner : IWorkflowRunner
         RaiseNodeState(node, WorkflowNodeExecutionState.Completed, FormatPath(iterationPath), result);
         MarkStepComplete();
         return SequenceOutcome.Continue;
+    }
+
+    private async Task<EquipmentResponseMessage> AwaitEquipmentExchangeOrStopAsync(
+        Task<EquipmentResponseMessage> exchange,
+        EquipmentRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        if (exchange.IsCompleted)
+        {
+            // The response won before we installed the cancellation race. Preserve that normal
+            // completion even if Stop is requested just before this continuation is scheduled.
+            return await exchange.ConfigureAwait(false);
+        }
+
+        var cancellationSignal = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using (cancellationToken.Register(() => cancellationSignal.TrySetResult(true)))
+        {
+            var winner = await Task.WhenAny(exchange, cancellationSignal.Task).ConfigureAwait(false);
+            if (ReferenceEquals(winner, exchange))
+            {
+                // Task.WhenAny gives us the ordering boundary. Once the exchange wins, do not
+                // retroactively turn its valid response into cancellation merely because Stop
+                // arrives before this continuation runs.
+                return await exchange.ConfigureAwait(false);
+            }
+        }
+
+        // A custom or OS-blocked transport may not return promptly even though its token has been
+        // canceled. The run must still become terminal on the first Stop. Observe the late task so
+        // it cannot raise an unobserved exception; FileEquipmentTransport retains its own lock and
+        // performs ownership-checked request cleanup before allowing another publisher through.
+        _ = ObserveStoppedEquipmentExchangeAsync(exchange, request);
+        throw new OperationCanceledException(cancellationToken);
+    }
+
+    private async Task ObserveStoppedEquipmentExchangeAsync(
+        Task<EquipmentResponseMessage> exchange,
+        EquipmentRequestMessage request)
+    {
+        try
+        {
+            await exchange.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected after an operator Stop.
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                _logger.LogWarning(
+                    exception,
+                    "The canceled equipment exchange for command {Command} with correlation ID "
+                    + "{CorrelationId} completed late.",
+                    request.Command,
+                    request.Index);
+            }
+            catch (Exception)
+            {
+                // Host shutdown can dispose logging providers before a blocked OS call returns.
+            }
+        }
     }
 
     private async Task<SequenceOutcome> ExecuteDelayAsync(
@@ -500,50 +617,112 @@ public sealed class WorkflowRunner : IWorkflowRunner
         };
         RememberParameters(node, parameters);
 
-        CancellationToken localStopToken;
-        lock (_sync)
+        var request = new HttpActionRequest(
+            method,
+            url,
+            headers,
+            body,
+            TimeSpan.FromMilliseconds(timeoutMilliseconds));
+
+        // IHttpActionExecutor implementations normally become asynchronous at SendAsync, but a
+        // custom executor (or response-body reader) is allowed to do synchronous work first and
+        // may ignore cancellation afterward. Start the entire call off the WPF caller and race
+        // its returned task with the run token so the first Stop is always terminal promptly.
+        var execution = Task.Run(
+            () => _httpActions.ExecuteAsync(request, cancellationToken),
+            CancellationToken.None);
+        var response = await AwaitHttpActionOrStopAsync(execution, request, cancellationToken)
+            .ConfigureAwait(false);
+
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
-            localStopToken = _localStopSource?.Token ?? CancellationToken.None;
+            ["status_code"] = response.StatusCode,
+            ["is_success"] = response.IsSuccessStatusCode,
+            ["reason_phrase"] = response.ReasonPhrase,
+            ["headers"] = response.Headers,
+            ["body_text"] = response.Body,
+            ["content_type"] = response.ContentType,
+            ["json"] = response.Json
+        };
+        var result = RecordResult(node, 0, iterationPath, values);
+        RaiseNodeState(node, WorkflowNodeExecutionState.Completed, FormatPath(iterationPath), result);
+        MarkStepComplete();
+        return SequenceOutcome.Continue;
+    }
+
+    private async Task<HttpActionResponse> AwaitHttpActionOrStopAsync(
+        Task<HttpActionResponse> execution,
+        HttpActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (execution.IsCompleted)
+        {
+            return await execution.ConfigureAwait(false);
         }
 
-        using (var httpCancellation =
-               CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, localStopToken))
+        var cancellationSignal = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using (cancellationToken.Register(() => cancellationSignal.TrySetResult(true)))
         {
-            HttpActionResponse response;
+            var winner = await Task.WhenAny(execution, cancellationSignal.Task).ConfigureAwait(false);
+            if (ReferenceEquals(winner, execution))
+            {
+                return await execution.ConfigureAwait(false);
+            }
+        }
+
+        _ = ObserveStoppedHttpActionAsync(execution, request);
+        throw new OperationCanceledException(cancellationToken);
+    }
+
+    private async Task ObserveStoppedHttpActionAsync(
+        Task<HttpActionResponse> execution,
+        HttpActionRequest request)
+    {
+        try
+        {
+            await execution.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when the HTTP stack honors the operator Stop.
+        }
+        catch (Exception exception)
+        {
             try
             {
-                response = await _httpActions.ExecuteAsync(
-                        new HttpActionRequest(
-                            method,
-                            url,
-                            headers,
-                            body,
-                            TimeSpan.FromMilliseconds(timeoutMilliseconds)),
-                        httpCancellation.Token)
-                    .ConfigureAwait(false);
+                _logger.LogWarning(
+                    "The canceled designer HTTP action {Method} {Url} completed late with "
+                    + "{ExceptionType}.",
+                    request.Method,
+                    GetSafeHttpLogUrl(request.Url),
+                    exception.GetType().FullName ?? exception.GetType().Name);
             }
-            catch (OperationCanceledException) when (
-                localStopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            catch (Exception)
             {
-                RaiseNodeState(node, WorkflowNodeExecutionState.Stopped, FormatPath(iterationPath));
-                return SequenceOutcome.Stop;
+                // Host shutdown can dispose logging providers before a blocked task returns.
             }
-
-            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["status_code"] = response.StatusCode,
-                ["is_success"] = response.IsSuccessStatusCode,
-                ["reason_phrase"] = response.ReasonPhrase,
-                ["headers"] = response.Headers,
-                ["body_text"] = response.Body,
-                ["content_type"] = response.ContentType,
-                ["json"] = response.Json
-            };
-            var result = RecordResult(node, 0, iterationPath, values);
-            RaiseNodeState(node, WorkflowNodeExecutionState.Completed, FormatPath(iterationPath), result);
-            MarkStepComplete();
-            return SequenceOutcome.Continue;
         }
+    }
+
+    private static string GetSafeHttpLogUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            return "<invalid-url>";
+        }
+
+        // Uri.GetLeftPart(UriPartial.Path) can retain user-info from the authority. Rebuild the
+        // URI explicitly so late-task diagnostics never expose credentials, query tokens, or a
+        // fragment while still identifying the host/path that needs investigation.
+        var safe = new UriBuilder(uri)
+        {
+            UserName = string.Empty,
+            Password = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty
+        };
+        return safe.Uri.GetLeftPart(UriPartial.Path);
     }
 
     private async Task<SequenceOutcome> ExecuteRepeatAsync(

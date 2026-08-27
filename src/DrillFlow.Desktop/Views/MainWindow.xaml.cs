@@ -12,16 +12,19 @@ namespace DrillFlow.Desktop.Views;
 public partial class MainWindow : FluentWindow
 {
     private readonly MainPageViewModel _mainPageViewModel;
+    private readonly LiveInteractionPageViewModel _liveInteractionPageViewModel;
     private bool _allowClose;
     private bool _closePending;
 
     public MainWindow(
         MainWindowViewModel viewModel,
         MainPageViewModel mainPageViewModel,
+        LiveInteractionPageViewModel liveInteractionPageViewModel,
         INavigationViewPageProvider pageProvider)
     {
         InitializeComponent();
         _mainPageViewModel = mainPageViewModel;
+        _liveInteractionPageViewModel = liveInteractionPageViewModel;
         DataContext = viewModel;
         RootNavigation.SetPageProviderService(pageProvider);
         RootNavigation.Navigated += (_, _) => DisableOuterPageScrolling();
@@ -78,6 +81,7 @@ public partial class MainWindow : FluentWindow
         {
             if (await _mainPageViewModel.PrepareForCloseAsync())
             {
+                await _liveInteractionPageViewModel.ShutdownAsync();
                 _allowClose = true;
                 Close();
             }

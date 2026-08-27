@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Globalization;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -20,6 +21,7 @@ public sealed class SettingsPageViewModel : ObservableObject
     private readonly IApplicationThemeService _themeService;
     private readonly EquipmentCommunicationOptions _liveOptions;
     private readonly IWorkflowExecutionFacade _execution;
+    private readonly LiveInteractionPageViewModel _liveInteraction;
     private readonly IFileDialogService _fileDialogs;
     private readonly IExchangeFolderLauncher _exchangeFolderLauncher;
     private readonly ILogger<SettingsPageViewModel> _logger;
@@ -29,12 +31,13 @@ public sealed class SettingsPageViewModel : ObservableObject
     private string _requestFileName = "request.json";
     private string _responseFileName = "response.json";
     private string _equipmentRequestHandling = "RetainUntilOverwritten";
+    private string _appRequestHandling = "DeleteAfterResponse";
     private string _appResponseHandling = "DeleteAfterRead";
     private string _responseTimeoutMilliseconds = "30000";
     private bool _retryEnabled;
     private string _maximumRetryCount = "1";
     private string _retryIntervalMilliseconds = "1000";
-    private string _pollingIntervalMilliseconds = "250";
+    private string _pollingIntervalMilliseconds = "50";
     private bool _isExecutionBusy;
     private string _validationMessage = string.Empty;
     private string _statusMessage = string.Empty;
@@ -47,6 +50,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         IApplicationThemeService themeService,
         IOptions<EquipmentCommunicationOptions> liveOptions,
         IWorkflowExecutionFacade execution,
+        LiveInteractionPageViewModel liveInteraction,
         IFileDialogService fileDialogs,
         IExchangeFolderLauncher exchangeFolderLauncher,
         ILogger<SettingsPageViewModel> logger)
@@ -56,6 +60,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         _themeService = themeService;
         _liveOptions = liveOptions.Value;
         _execution = execution;
+        _liveInteraction = liveInteraction;
         _fileDialogs = fileDialogs;
         _exchangeFolderLauncher = exchangeFolderLauncher;
         _logger = logger;
@@ -81,6 +86,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
         IsExecutionBusy = IsBusyState(_execution.State);
         _execution.RunStateChanged += (_, eventArgs) => Dispatch(() => IsExecutionBusy = IsBusyState(eventArgs.State));
+        _liveInteraction.PropertyChanged += OnLiveInteractionPropertyChanged;
         _localization.LanguageChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(ValidationMessage));
@@ -114,6 +120,12 @@ public sealed class SettingsPageViewModel : ObservableObject
     public string[] AppResponseHandlingChoices { get; } =
     {
         "DeleteAfterRead",
+        "RetainUntilOverwritten"
+    };
+
+    public string[] AppRequestHandlingChoices { get; } =
+    {
+        "DeleteAfterResponse",
         "RetainUntilOverwritten"
     };
 
@@ -170,6 +182,12 @@ public sealed class SettingsPageViewModel : ObservableObject
     {
         get => _appResponseHandling;
         set => SetProperty(ref _appResponseHandling, value ?? string.Empty);
+    }
+
+    public string AppRequestHandling
+    {
+        get => _appRequestHandling;
+        set => SetProperty(ref _appRequestHandling, value ?? string.Empty);
     }
 
     public string ResponseTimeoutMilliseconds
@@ -266,7 +284,9 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
     }
 
-    public bool CanEditSettings => !IsExecutionBusy && !IsTesting;
+    public bool CanEditSettings => !IsExecutionBusy
+                                   && !IsTesting
+                                   && !_liveInteraction.IsInteractionActive;
 
     private void Load()
     {
@@ -282,6 +302,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         // keeps the validated fallback live options in that case; silently normalizing here
         // would overwrite those safe options as soon as this view model is constructed.
         EquipmentRequestHandling = communication.EquipmentRequestHandling;
+        AppRequestHandling = communication.AppRequestHandling;
         AppResponseHandling = communication.AppResponseHandling;
         ResponseTimeoutMilliseconds = communication.ResponseTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture);
         RetryEnabled = communication.RetryEnabled;
@@ -399,6 +420,9 @@ public sealed class SettingsPageViewModel : ObservableObject
         else if (!EquipmentRequestHandlingChoices.Contains(
                      EquipmentRequestHandling,
                      StringComparer.OrdinalIgnoreCase)
+                 || !AppRequestHandlingChoices.Contains(
+                     AppRequestHandling,
+                     StringComparer.OrdinalIgnoreCase)
                  || !AppResponseHandlingChoices.Contains(
                      AppResponseHandling,
                      StringComparer.OrdinalIgnoreCase))
@@ -428,6 +452,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         RequestFileName = RequestFileName.Trim(),
         ResponseFileName = ResponseFileName.Trim(),
         EquipmentRequestHandling = EquipmentRequestHandling,
+        AppRequestHandling = AppRequestHandling,
         AppResponseHandling = AppResponseHandling,
         ResponseTimeoutMilliseconds = int.Parse(ResponseTimeoutMilliseconds, CultureInfo.InvariantCulture),
         RetryEnabled = RetryEnabled,
@@ -473,6 +498,11 @@ public sealed class SettingsPageViewModel : ObservableObject
             out var requestLifecycle)
             ? requestLifecycle
             : EquipmentRequestFileLifecycle.RetainUntilOverwritten;
+        _liveOptions.ApplicationRequestLifecycle = Enum.TryParse<ApplicationRequestFileLifecycle>(
+            settings.AppRequestHandling,
+            out var applicationRequestLifecycle)
+            ? applicationRequestLifecycle
+            : ApplicationRequestFileLifecycle.DeleteAfterResponse;
         _liveOptions.ApplicationResponseLifecycle = Enum.TryParse<ApplicationResponseFileLifecycle>(
             settings.AppResponseHandling,
             out var responseLifecycle)
@@ -570,6 +600,33 @@ public sealed class SettingsPageViewModel : ObservableObject
             or DrillFlow.Application.Execution.WorkflowRunState.Running
             or DrillFlow.Application.Execution.WorkflowRunState.Paused
             or DrillFlow.Application.Execution.WorkflowRunState.Stopping;
+
+    private void OnLiveInteractionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(e.PropertyName)
+            && !string.Equals(
+                e.PropertyName,
+                nameof(LiveInteractionPageViewModel.IsInteractionActive),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Dispatch(() =>
+        {
+            if (_liveInteraction.IsInteractionActive)
+            {
+                StatusMessage = _localization["SettingsBusy"];
+                StatusIsError = false;
+            }
+
+            SaveCommand.NotifyCanExecuteChanged();
+            TestConnectionCommand.NotifyCanExecuteChanged();
+            BrowseFolderCommand.NotifyCanExecuteChanged();
+            OpenFolderCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanEditSettings));
+        });
+    }
 
     private static void Dispatch(Action action)
     {

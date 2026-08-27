@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Desktop.Services;
@@ -10,6 +13,7 @@ namespace DrillFlow.Desktop.ViewModels;
 
 public sealed class RuntimeResultViewModel : ObservableObject
 {
+    private const string ImagePathField = "image_path";
     private string _actionAlias;
 
     public RuntimeResultViewModel(
@@ -31,9 +35,13 @@ public sealed class RuntimeResultViewModel : ObservableObject
                 pair.Value,
                 localization))
             .ToArray();
+        SummaryFields = Fields
+            .Where(field => !IsInternalRawField(field.Name))
+            .ToArray();
 
         RequestJson = ReadSpecialValue(result, "request_json");
         ResponseJson = ReadSpecialValue(result, "response_json");
+        ImagePath = ReadSpecialValue(result, ImagePathField);
     }
 
     public int CorrelationId { get; }
@@ -50,9 +58,15 @@ public sealed class RuntimeResultViewModel : ObservableObject
 
     public IReadOnlyList<RuntimeResultFieldViewModel> Fields { get; }
 
+    public IReadOnlyList<RuntimeResultFieldViewModel> SummaryFields { get; }
+
+    public bool HasSummaryFields => SummaryFields.Count > 0;
+
     public string RequestJson { get; }
 
     public string ResponseJson { get; }
+
+    public string ImagePath { get; }
 
     public void UpdateActionAlias(string actionAlias)
     {
@@ -71,8 +85,49 @@ public sealed class RuntimeResultViewModel : ObservableObject
         }
     }
 
+    internal void NotifyLanguageChanged()
+    {
+        foreach (var field in Fields)
+        {
+            field.NotifyLanguageChanged();
+        }
+    }
+
     private static string ReadSpecialValue(ActionExecutionResult result, string key)
     {
         return result.Values.TryGetValue(key, out var value) ? Convert.ToString(value) ?? string.Empty : string.Empty;
+    }
+
+    private static bool IsInternalRawField(string name) =>
+        string.Equals(name, "request_json", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "response_json", StringComparison.OrdinalIgnoreCase);
+
+    internal async Task<ImageSource?> LoadImageAsync(
+        ILiveImageDecoder imageDecoder,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(ImagePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var image = await LiveImageFileLoader.LoadAsync(
+                    ImagePath,
+                    imageDecoder,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return image.ImageSource;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // A response may contain a malformed or unsupported path.
+            return null;
+        }
     }
 }

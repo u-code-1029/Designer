@@ -49,6 +49,8 @@ public sealed class CommunicationSettings
 
     public string EquipmentRequestHandling { get; set; } = "RetainUntilOverwritten";
 
+    public string AppRequestHandling { get; set; } = "DeleteAfterResponse";
+
     public string AppResponseHandling { get; set; } = "DeleteAfterRead";
 
     public int ResponseTimeoutMilliseconds { get; set; } = 30000;
@@ -59,7 +61,7 @@ public sealed class CommunicationSettings
 
     public int RetryIntervalMilliseconds { get; set; } = 1000;
 
-    public int PollingIntervalMilliseconds { get; set; } = 250;
+    public int PollingIntervalMilliseconds { get; set; } = 50;
 
     public CommunicationSettings Clone() => (CommunicationSettings)MemberwiseClone();
 }

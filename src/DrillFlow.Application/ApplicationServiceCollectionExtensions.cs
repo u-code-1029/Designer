@@ -1,4 +1,5 @@
 using DrillFlow.Application.Execution;
+using DrillFlow.Application.LiveInteraction;
 using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Core.Validation;
@@ -14,6 +15,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<RunResultStore>();
         services.AddSingleton<IWorkflowRunner, WorkflowRunner>();
+        services.AddSingleton<ILiveInteractionSession, LiveInteractionSession>();
         return services;
     }
 }

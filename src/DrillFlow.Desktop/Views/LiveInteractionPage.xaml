@@ -1,0 +1,406 @@
+<Page x:Class="DrillFlow.Desktop.Views.LiveInteractionPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Background="{DynamicResource DrillCanvasBrush}"
+      HorizontalAlignment="Stretch"
+      VerticalAlignment="Stretch"
+      ScrollViewer.CanContentScroll="False"
+      ShowsNavigationUI="False"
+      Loaded="Page_Loaded"
+      Unloaded="Page_Unloaded">
+    <Page.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Page.Resources>
+
+    <Grid Margin="28,22,28,28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="16" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="18" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="{DynamicResource LiveInteractionTitle}"
+                           Style="{StaticResource PageTitleStyle}" />
+                <TextBlock Text="{DynamicResource LiveInteractionSubtitle}"
+                           Style="{StaticResource CaptionTextStyle}"
+                           Margin="0,5,0,0" />
+            </StackPanel>
+            <Border Grid.Column="1"
+                    Padding="12,6"
+                    CornerRadius="14"
+                    Background="{DynamicResource DrillAccentSoftBrush}"
+                    VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Width="8" Height="8" Margin="0,0,8,0">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{DynamicResource DrillSecondaryTextBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsLive}" Value="True">
+                                        <Setter Property="Fill" Value="{DynamicResource DrillSuccessBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock Text="{Binding StatusMessage}"
+                               Foreground="{DynamicResource DrillTextBrush}"
+                               VerticalAlignment="Center"
+                               MaxWidth="460"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <ui:Card Grid.Row="2" Padding="12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="1" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <ui:Button Grid.Column="0"
+                           Content="{DynamicResource LiveStart}"
+                           Command="{Binding StartCommand}"
+                           Appearance="Primary"
+                           Margin="0,0,8,0">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="Play24" />
+                    </ui:Button.Icon>
+                </ui:Button>
+                <ui:Button Grid.Column="1"
+                           Content="{DynamicResource LiveStop}"
+                           Command="{Binding StopCommand}">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="Stop24" />
+                    </ui:Button.Icon>
+                </ui:Button>
+                <Separator Grid.Column="2"
+                           Style="{StaticResource ToolbarSeparatorStyle}"
+                           Margin="12,4" />
+                <ui:Button Grid.Column="3"
+                           Content="{DynamicResource LiveCapture}"
+                           Command="{Binding CaptureCommand}">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="Record24" />
+                    </ui:Button.Icon>
+                </ui:Button>
+
+                <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ui:ProgressRing Width="18"
+                                     Height="18"
+                                     IsIndeterminate="True"
+                                     Foreground="{DynamicResource DrillAccentBrush}"
+                                     Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
+                    <TextBlock Text="{DynamicResource LiveFrameCount}"
+                               Margin="12,0,5,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextStyle}" />
+                    <TextBlock Text="{Binding FrameCount}"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text="{DynamicResource LiveLastFrame}"
+                               Margin="18,0,5,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextStyle}" />
+                    <TextBlock Text="{Binding LastFrameAtText}"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+
+                <Border Grid.Row="1"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="6"
+                        Margin="0,11,0,0"
+                        Padding="0,11,0,0"
+                        BorderBrush="{DynamicResource DrillBorderBrush}"
+                        BorderThickness="0,1,0,0">
+                    <WrapPanel VerticalAlignment="Center">
+                        <ui:Button Content="{DynamicResource OpenExchangeFolder}"
+                                   Command="{Binding OpenExchangeFolderCommand}"
+                                   Margin="0,0,8,0"
+                                   ToolTip="{DynamicResource OpenExchangeFolder}"
+                                   AutomationProperties.Name="{DynamicResource OpenExchangeFolder}">
+                            <ui:Button.Icon>
+                                <ui:SymbolIcon Symbol="FolderOpen24" />
+                            </ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Content="{DynamicResource LiveGenerateSingleFrameResponse}"
+                                   Command="{Binding GenerateSingleFrameResponseCommand}"
+                                   Margin="0,0,16,0"
+                                   ToolTip="{DynamicResource LiveGenerateSingleFrameResponseHint}"
+                                   AutomationProperties.Name="{DynamicResource LiveGenerateSingleFrameResponse}">
+                            <ui:Button.Icon>
+                                <ui:SymbolIcon Symbol="Image24" />
+                            </ui:Button.Icon>
+                        </ui:Button>
+                        <ui:ToggleSwitch IsChecked="{Binding IsContinuousResponseGenerationEnabled, Mode=TwoWay}"
+                                         OffContent="{DynamicResource LiveContinuousResponseGeneration}"
+                                         OnContent="{DynamicResource LiveContinuousResponseGeneration}"
+                                         ToolTip="{DynamicResource LiveContinuousResponseGenerationHint}"
+                                         AutomationProperties.Name="{DynamicResource LiveContinuousResponseGeneration}" />
+                    </WrapPanel>
+                </Border>
+            </Grid>
+        </ui:Card>
+
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="480" />
+                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="360" MinWidth="320" />
+            </Grid.ColumnDefinitions>
+
+            <ui:Card Grid.Column="0"
+                     Padding="0"
+                     HorizontalContentAlignment="Stretch"
+                     VerticalContentAlignment="Stretch">
+                <Grid x:Name="ImageViewport"
+                      MinHeight="420"
+                      Background="{DynamicResource DrillOpaqueSurfaceBrush}"
+                      ClipToBounds="True">
+                    <Image x:Name="LiveImage"
+                           Source="{Binding LiveImageSource}"
+                           Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           MouseLeftButtonDown="LiveImage_MouseLeftButtonDown"
+                           SizeChanged="LiveImage_SizeChanged"
+                           Cursor="Cross" />
+
+                    <Border IsHitTestVisible="False"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Padding="28"
+                            CornerRadius="10"
+                            Background="{DynamicResource DrillSubtleBrush}">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasImage}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel HorizontalAlignment="Center">
+                            <ui:SymbolIcon Symbol="Image24"
+                                           FontSize="38"
+                                           Foreground="{DynamicResource DrillSecondaryTextBrush}" />
+                            <TextBlock Text="{DynamicResource LiveNoImage}"
+                                       Margin="0,12,0,0"
+                                       Foreground="{DynamicResource DrillSecondaryTextBrush}"
+                                       TextAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+
+                    <Canvas x:Name="TargetOverlay" IsHitTestVisible="False">
+                        <Ellipse x:Name="TargetCircle"
+                                 Width="28"
+                                 Height="28"
+                                 Stroke="{DynamicResource DrillDangerBrush}"
+                                 StrokeThickness="2"
+                                 Fill="#22FF3344"
+                                 Visibility="Collapsed" />
+                        <Line x:Name="TargetHorizontal"
+                              X1="-18" X2="18" Y1="0" Y2="0"
+                              Stroke="{DynamicResource DrillDangerBrush}"
+                              StrokeThickness="2"
+                              Visibility="Collapsed" />
+                        <Line x:Name="TargetVertical"
+                              X1="0" X2="0" Y1="-18" Y2="18"
+                              Stroke="{DynamicResource DrillDangerBrush}"
+                              StrokeThickness="2"
+                              Visibility="Collapsed" />
+                    </Canvas>
+
+                    <Border VerticalAlignment="Bottom"
+                            Margin="12"
+                            Padding="10,6"
+                            CornerRadius="6"
+                            Background="#B0000000"
+                            IsHitTestVisible="False">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{DynamicResource LiveDoubleClickHint}"
+                                       Foreground="White"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding ImageDimensionsText}"
+                                       Foreground="#CCFFFFFF"
+                                       Margin="16,0,0,0" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </ui:Card>
+
+            <ScrollViewer Grid.Column="2"
+                          CanContentScroll="False"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          PanningMode="VerticalOnly">
+                <StackPanel>
+                    <ui:Card Padding="18" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource LivePixelCalibration}"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="{DynamicResource LivePixelPitch}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="92" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0"
+                                         Text="{Binding PixelPitchText, UpdateSourceTrigger=PropertyChanged}" />
+                                <ComboBox Grid.Column="2"
+                                          SelectedValue="{Binding PixelPitchUnit}"
+                                          SelectedValuePath="Tag">
+                                    <ComboBoxItem Tag="m" Content="m" />
+                                    <ComboBoxItem Tag="mm" Content="mm" />
+                                    <ComboBoxItem Tag="um" Content="µm" />
+                                    <ComboBoxItem Tag="nm" Content="nm" />
+                                </ComboBox>
+                            </Grid>
+                            <TextBlock Text="{Binding PixelPitchValidationMessage}"
+                                       Foreground="{DynamicResource DrillDangerBrush}"
+                                       FontSize="12"
+                                       Margin="0,6,0,0" />
+
+                            <CheckBox Content="{DynamicResource LiveInvertX}"
+                                      IsChecked="{Binding InvertXAxis}"
+                                      Margin="0,14,0,4" />
+                            <CheckBox Content="{DynamicResource LiveInvertY}"
+                                      IsChecked="{Binding InvertYAxis}" />
+                            <ui:InfoBar Title="{DynamicResource LiveAxisConvention}"
+                                        IsOpen="True"
+                                        IsClosable="False"
+                                        Severity="Informational"
+                                        Margin="0,14,0,0" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Padding="18" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource LiveStagePosition}"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="stage_x"
+                                               Style="{StaticResource FieldLabelStyle}" />
+                                    <TextBlock Text="{Binding StageXText}"
+                                               FontFamily="Consolas"
+                                               FontWeight="SemiBold" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="stage_y"
+                                               Style="{StaticResource FieldLabelStyle}" />
+                                    <TextBlock Text="{Binding StageYText}"
+                                               FontFamily="Consolas"
+                                               FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource DrillSecondaryTextBrush}">
+                                <Run Text="index: " />
+                                <Run Text="{Binding LastCorrelationId, Mode=OneWay}" FontWeight="SemiBold" />
+                            </TextBlock>
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Padding="18" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource LiveTargetMove}"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="{DynamicResource LiveTargetPixel}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBlock Text="{Binding TargetPixelText}"
+                                       FontFamily="Consolas" />
+                            <TextBlock Text="{DynamicResource LiveRelativeMove}"
+                                       Style="{StaticResource FieldLabelStyle}"
+                                       Margin="0,12,0,0" />
+                            <TextBlock Text="{Binding TargetMoveText}"
+                                       FontFamily="Consolas"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Padding="18" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="{DynamicResource LiveCaptureResult}"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="{DynamicResource LiveSavedPath}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0"
+                                         Text="{Binding SavedImagePath, Mode=OneWay}"
+                                         IsReadOnly="True"
+                                         TextWrapping="Wrap" />
+                                <ui:Button Grid.Column="2"
+                                           Width="38"
+                                           Height="34"
+                                           Padding="0"
+                                           VerticalAlignment="Top"
+                                           Command="{Binding OpenSavedImageCommand}"
+                                           ToolTip="{DynamicResource LiveOpenSavedImage}"
+                                           AutomationProperties.Name="{DynamicResource LiveOpenSavedImage}">
+                                    <ui:Button.Icon>
+                                        <ui:SymbolIcon Symbol="Open24" />
+                                    </ui:Button.Icon>
+                                </ui:Button>
+                            </Grid>
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:InfoBar IsOpen="True"
+                                IsClosable="False"
+                                Title="{Binding StatusMessage}">
+                        <ui:InfoBar.Style>
+                            <Style TargetType="ui:InfoBar">
+                                <Setter Property="Severity" Value="Informational" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding StatusIsWarning}" Value="True">
+                                        <Setter Property="Severity" Value="Warning" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding StatusIsError}" Value="True">
+                                        <Setter Property="Severity" Value="Error" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ui:InfoBar.Style>
+                    </ui:InfoBar>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Page>

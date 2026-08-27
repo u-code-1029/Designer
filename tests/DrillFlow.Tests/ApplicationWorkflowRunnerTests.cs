@@ -11,6 +11,7 @@ using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Core.Validation;
 using DrillFlow.Core.Workflows;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -19,14 +20,78 @@ namespace DrillFlow.Tests;
 public sealed class ApplicationWorkflowRunnerTests
 {
     [Fact]
-    public async Task RunAsync_PublishesEquipmentActionsInOrderAndKeepsDynamicResults()
+    public async Task RunSelectedAsync_PreservesCurrentSessionAndEarlierExpressionResults()
     {
         var transport = new FakeTransport(request => Task.FromResult(
             Response(request, new Dictionary<string, object?>
             {
-                ["measured_distance"] = request.Command == "measure" ? 1.2E-3 : null,
-                ["drill_result_path"] = request.Command == "drill" ? @"C:\results\hole.csv" : null
+                ["stage_x"] = request.Command == "measure" ? 1.2E-3 : 2.4E-3,
+                ["stage_y"] = 0d
             })));
+        var runner = CreateRunner(transport);
+        var measure = new MeasureNode
+        {
+            Key = "measure_1",
+            Thickness = ParameterBinding.Literal("1E-3")
+        };
+        var drill = new DrillNode
+        {
+            Key = "drill_1",
+            Thickness = ParameterBinding.Expression("measure_1.result.stage_x"),
+            DrillResultPath = ParameterBinding.Literal(@"C:\results\hole.csv")
+        };
+        var document = Document(measure, drill);
+
+        await runner.RunSelectedAsync(document, measure.Id);
+        var sessionId = runner.CurrentRunId;
+        var measureResult = Assert.Single(runner.Results.GetAll(measure.Id));
+
+        await runner.RunSelectedAsync(document, drill.Id);
+
+        Assert.Equal(sessionId, runner.CurrentRunId);
+        Assert.Same(measureResult, Assert.Single(runner.Results.GetAll(measure.Id)));
+        Assert.Single(runner.Results.GetAll(drill.Id));
+        Assert.Equal(new[] { "measure", "drill" }, transport.Requests.Select(request => request.Command));
+        Assert.Equal(1.2E-3, (double)transport.Requests[1].Parameters["thickness"]!, 12);
+    }
+
+    [Fact]
+    public async Task RunAsync_AfterSelectedExecutionStartsFreshResultSession()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var first = new MoveNode { Key = "first" };
+
+        await runner.RunSelectedAsync(Document(first), first.Id);
+        var selectedSessionId = runner.CurrentRunId;
+        Assert.Single(runner.Results.GetAll(first.Id));
+
+        var second = new MoveNode { Key = "second" };
+        await runner.RunAsync(Document(second));
+
+        Assert.NotEqual(selectedSessionId, runner.CurrentRunId);
+        Assert.Empty(runner.Results.GetAll(first.Id));
+        Assert.Single(runner.Results.GetAll(second.Id));
+    }
+
+    [Fact]
+    public async Task RunAsync_PublishesEquipmentActionsInOrderAndKeepsDynamicResults()
+    {
+        var transport = new FakeTransport(request =>
+        {
+            var properties = new Dictionary<string, object?>
+            {
+                ["stage_x"] = request.Command == "measure" ? 1.2E-3 : request.Index * 0.1d,
+                ["stage_y"] = request.Index * -0.2d,
+                ["controller_value"] = "preserved"
+            };
+            if (request.Command == "drill")
+            {
+                properties["image_path"] = @"C:\results\hole.png";
+            }
+
+            return Task.FromResult(Response(request, properties));
+        });
         var runner = CreateRunner(transport);
         var move = new MoveNode
         {
@@ -39,7 +104,7 @@ public sealed class ApplicationWorkflowRunnerTests
         var drill = new DrillNode
         {
             Key = "drill_1",
-            Thickness = ParameterBinding.Expression("measure_1.result.measured_distance"),
+            Thickness = ParameterBinding.Expression("measure_1.result.stage_x"),
             DrillResultPath = ParameterBinding.Literal(@"C:\results\hole.csv")
         };
         var document = Document(move, measure, drill);
@@ -51,7 +116,11 @@ public sealed class ApplicationWorkflowRunnerTests
         Assert.Equal(new[] { 1, 2, 3 }, transport.Requests.Select(x => x.Index));
         Assert.Equal(-0.25d, transport.Requests[0].Parameters["move_x"]);
         Assert.Equal(1.2E-3d, transport.Requests[2].Parameters["thickness"]);
-        Assert.Equal(@"C:\results\hole.csv", runner.Results.GetLatest(drill.Id)!.Values["drill_result_path"]);
+        var drillResult = runner.Results.GetLatest(drill.Id)!;
+        Assert.Equal(0.3d, (double)drillResult.Values["stage_x"]!, 12);
+        Assert.Equal(-0.6d, (double)drillResult.Values["stage_y"]!, 12);
+        Assert.Equal(@"C:\results\hole.png", drillResult.Values["image_path"]);
+        Assert.Equal("preserved", drillResult.Values["controller_value"]);
     }
 
     [Fact]
@@ -60,7 +129,8 @@ public sealed class ApplicationWorkflowRunnerTests
         var transport = new FakeTransport(request => Task.FromResult(
             Response(request, new Dictionary<string, object?>
             {
-                ["measured_distance"] = request.Index * 1E-4
+                ["stage_x"] = request.Index * 1E-4,
+                ["stage_y"] = request.Index * -2E-4
             })));
         var runner = CreateRunner(transport);
         var measure = new MeasureNode { Key = "measure_loop", Thickness = ParameterBinding.Literal("1E-3") };
@@ -77,11 +147,37 @@ public sealed class ApplicationWorkflowRunnerTests
         Assert.Equal(3, results.Count);
         Assert.Equal(new[] { 1, 2, 3 }, results.Select(x => x.CorrelationId));
         Assert.Equal(new[] { 0, 1, 2 }, results.Select(x => x.IterationPath.Single()));
+        Assert.Equal(1E-4, (double)results[0].Values["stage_x"]!, 12);
+        Assert.Equal(2E-4, (double)results[1].Values["stage_x"]!, 12);
+        Assert.Equal(3E-4, (double)results[2].Values["stage_x"]!, 12);
         Assert.Equal(3, transport.Requests.Count);
     }
 
     [Fact]
-    public async Task RequestStop_DoesNotPublishAbortAndStopsAfterInflightResponse()
+    public async Task RunAsync_RejectsTransportResponseWithDifferentCorrelationIndex()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(
+            new EquipmentResponseMessage(
+                request.Index + 1,
+                "return",
+                new Dictionary<string, object?>
+                {
+                    ["stage_x"] = 0d,
+                    ["stage_y"] = 0d
+                })));
+        var runner = CreateRunner(transport);
+        var move = new MoveNode { Key = "move_1" };
+
+        var exception = await Assert.ThrowsAsync<WorkflowExecutionException>(() =>
+            runner.RunAsync(Document(move)));
+
+        Assert.Contains("does not match", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(WorkflowRunState.Faulted, runner.State);
+        Assert.Null(runner.Results.GetLatest(move.Id));
+    }
+
+    [Fact]
+    public async Task RequestStop_FirstPressStopsImmediatelyWithoutResponseOrAbort()
     {
         var responseGate = new TaskCompletionSource<EquipmentResponseMessage>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -100,19 +196,50 @@ public sealed class ApplicationWorkflowRunnerTests
         var request = await firstRequestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
 
         runner.RequestStop();
-        Assert.Equal(WorkflowRunState.Stopping, runner.State);
-        responseGate.SetResult(Response(request));
-        await runTask;
+        await runTask.WithTimeoutAsync(TimeSpan.FromSeconds(1));
 
         Assert.Equal(WorkflowRunState.Stopped, runner.State);
         Assert.Single(transport.Requests);
         Assert.DoesNotContain(transport.Requests, item => item.Command == "abort");
-        Assert.NotNull(runner.Results.GetLatest(first.Id));
+        Assert.Null(runner.Results.GetLatest(first.Id));
         Assert.Null(runner.Results.GetLatest(second.Id));
+
+        // Release the deliberately cancellation-unaware fake so the late-task observer can finish.
+        responseGate.TrySetResult(Response(request));
     }
 
     [Fact]
-    public async Task ForceStop_AfterGracefulStop_CancelsInflightExchangeWithoutPublishingAbort()
+    public async Task RunAsync_RemainsRunningAndDoesNotAdvanceUntilEquipmentResponseArrives()
+    {
+        var responseGate = new TaskCompletionSource<EquipmentResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstRequestSeen = new TaskCompletionSource<EquipmentRequestMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new FakeTransport(request =>
+        {
+            firstRequestSeen.TrySetResult(request);
+            return responseGate.Task;
+        });
+        var runner = CreateRunner(transport);
+        var move = new MoveNode { Key = "move_waiting" };
+
+        var runTask = runner.RunAsync(Document(move));
+        var request = await firstRequestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.False(runTask.IsCompleted);
+        Assert.Equal(WorkflowRunState.Running, runner.State);
+        Assert.Equal(move.Id, runner.CurrentNode?.Id);
+        Assert.Null(runner.Results.GetLatest(move.Id));
+
+        responseGate.SetResult(Response(request));
+        await runTask.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(WorkflowRunState.Completed, runner.State);
+        Assert.NotNull(runner.Results.GetLatest(move.Id));
+    }
+
+    [Fact]
+    public async Task RequestStop_CancelsInflightExchangeWithoutRequiringSecondPress()
     {
         var requestSeen = new TaskCompletionSource<EquipmentRequestMessage>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -126,10 +253,6 @@ public sealed class ApplicationWorkflowRunnerTests
         await requestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
 
         runner.RequestStop();
-        Assert.Equal(WorkflowRunState.Stopping, runner.State);
-        Assert.False(cancellationSeen.Task.IsCompleted);
-
-        runner.ForceStop();
         await cancellationSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
         await runTask.WithTimeoutAsync(TimeSpan.FromSeconds(3));
 
@@ -177,6 +300,43 @@ public sealed class ApplicationWorkflowRunnerTests
 
         Assert.Single(transport.Requests);
         Assert.Equal(WorkflowRunState.Completed, runner.State);
+    }
+
+    [Fact]
+    public async Task RequestStop_AtBreakpointTransitionsPausedNodeToStopped()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var move = new MoveNode { Key = "move_paused", HasBreakpoint = true };
+        var paused = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        runner.NodeStateChanged += (_, args) =>
+        {
+            if (args.Node.Id != move.Id)
+            {
+                return;
+            }
+
+            if (args.State == WorkflowNodeExecutionState.Paused)
+            {
+                paused.TrySetResult(true);
+            }
+            else if (args.State == WorkflowNodeExecutionState.Stopped)
+            {
+                stopped.TrySetResult(true);
+            }
+        };
+
+        var runTask = runner.RunAsync(Document(move));
+        await paused.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        runner.RequestStop();
+
+        await runTask.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+        Assert.True(await stopped.Task.WithTimeoutAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal(WorkflowRunState.Stopped, runner.State);
+        Assert.Empty(transport.Requests);
+        Assert.Null(runner.Results.GetLatest(move.Id));
     }
 
     [Fact]
@@ -442,9 +602,55 @@ public sealed class ApplicationWorkflowRunnerTests
         Assert.Null(runner.Results.GetLatest(node.Id));
     }
 
+    [Fact]
+    public async Task RequestStop_NonCooperativeHttpActionStopsPromptlyAndSanitizesLateFailureLog()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateCompletion = new TaskCompletionSource<HttpActionResponse>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new FakeHttpActionExecutor((_, _) =>
+        {
+            started.TrySetResult(true);
+            return lateCompletion.Task;
+        });
+        var logger = new LateHttpWarningLogger();
+        var runner = CreateRunner(transport, http, logger);
+        var node = new HttpActionNode
+        {
+            Key = "http_non_cooperative",
+            Url = ParameterBinding.Literal(
+                "https://operator:password@example.test/camera/frame?access_token=secret#preview")
+        };
+
+        var run = runner.RunAsync(Document(node));
+        await started.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        runner.RequestStop();
+
+        await run.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(WorkflowRunState.Stopped, runner.State);
+        Assert.Empty(transport.Requests);
+        Assert.Null(runner.Results.GetLatest(node.Id));
+
+        lateCompletion.TrySetException(
+            new InvalidOperationException("late HTTP failure body_token=exception-secret"));
+        var warning = await logger.WarningLogged.Task.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+        Assert.Contains("https://example.test/camera/frame", warning, StringComparison.Ordinal);
+        Assert.Contains(typeof(InvalidOperationException).FullName!, warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("operator", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("password", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("access_token", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("body_token", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("preview", warning, StringComparison.Ordinal);
+        Assert.Null(logger.WarningException);
+    }
+
     private static WorkflowRunner CreateRunner(
         IEquipmentFileTransport transport,
-        IHttpActionExecutor? httpActions = null)
+        IHttpActionExecutor? httpActions = null,
+        ILogger<WorkflowRunner>? logger = null)
     {
         return new WorkflowRunner(
             transport,
@@ -454,7 +660,7 @@ public sealed class ApplicationWorkflowRunnerTests
             new ExpressionEngine(),
             new WorkflowValidator(),
             new RunResultStore(),
-            NullLogger<WorkflowRunner>.Instance);
+            logger ?? NullLogger<WorkflowRunner>.Instance);
     }
 
     private sealed class FakeHttpActionExecutor : IHttpActionExecutor
@@ -475,6 +681,42 @@ public sealed class ApplicationWorkflowRunnerTests
         }
     }
 
+    private sealed class LateHttpWarningLogger : ILogger<WorkflowRunner>
+    {
+        public TaskCompletionSource<string> WarningLogged { get; } = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Exception? WarningException { get; private set; }
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => EmptyScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                WarningException = exception;
+                WarningLogged.TrySetResult(formatter(state, exception));
+            }
+        }
+
+        private sealed class EmptyScope : IDisposable
+        {
+            public static EmptyScope Instance { get; } = new EmptyScope();
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+
     private static WorkflowDocument Document(params WorkflowNode[] nodes)
     {
         return new WorkflowDocument
@@ -488,7 +730,20 @@ public sealed class ApplicationWorkflowRunnerTests
         EquipmentRequestMessage request,
         IReadOnlyDictionary<string, object?>? properties = null)
     {
-        return new EquipmentResponseMessage(request.Index, "return", properties);
+        var responseProperties = new Dictionary<string, object?>
+        {
+            ["stage_x"] = 0d,
+            ["stage_y"] = 0d
+        };
+        if (properties != null)
+        {
+            foreach (var property in properties)
+            {
+                responseProperties[property.Key] = property.Value;
+            }
+        }
+
+        return new EquipmentResponseMessage(request.Index, "return", responseProperties);
     }
 
     private sealed class IncrementingCorrelationProvider : ICorrelationIdProvider
