@@ -78,6 +78,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<CorrelationIdStoreOptions>,
             CorrelationIdStoreOptionsValidator>();
         services.AddSingleton<ICorrelationIdProvider, PersistentCorrelationIdProvider>();
+        services.AddSingleton<IEquipmentMessageCodec, XmlTemplateEquipmentMessageCodec>();
         services.AddSingleton<IEquipmentFileTransport, FileEquipmentTransport>();
         services.AddSingleton<IEquipmentResponseSimulator, JsonEquipmentResponseSimulator>();
         services.AddSingleton(_ => new HttpClient { Timeout = Timeout.InfiniteTimeSpan });

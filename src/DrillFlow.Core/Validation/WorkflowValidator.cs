@@ -69,7 +69,7 @@ namespace DrillFlow.Core.Validation
 
             public void ValidateDocument(WorkflowDocument document)
             {
-                if (document.SchemaVersion <= 0 || document.SchemaVersion > WorkflowDocument.CurrentSchemaVersion)
+                if (document.SchemaVersion != WorkflowDocument.CurrentSchemaVersion)
                 {
                     Add("document.schema_version", "The workflow schema version is not supported.", null, "schemaVersion");
                 }
@@ -281,17 +281,30 @@ namespace DrillFlow.Core.Validation
             {
                 switch (node)
                 {
-                    case MoveNode move:
-                        ValidateValue(move.MoveMode, node, "move_mode", available, path + ".moveMode", ParameterValueValidator.GetMoveMode);
-                        ValidateValue(move.MoveX, node, "move_x", available, path + ".moveX", value => ParameterValueValidator.GetMoveCoordinate(value, "Move X"));
-                        ValidateValue(move.MoveY, node, "move_y", available, path + ".moveY", value => ParameterValueValidator.GetMoveCoordinate(value, "Move Y"));
+                    case StageNode stage:
+                        ValidateValue(stage.MoveMode, node, "move_mode", available, path + ".moveMode", ParameterValueValidator.GetMoveMode);
+                        ValidateValue(stage.StageX, node, "stage_x", available, path + ".stageX", value => ParameterValueValidator.GetFiniteCoordinate(value, "Stage X"));
+                        ValidateValue(stage.StageY, node, "stage_y", available, path + ".stageY", value => ParameterValueValidator.GetFiniteCoordinate(value, "Stage Y"));
                         break;
-                    case MeasureNode measure:
-                        ValidateValue(measure.Thickness, node, "thickness", available, path + ".thickness", ParameterValueValidator.GetThickness);
+                    case CameraNode camera:
+                        ValidateValue(camera.MoveMode, node, "move_mode", available, path + ".moveMode", ParameterValueValidator.GetMoveMode);
+                        ValidateValue(camera.CameraX, node, "camera_x", available, path + ".cameraX", value => ParameterValueValidator.GetFiniteCoordinate(value, "Camera X"));
+                        ValidateValue(camera.CameraY, node, "camera_y", available, path + ".cameraY", value => ParameterValueValidator.GetFiniteCoordinate(value, "Camera Y"));
                         break;
-                    case DrillNode drill:
-                        ValidateValue(drill.Thickness, node, "thickness", available, path + ".thickness", ParameterValueValidator.GetThickness);
-                        ValidateValue(drill.DrillResultPath, node, "drill_result_path", available, path + ".drillResultPath", value => ParameterValueValidator.GetNonEmptyString(value, "Drill result path"));
+                    case FocusNode focus:
+                        ValidateValue(focus.HorizontalFieldWidth, node, "hfw", available, path + ".horizontalFieldWidth", ParameterValueValidator.GetHorizontalFieldWidth);
+                        ValidateValue(focus.Range, node, "range", available, path + ".range", ParameterValueValidator.GetFocusRange);
+                        ValidateValue(focus.Steps, node, "steps", available, path + ".steps", ParameterValueValidator.GetFocusSteps);
+                        break;
+                    case IntegrationNode integration:
+                        ValidateValue(integration.HorizontalFieldWidth, node, "hfw", available, path + ".horizontalFieldWidth", ParameterValueValidator.GetHorizontalFieldWidth);
+                        ValidateValue(integration.FrameCount, node, "frame_count", available, path + ".frameCount", ParameterValueValidator.GetIntegrationFrameCount);
+                        ValidateValue(integration.ImagePath, node, "image_path", available, path + ".imagePath", ParameterValueValidator.GetAbsoluteImagePath);
+                        break;
+                    case LiveNode live:
+                        ValidateValue(live.HorizontalFieldWidth, node, "hfw", available, path + ".horizontalFieldWidth", ParameterValueValidator.GetHorizontalFieldWidth);
+                        ValidateValue(live.FrameCount, node, "frame_count", available, path + ".frameCount", ParameterValueValidator.GetLiveFrameCount);
+                        ValidateValue(live.ImagePath, node, "image_path", available, path + ".imagePath", ParameterValueValidator.GetAbsoluteImagePath);
                         break;
                     case HttpActionNode http:
                         ValidateValue(http.Method, node, "method", available, path + ".method", ParameterValueValidator.GetHttpMethod);

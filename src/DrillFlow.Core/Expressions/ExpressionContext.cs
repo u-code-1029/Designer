@@ -89,9 +89,9 @@ namespace DrillFlow.Core.Expressions
         private static ExpressionValue CreateResultValue(ActionExecutionResult result)
         {
             var fields = new Dictionary<string, object?>(result.Values, StringComparer.OrdinalIgnoreCase);
-            if (!fields.ContainsKey("index"))
+            if (!fields.ContainsKey("correlation_id"))
             {
-                fields["index"] = result.CorrelationId;
+                fields["correlation_id"] = result.CorrelationId;
             }
 
             if (!fields.ContainsKey("iteration_path"))
@@ -126,7 +126,7 @@ namespace DrillFlow.Core.Expressions
 
         /// <summary>
         /// Direct members accessed from root identifiers, such as the
-        /// "parameters" member in action.parameters.move_x. Deeper result
+        /// "parameters" member in action.parameters.stage_x. Deeper result
         /// fields are intentionally not analyzed because equipment responses
         /// may add arbitrary properties at runtime.
         /// </summary>

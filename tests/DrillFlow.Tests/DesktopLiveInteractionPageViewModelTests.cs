@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,15 +29,15 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         viewModel.Activate();
         await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(10E-3, Assert.Single(session.FrameWidths));
+        Assert.Equal(1E-3, Assert.Single(session.FrameWidths));
         Assert.True(viewModel.ZoomFrameInCommand.CanExecute(null));
 
         viewModel.ZoomFrameInCommand.Execute(null);
 
         await WaitUntilAsync(() => session.FrameWidths.Count >= 2);
-        Assert.Equal(5E-3, viewModel.HorizontalFieldWidthMetres);
-        Assert.Equal("5", viewModel.HorizontalFieldWidthText);
-        Assert.Equal(new[] { 10E-3, 5E-3 }, session.FrameWidths);
+        Assert.Equal(0.5E-3, viewModel.HorizontalFieldWidthMetres);
+        Assert.Equal("0.5", viewModel.HorizontalFieldWidthText);
+        Assert.Equal(new[] { 1E-3, 0.5E-3 }, session.FrameWidths);
 
         viewModel.StopCommand.Execute(null);
         await WaitUntilAsync(() => !viewModel.IsInteractionActive);
@@ -44,24 +45,24 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     }
 
     [Fact]
-    public async Task HfwEditor_AcceptsPositiveScientificValuesWithoutArtificialLimits()
+    public async Task HfwEditor_EnforcesStrictEquipmentUpperBound()
     {
         var viewModel = CreateViewModel(
             new PendingFrameSession(),
             new BlockingResponseSimulator());
 
         viewModel.HorizontalFieldWidthUnit = "m";
-        viewModel.HorizontalFieldWidthText = "2.5E+100";
+        viewModel.HorizontalFieldWidthText = "2.4E-3";
 
-        Assert.Equal(2.5E+100, viewModel.HorizontalFieldWidthMetres);
-        Assert.Empty(viewModel.HorizontalFieldWidthValidationMessage);
+        Assert.Equal(1E-3, viewModel.HorizontalFieldWidthMetres);
+        Assert.NotEmpty(viewModel.HorizontalFieldWidthValidationMessage);
         Assert.False(viewModel.ZoomFrameInCommand.CanExecute(null));
 
         viewModel.Activate();
-        Assert.True(viewModel.ZoomFrameInCommand.CanExecute(null));
-        viewModel.HorizontalFieldWidthText = "Infinity";
-        Assert.NotEmpty(viewModel.HorizontalFieldWidthValidationMessage);
-        Assert.False(viewModel.ZoomFrameInCommand.CanExecute(null));
+        viewModel.HorizontalFieldWidthText = "2.39E-3";
+        Assert.Empty(viewModel.HorizontalFieldWidthValidationMessage);
+        Assert.Equal(2.39E-3, viewModel.HorizontalFieldWidthMetres);
+        Assert.False(viewModel.ZoomFrameOutCommand.CanExecute(null));
 
         viewModel.Deactivate();
         await viewModel.ShutdownAsync();
@@ -80,9 +81,9 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         Assert.True(viewModel.MoveToTargetCommand.CanExecute(target));
 
-        viewModel.HorizontalFieldWidthText = "5";
+        viewModel.HorizontalFieldWidthText = "0.5";
 
-        Assert.Equal(5E-3, viewModel.HorizontalFieldWidthMetres);
+        Assert.Equal(0.5E-3, viewModel.HorizontalFieldWidthMetres);
         Assert.Equal(1E-6, viewModel.PixelPitchMetres);
         Assert.Equal("1", viewModel.PixelPitchText);
         Assert.True(viewModel.IsFrameCalibrationPending);
@@ -90,7 +91,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         Assert.False(viewModel.MoveToTargetCommand.CanExecute(target));
         await WaitUntilAsync(() => session.FrameWidths.Count >= 2);
 
-        ApplyDecodedFrame(viewModel, 5E-3);
+        ApplyDecodedFrame(viewModel, 0.5E-3);
 
         Assert.True(viewModel.IsDisplayedFrameCalibrationCurrent);
         Assert.False(viewModel.IsFrameCalibrationPending);
@@ -99,6 +100,96 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         viewModel.StopCommand.Execute(null);
         await WaitUntilAsync(() => !viewModel.IsInteractionActive);
         await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task ManualActionEditors_ExposeCanonicalDefaultsAndImmediateValidation()
+    {
+        var session = new PendingFrameSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("relative", viewModel.StageMoveMode);
+        Assert.Equal("0E0", viewModel.StageInputXText);
+        Assert.Equal("relative", viewModel.CameraMoveMode);
+        Assert.Equal("50E-6", viewModel.FocusRangeText);
+        Assert.Equal("13", viewModel.FocusStepsText);
+        Assert.Equal(8, viewModel.IntegrationFrameCount);
+        Assert.True(viewModel.ExecuteStageMoveCommand.CanExecute(null));
+        Assert.True(viewModel.ExecuteCameraMoveCommand.CanExecute(null));
+        Assert.True(viewModel.ExecuteFocusCommand.CanExecute(null));
+
+        viewModel.StageInputXText = "NaN";
+        viewModel.CameraMoveMode = "RELATIVE";
+        viewModel.FocusStepsText = "3";
+        viewModel.IntegrationFrameCount = 3;
+
+        Assert.NotEmpty(viewModel.StageMoveValidationMessage);
+        Assert.NotEmpty(viewModel.CameraMoveValidationMessage);
+        Assert.NotEmpty(viewModel.FocusValidationMessage);
+        Assert.False(viewModel.ExecuteStageMoveCommand.CanExecute(null));
+        Assert.False(viewModel.ExecuteCameraMoveCommand.CanExecute(null));
+        Assert.False(viewModel.ExecuteFocusCommand.CanExecute(null));
+        Assert.False(viewModel.CaptureCommand.CanExecute(null));
+
+        viewModel.StopCommand.Execute(null);
+        await WaitUntilAsync(() => !viewModel.IsInteractionActive);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task OwnedImageCleanup_DeletesOnlyExactRequestedResponsePath()
+    {
+        var directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "DrillFlow.LiveOwnedImageTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var ownedPath = System.IO.Path.Combine(directory, "live-1.bmp");
+            var controllerPath = System.IO.Path.Combine(directory, "controller.bmp");
+            File.WriteAllBytes(ownedPath, new byte[] { 1 });
+            File.WriteAllBytes(controllerPath, new byte[] { 2 });
+            var viewModel = CreateViewModel(
+                new PendingFrameSession(),
+                new BlockingResponseSimulator());
+            var cleanup = typeof(LiveInteractionPageViewModel).GetMethod(
+                "TryDeleteOwnedResponseImage",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(cleanup);
+
+            cleanup!.Invoke(
+                viewModel,
+                new object[]
+                {
+                    ImageExchange(1, ownedPath, ownedPath)
+                });
+            cleanup.Invoke(
+                viewModel,
+                new object[]
+                {
+                    ImageExchange(2, System.IO.Path.Combine(directory, "live-2.bmp"), controllerPath)
+                });
+
+            await WaitUntilAsync(() => !File.Exists(ownedPath));
+            Assert.True(File.Exists(controllerPath));
+            await viewModel.ShutdownAsync();
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     [Fact]
@@ -119,6 +210,23 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         Assert.False(viewModel.IsStreamingRequested);
         Assert.False(viewModel.IsStreaming);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task FrameEquipmentFailure_StopsWithoutTransientRetryAndKeepsErrorStatus()
+    {
+        var session = new EquipmentFailureFrameSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+
+        viewModel.Activate();
+
+        await WaitUntilAsync(() => viewModel.StatusIsError && !viewModel.IsInteractionActive);
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        Assert.Equal(1, session.FrameCallCount);
+        Assert.False(viewModel.StatusIsWarning);
+        Assert.Equal("LiveStatusFrameFailed", viewModel.StatusMessage);
+        Assert.True(viewModel.StartCommand.CanExecute(null));
         await viewModel.ShutdownAsync();
     }
 
@@ -256,6 +364,45 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await viewModel.ShutdownAsync();
     }
 
+    [Fact]
+    public async Task FailedIntegration_LeavesStreamStoppedAndPreservesErrorStatus()
+    {
+        var session = new InteractiveMoveSession { FailCapture = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.CaptureCommand.ExecuteAsync(null);
+        await Task.Delay(100);
+
+        Assert.True(session.FirstFrameCanceled.Task.IsCompleted);
+        Assert.Equal(1, session.FrameCallCount);
+        Assert.False(viewModel.IsStreamingRequested);
+        Assert.False(viewModel.IsInteractionActive);
+        Assert.True(viewModel.StatusIsError);
+        Assert.Equal("LiveStatusCaptureFailed", viewModel.StatusMessage);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task SuccessfulIntegration_WithCanceledSaveResumesPreviousStreamIntent()
+    {
+        var session = new InteractiveMoveSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.CaptureCommand.ExecuteAsync(null);
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(session.FirstFrameCanceled.Task.IsCompleted);
+        Assert.Equal(2, session.FrameCallCount);
+        Assert.True(viewModel.IsStreamingRequested);
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
     private static LiveInteractionPageViewModel CreateViewModel(
         ILiveInteractionSession session,
         IEquipmentResponseSimulator simulator)
@@ -272,8 +419,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             Options.Create(new EquipmentCommunicationOptions
             {
                 ExchangeDirectory = System.IO.Path.GetTempPath(),
-                RequestFileName = "request.json",
-                ResponseFileName = "response.json",
+                RequestFileName = "request.xml",
+                ResponseFileName = "response.xml",
                 ResponseTimeout = TimeSpan.FromSeconds(30),
                 PollingInterval = TimeSpan.FromMilliseconds(10)
             }),
@@ -322,11 +469,12 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             {
                 new EquipmentResponseMessage(
                     900,
-                    "return",
+                    "live",
+                    0,
                     new Dictionary<string, object?>
                     {
-                        ["stage_x"] = 0d,
-                        ["stage_y"] = 0d,
+                        ["hfw"] = horizontalFieldWidthMetres,
+                        ["frame_count"] = 1,
                         ["image_path"] = @"C:\camera\frame.png"
                     }),
                 new LiveImageDecodeResult(
@@ -338,6 +486,25 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                     ".png"),
                 horizontalFieldWidthMetres
             });
+    }
+
+    private static LiveImageExchangeResult ImageExchange(
+        int correlationId,
+        string requestedPath,
+        string responsePath)
+    {
+        return new LiveImageExchangeResult(
+            new EquipmentResponseMessage(
+                correlationId,
+                "live",
+                0,
+                new Dictionary<string, object?>
+                {
+                    ["hfw"] = 1E-3,
+                    ["frame_count"] = 1,
+                    ["image_path"] = responsePath,
+                }),
+            requestedPath);
     }
 
     private sealed class PendingFrameSession : ILiveInteractionSession
@@ -352,7 +519,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         public List<double> FrameWidths { get; } = new List<double>();
 
-        public async Task<EquipmentResponseMessage> RequestFrameAsync(
+        public async Task<LiveImageExchangeResult> RequestFrameAsync(
             double horizontalFieldWidthMetres,
             CancellationToken cancellationToken = default)
         {
@@ -373,19 +540,96 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             }
         }
 
-        public Task<EquipmentResponseMessage> MoveRelativeAsync(
-            double moveXMetres,
-            double moveYMetres,
+        public Task<EquipmentResponseMessage> MoveStageAsync(
+            string moveMode,
+            double stageXMetres,
+            double stageYMetres,
             CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
         }
 
-        public Task<EquipmentResponseMessage> CaptureAsync(
+        public Task<EquipmentResponseMessage> MoveCameraAsync(
+            string moveMode,
+            double cameraXMetres,
+            double cameraYMetres,
             CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
         }
+
+        public Task<EquipmentResponseMessage> FocusAsync(
+            double horizontalFieldWidthMetres,
+            double rangeMetres,
+            int steps,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<LiveImageExchangeResult> IntegrateAsync(
+            double horizontalFieldWidthMetres,
+            int frameCount,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
+    private sealed class EquipmentFailureFrameSession : ILiveInteractionSession
+    {
+        public bool IsBusy => false;
+
+        public event EventHandler? BusyChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public int FrameCallCount { get; private set; }
+
+        public Task<LiveImageExchangeResult> RequestFrameAsync(
+            double horizontalFieldWidthMetres,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            FrameCallCount++;
+            return Task.FromException<LiveImageExchangeResult>(
+                new LiveEquipmentActionFailedException(
+                    new EquipmentResponseMessage(
+                        FrameCallCount,
+                        "live",
+                        1,
+                        new Dictionary<string, object?>
+                        {
+                            ["hfw"] = horizontalFieldWidthMetres,
+                            ["frame_count"] = 1,
+                            ["image_path"] = @"C:\camera\failed-frame.bmp",
+                        })));
+        }
+
+        public Task<EquipmentResponseMessage> MoveStageAsync(
+            string moveMode,
+            double stageXMetres,
+            double stageYMetres,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<EquipmentResponseMessage> MoveCameraAsync(
+            string moveMode,
+            double cameraXMetres,
+            double cameraYMetres,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<EquipmentResponseMessage> FocusAsync(
+            double horizontalFieldWidthMetres,
+            double rangeMetres,
+            int steps,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<LiveImageExchangeResult> IntegrateAsync(
+            double horizontalFieldWidthMetres,
+            int frameCount,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class InteractiveMoveSession : ILiveInteractionSession
@@ -420,6 +664,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         public bool BlockCapture { get; set; }
 
+        public bool FailCapture { get; set; }
+
         public int FrameCallCount => Volatile.Read(ref _frameCalls);
 
         public int MoveCallCount { get; private set; }
@@ -431,7 +677,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         public int MaximumConcurrentEquipmentCalls =>
             Volatile.Read(ref _maximumConcurrentEquipmentCalls);
 
-        public async Task<EquipmentResponseMessage> RequestFrameAsync(
+        public async Task<LiveImageExchangeResult> RequestFrameAsync(
             double horizontalFieldWidthMetres,
             CancellationToken cancellationToken = default)
         {
@@ -465,9 +711,10 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             }
         }
 
-        public async Task<EquipmentResponseMessage> MoveRelativeAsync(
-            double moveXMetres,
-            double moveYMetres,
+        public async Task<EquipmentResponseMessage> MoveStageAsync(
+            string moveMode,
+            double stageXMetres,
+            double stageYMetres,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -499,11 +746,12 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
                 return new EquipmentResponseMessage(
                     700,
-                    "return",
+                    "stage",
+                    0,
                     new Dictionary<string, object?>
                     {
-                        ["stage_x"] = moveXMetres,
-                        ["stage_y"] = moveYMetres
+                        ["current_stage_x"] = stageXMetres,
+                        ["current_stage_y"] = stageYMetres
                     });
             }
             finally
@@ -512,7 +760,27 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             }
         }
 
-        public async Task<EquipmentResponseMessage> CaptureAsync(
+        public Task<EquipmentResponseMessage> MoveCameraAsync(
+            string moveMode,
+            double cameraXMetres,
+            double cameraYMetres,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<EquipmentResponseMessage> FocusAsync(
+            double horizontalFieldWidthMetres,
+            double rangeMetres,
+            int steps,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public async Task<LiveImageExchangeResult> IntegrateAsync(
+            double horizontalFieldWidthMetres,
+            int frameCount,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -521,6 +789,21 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             {
                 CaptureStartedAfterFrameCancellation = FirstFrameCanceled.Task.IsCompleted;
                 CaptureStarted.TrySetResult(true);
+                if (FailCapture)
+                {
+                    throw new LiveEquipmentActionFailedException(
+                        new EquipmentResponseMessage(
+                            701,
+                            "integration",
+                            1,
+                            new Dictionary<string, object?>
+                            {
+                                ["hfw"] = horizontalFieldWidthMetres,
+                                ["frame_count"] = frameCount,
+                                ["image_path"] = @"C:\app-owned\integration-701.bmp",
+                            }));
+                }
+
                 if (BlockCapture)
                 {
                     try
@@ -536,15 +819,19 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                     }
                 }
 
-                return new EquipmentResponseMessage(
-                    701,
-                    "return",
-                    new Dictionary<string, object?>
-                    {
-                        ["stage_x"] = 0d,
-                        ["stage_y"] = 0d,
-                        ["image_path"] = @"C:\camera\capture.png"
-                    });
+                const string path = @"C:\camera\capture.png";
+                return new LiveImageExchangeResult(
+                    new EquipmentResponseMessage(
+                        701,
+                        "integration",
+                        0,
+                        new Dictionary<string, object?>
+                        {
+                            ["hfw"] = horizontalFieldWidthMetres,
+                            ["frame_count"] = frameCount,
+                            ["image_path"] = path
+                        }),
+                    @"C:\app-owned\integration-701.bmp");
             }
             finally
             {
@@ -658,7 +945,18 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             string sourceImagePath,
             CancellationToken cancellationToken)
         {
-            throw new NotSupportedException();
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshotPath = System.IO.Path.GetTempFileName();
+            File.WriteAllBytes(snapshotPath, new byte[] { 1, 2, 3 });
+            return Task.FromResult(new LiveCaptureSnapshot(
+                snapshotPath,
+                path =>
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }));
         }
     }
 
@@ -668,7 +966,14 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             byte[] encodedImage,
             CancellationToken cancellationToken)
         {
-            throw new NotSupportedException();
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new LiveImageDecodeResult(
+                new DrawingImage(),
+                768,
+                512,
+                96d,
+                96d,
+                ".bmp"));
         }
     }
 

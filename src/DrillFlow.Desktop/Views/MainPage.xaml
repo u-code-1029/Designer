@@ -120,7 +120,7 @@
                                  Text="{Binding Condition.Value, UpdateSourceTrigger=PropertyChanged}"
                                  behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
                                  behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                                 behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                 behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.Id, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}"
                                  GotKeyboardFocus="Parameter_GotKeyboardFocus" />
                     </Grid>
 
@@ -242,6 +242,7 @@
                                 <ColumnDefinition Width="28" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <ui:SymbolIcon Grid.Column="0"
                                            Symbol="Record20"
@@ -263,7 +264,24 @@
                                 <TextBlock Text="{Binding Alias}" FontWeight="SemiBold" Foreground="{DynamicResource DrillTextBrush}" />
                                 <TextBlock Text="{Binding Title}" Style="{StaticResource CaptionTextStyle}" />
                             </StackPanel>
-                            <TextBlock Grid.Column="3"
+                            <Border Grid.Column="3"
+                                    Width="18"
+                                    Height="18"
+                                    Margin="8,0,0,0"
+                                    VerticalAlignment="Center"
+                                    Background="{DynamicResource DrillDangerBrush}"
+                                    CornerRadius="9"
+                                    ToolTip="{Binding ValidationErrorText}"
+                                    Visibility="{Binding HasValidationError, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="!"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Margin="0,-1,0,0"
+                                           FontSize="12"
+                                           FontWeight="Bold"
+                                           Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" />
+                            </Border>
+                            <TextBlock Grid.Column="4"
                                        Text="{Binding RuntimeStateText}"
                                        VerticalAlignment="Center"
                                        Foreground="{DynamicResource DrillSecondaryTextBrush}"
@@ -461,7 +479,7 @@
                 <StackPanel>
                     <StackPanel Margin="0,0,0,8">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding IndexExpressionPath}" Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text="{Binding CorrelationIdExpressionPath}" Style="{StaticResource CaptionTextStyle}" />
                             <TextBlock Text=" (" Style="{StaticResource CaptionTextStyle}" />
                             <TextBlock Text="{DynamicResource ResultCorrelation}" Style="{StaticResource CaptionTextStyle}" />
                             <TextBlock Text="): " Style="{StaticResource CaptionTextStyle}" />

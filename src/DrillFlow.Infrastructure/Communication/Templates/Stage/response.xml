@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<response>
+  <type>{{{type}}}</type>
+  <correlation_id>{{{correlation_id}}}</correlation_id>
+  <action>{{{action}}}</action>
+  <result>{{{result}}}</result>
+  <current_stage_x>{{{current_stage_x}}}</current_stage_x>
+  <current_stage_y>{{{current_stage_y}}}</current_stage_y>
+</response>

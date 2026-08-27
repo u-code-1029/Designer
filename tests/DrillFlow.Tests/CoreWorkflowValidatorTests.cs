@@ -12,87 +12,260 @@ namespace DrillFlow.Tests
         private readonly WorkflowValidator _validator = new WorkflowValidator();
 
         [Fact]
-        public void AcceptsValidNestedWorkflowAndPreviousReferences()
+        public void RequiresCurrentWorkflowSchemaAfterPersistenceMigration()
         {
-            var move = ValidMove("move_1");
-            move.MoveMode = ParameterBinding.Literal("absolute");
-            move.MoveX = ParameterBinding.Literal("-4.99E-1");
-            var measure = new MeasureNode { Key = "measure_1" };
+            var document = Document(ValidStage("stage_1"));
+            document.SchemaVersion = 1;
+
+            AssertInvalid(document, "document.schema_version", "schemaVersion");
+        }
+
+        [Fact]
+        public void AcceptsValidEquipmentActionsNestedFlowAndPreviousReferences()
+        {
+            var stage = ValidStage("stage_1");
+            stage.MoveMode = ParameterBinding.Literal("absolute");
+            stage.StageX = ParameterBinding.Literal("-8.2E3");
+            var camera = new CameraNode
+            {
+                Key = "camera_1",
+                MoveMode = ParameterBinding.Literal("relative"),
+                CameraX = ParameterBinding.Expression("stage_1.parameters.stage_x"),
+                CameraY = ParameterBinding.Literal("7.62E-6")
+            };
+            var focus = new FocusNode { Key = "focus_1" };
             var inside = new DelayNode
             {
                 Key = "inside_delay",
                 DurationMilliseconds = ParameterBinding.Literal("20")
             };
-            var repeat = new RepeatNode { Key = "repeat_1", Count = ParameterBinding.Literal(int.MaxValue.ToString()) };
-            repeat.Body.Add(inside);
-            var drill = new DrillNode
+            var repeat = new RepeatNode
             {
-                Key = "drill_1",
-                Thickness = ParameterBinding.Expression("measure_1.parameters.thickness"),
-                DrillResultPath = ParameterBinding.Literal(@"C:\results\current.csv")
+                Key = "repeat_1",
+                Count = ParameterBinding.Literal(int.MaxValue.ToString())
+            };
+            repeat.Body.Add(inside);
+            var integration = new IntegrationNode
+            {
+                Key = "integration_1",
+                HorizontalFieldWidth = ParameterBinding.Expression("focus_1.parameters.hfw"),
+                FrameCount = ParameterBinding.Literal("64"),
+                ImagePath = ParameterBinding.Literal(@"\\server\images\integrated.png")
+            };
+            var live = new LiveNode
+            {
+                Key = "live_1",
+                ImagePath = ParameterBinding.Literal(@"C:\images\live.png")
             };
             var conditional = new ConditionalNode { Key = "if_1" };
-            conditional.Branches[0].Condition = ParameterBinding.Expression("inside_delay.parameters.milliseconds >= 0");
+            conditional.Branches[0].Condition =
+                ParameterBinding.Expression("inside_delay.parameters.milliseconds >= 0");
             conditional.Branches[0].Body.Add(new AbortNode { Key = "branch_abort" });
             conditional.Branches.Add(new ConditionalBranch
             {
                 Kind = ConditionalBranchKind.Else,
                 Condition = null
             });
-            var document = Document(move, measure, repeat, drill, conditional);
 
-            var result = _validator.Validate(document);
+            var result = _validator.Validate(
+                Document(stage, camera, focus, repeat, integration, live, conditional));
 
             Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Issues.Select(x => x.Message)));
             Assert.Empty(result.Issues);
         }
 
         [Theory]
-        [InlineData("-0.5")]
-        [InlineData("0.5")]
-        [InlineData("1E999")]
-        [InlineData("NaN")]
-        public void RejectsMoveCoordinatesAtOrOutsideExclusiveLimits(string coordinate)
-        {
-            var move = ValidMove("move_1");
-            move.MoveX = ParameterBinding.Literal(coordinate);
-
-            AssertInvalid(Document(move), "parameter.range_or_type", ".moveX");
-        }
-
-        [Theory]
-        [InlineData("-0.499999")]
+        [InlineData("-1E100")]
         [InlineData("0")]
-        [InlineData("0.499999")]
-        public void AllowsNegativeAndPositiveCoordinatesForAbsoluteAndRelativeModes(string coordinate)
+        [InlineData("1E100")]
+        public void CoordinatesAllowAnyFiniteSignedValueInBothMoveModes(string coordinate)
         {
             foreach (var mode in new[] { "absolute", "relative" })
             {
-                var move = ValidMove("move_1");
-                move.MoveMode = ParameterBinding.Literal(mode);
-                move.MoveX = ParameterBinding.Literal(coordinate);
-                Assert.True(_validator.Validate(Document(move)).IsValid);
+                var stage = ValidStage("stage_1");
+                stage.MoveMode = ParameterBinding.Literal(mode);
+                stage.StageX = ParameterBinding.Literal(coordinate);
+                var camera = new CameraNode
+                {
+                    Key = "camera_1",
+                    MoveMode = ParameterBinding.Literal(mode),
+                    CameraX = ParameterBinding.Literal(coordinate),
+                    CameraY = ParameterBinding.Literal("0")
+                };
+
+                Assert.True(_validator.Validate(Document(stage, camera)).IsValid);
             }
         }
 
         [Theory]
+        [InlineData("1E999")]
+        [InlineData("NaN")]
+        [InlineData("Infinity")]
+        public void CoordinatesRejectNonFiniteValues(string coordinate)
+        {
+            var stage = ValidStage("stage_1");
+            stage.StageX = ParameterBinding.Literal(coordinate);
+
+            AssertInvalid(Document(stage), "parameter.range_or_type", ".stageX");
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("sideways")]
+        [InlineData("1")]
+        public void StageAndCameraRejectUnknownMoveModes(string mode)
+        {
+            var stage = ValidStage("stage_1");
+            stage.MoveMode = ParameterBinding.Literal(mode);
+            var camera = new CameraNode
+            {
+                Key = "camera_1",
+                MoveMode = ParameterBinding.Literal(mode)
+            };
+
+            var result = _validator.Validate(Document(stage, camera));
+
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == stage.Id && issue.Path.EndsWith(".moveMode"));
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == camera.Id && issue.Path.EndsWith(".moveMode"));
+        }
+
+        [Theory]
         [InlineData("0")]
-        [InlineData("-1E-3")]
+        [InlineData("-1E-6")]
+        [InlineData("2.4E-3")]
         [InlineData("2.400001E-3")]
         [InlineData("Infinity")]
-        public void RejectsThicknessOutsideConfiguredRange(string thickness)
+        public void RejectsHorizontalFieldWidthOutsideStrictRange(string hfw)
         {
-            var measure = new MeasureNode { Key = "measure_1", Thickness = ParameterBinding.Literal(thickness) };
+            var focus = new FocusNode
+            {
+                Key = "focus_1",
+                HorizontalFieldWidth = ParameterBinding.Literal(hfw)
+            };
 
-            AssertInvalid(Document(measure), "parameter.range_or_type", ".thickness");
+            AssertInvalid(Document(focus), "parameter.range_or_type", ".horizontalFieldWidth");
         }
 
         [Fact]
-        public void AcceptsMaximumThickness()
+        public void AcceptsHorizontalFieldWidthImmediatelyBelowUpperLimit()
         {
-            var measure = new MeasureNode { Key = "measure_1", Thickness = ParameterBinding.Literal("2.4E-3") };
+            var focus = new FocusNode
+            {
+                Key = "focus_1",
+                HorizontalFieldWidth = ParameterBinding.Literal("2.399999E-3")
+            };
 
-            Assert.True(_validator.Validate(Document(measure)).IsValid);
+            Assert.True(_validator.Validate(Document(focus)).IsValid);
+        }
+
+        [Theory]
+        [InlineData("0", "13", ".range")]
+        [InlineData("-1E-6", "13", ".range")]
+        [InlineData("Infinity", "13", ".range")]
+        [InlineData("1E-6", "3", ".steps")]
+        [InlineData("1E-6", "4.5", ".steps")]
+        [InlineData("1E-6", "2147483648", ".steps")]
+        public void RejectsInvalidFocusRangeAndSteps(string range, string steps, string path)
+        {
+            var focus = new FocusNode
+            {
+                Key = "focus_1",
+                Range = ParameterBinding.Literal(range),
+                Steps = ParameterBinding.Literal(steps)
+            };
+
+            AssertInvalid(Document(focus), "parameter.range_or_type", path);
+        }
+
+        [Theory]
+        [InlineData("1")]
+        [InlineData("2")]
+        [InlineData("4")]
+        [InlineData("8")]
+        [InlineData("16")]
+        [InlineData("32")]
+        [InlineData("64")]
+        public void AcceptsIntegrationPowerOfTwoFrameCountsThrough64(string count)
+        {
+            var integration = new IntegrationNode
+            {
+                Key = "integration_1",
+                FrameCount = ParameterBinding.Literal(count)
+            };
+
+            Assert.True(_validator.Validate(Document(integration)).IsValid);
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("3")]
+        [InlineData("63")]
+        [InlineData("65")]
+        [InlineData("128")]
+        [InlineData("1.5")]
+        public void RejectsInvalidIntegrationFrameCounts(string count)
+        {
+            var integration = new IntegrationNode
+            {
+                Key = "integration_1",
+                FrameCount = ParameterBinding.Literal(count)
+            };
+
+            AssertInvalid(Document(integration), "parameter.range_or_type", ".frameCount");
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("2")]
+        [InlineData("1.5")]
+        public void LiveFrameCountMustBeExactlyOne(string count)
+        {
+            var live = new LiveNode
+            {
+                Key = "live_1",
+                FrameCount = ParameterBinding.Literal(count)
+            };
+
+            AssertInvalid(Document(live), "parameter.range_or_type", ".frameCount");
+        }
+
+        [Theory]
+        [InlineData(@"C:\images\one.png")]
+        [InlineData(@"Z:\shared\one.tif")]
+        [InlineData(@"\\server\share\one.bmp")]
+        public void AcceptsAbsoluteLocalMappedAndUncImagePaths(string path)
+        {
+            var integration = new IntegrationNode
+            {
+                Key = "integration_1",
+                ImagePath = ParameterBinding.Literal(path)
+            };
+
+            Assert.True(_validator.Validate(Document(integration)).IsValid);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData(@"relative\one.png")]
+        [InlineData(@"C:\images\")]
+        [InlineData(@"\\server\share")]
+        [InlineData(@"C:\images\.")]
+        [InlineData(@"\\server\share\..")]
+        [InlineData(@"C:\images\trailing.")]
+        [InlineData(@"C:\images\bad?.png")]
+        public void RejectsImagePathsThatAreNotAbsoluteWindowsFilenames(string path)
+        {
+            var integration = new IntegrationNode
+            {
+                Key = "integration_1",
+                ImagePath = ParameterBinding.Literal(path)
+            };
+
+            AssertInvalid(Document(integration), "parameter.range_or_type", ".imagePath");
         }
 
         [Theory]
@@ -120,21 +293,29 @@ namespace DrillFlow.Tests
         [Fact]
         public void ConstantExpressionsReceiveTheSameRangeAndTypeValidation()
         {
-            var badMove = ValidMove("move_1");
-            badMove.MoveX = ParameterBinding.Expression("0.25 + 0.25");
+            var badFocus = new FocusNode
+            {
+                Key = "focus_1",
+                HorizontalFieldWidth = ParameterBinding.Expression("1.2E-3 + 1.2E-3")
+            };
             var badConditional = new ConditionalNode { Key = "if_1" };
             badConditional.Branches[0].Condition = ParameterBinding.Expression("1 + 2");
 
-            var result = _validator.Validate(Document(badMove, badConditional));
+            var result = _validator.Validate(Document(badFocus, badConditional));
 
-            Assert.Contains(result.Issues, x => x.Path.EndsWith(".moveX") && x.Code == "parameter.range_or_type");
-            Assert.Contains(result.Issues, x => x.Path.EndsWith(".condition") && x.Code == "parameter.range_or_type");
+            Assert.Contains(
+                result.Issues,
+                x => x.Path.EndsWith(".horizontalFieldWidth") && x.Code == "parameter.range_or_type");
+            var conditionIssue = Assert.Single(
+                result.Issues,
+                x => x.Path.EndsWith(".condition") && x.Code == "parameter.range_or_type");
+            Assert.Equal(badConditional.Id, conditionIssue.NodeId);
         }
 
         [Fact]
         public void KeysAndIdsMustBeNonEmptyValidAndUniqueCaseInsensitively()
         {
-            var first = ValidMove("action_1");
+            var first = ValidStage("action_1");
             var duplicate = new DelayNode { Key = "ACTION_1", Id = first.Id };
             var reserved = new AbortNode { Key = "true" };
             var malformed = new AbortNode { Key = "1 bad-key" };
@@ -151,16 +332,16 @@ namespace DrillFlow.Tests
         [Fact]
         public void ReferencesMustTargetKnownGuaranteedPreviousActions()
         {
-            var first = ValidMove("first");
-            var validPrevious = ValidMove("valid_previous");
-            validPrevious.MoveX = ParameterBinding.Expression("first.parameters.move_x + 1E-3");
-            var futureReference = ValidMove("future_reference");
-            futureReference.MoveX = ParameterBinding.Expression("later.parameters.move_x");
-            var selfReference = ValidMove("self_reference");
-            selfReference.MoveX = ParameterBinding.Expression("self_reference.parameters.move_x");
-            var unknownReference = ValidMove("unknown_reference");
-            unknownReference.MoveX = ParameterBinding.Expression("does_not_exist.result.value");
-            var later = ValidMove("later");
+            var first = ValidStage("first");
+            var validPrevious = ValidStage("valid_previous");
+            validPrevious.StageX = ParameterBinding.Expression("first.parameters.stage_x + 1E-3");
+            var futureReference = ValidStage("future_reference");
+            futureReference.StageX = ParameterBinding.Expression("later.parameters.stage_x");
+            var selfReference = ValidStage("self_reference");
+            selfReference.StageX = ParameterBinding.Expression("self_reference.parameters.stage_x");
+            var unknownReference = ValidStage("unknown_reference");
+            unknownReference.StageX = ParameterBinding.Expression("does_not_exist.result.value");
+            var later = ValidStage("later");
 
             var result = _validator.Validate(Document(
                 first,
@@ -171,22 +352,23 @@ namespace DrillFlow.Tests
                 later));
 
             Assert.DoesNotContain(result.Issues, x => x.NodeId == validPrevious.Id);
-            Assert.Contains(result.Issues, x => x.NodeId == futureReference.Id && x.Code == "expression.reference_not_previous");
-            Assert.Contains(result.Issues, x => x.NodeId == selfReference.Id && x.Code == "expression.reference_not_previous");
-            Assert.Contains(result.Issues, x => x.NodeId == unknownReference.Id && x.Code == "expression.unknown_reference");
+            Assert.Contains(
+                result.Issues,
+                x => x.NodeId == futureReference.Id && x.Code == "expression.reference_not_previous");
+            Assert.Contains(
+                result.Issues,
+                x => x.NodeId == selfReference.Id && x.Code == "expression.reference_not_previous");
+            Assert.Contains(
+                result.Issues,
+                x => x.NodeId == unknownReference.Id && x.Code == "expression.unknown_reference");
         }
 
         [Fact]
         public void DisabledActionsAreNotGuaranteedExpressionReferences()
         {
-            var disabled = new MeasureNode
-            {
-                Key = "disabled_measure",
-                IsEnabled = false,
-                Thickness = ParameterBinding.Literal("1E-3")
-            };
-            var after = ValidMove("after");
-            after.MoveX = ParameterBinding.Expression("disabled_measure.result.measured_distance");
+            var disabled = new FocusNode { Key = "disabled_focus", IsEnabled = false };
+            var after = ValidStage("after");
+            after.StageX = ParameterBinding.Expression("disabled_focus.result.z_to_sharpness_2d[0][0]");
 
             var result = _validator.Validate(Document(disabled, after));
 
@@ -198,11 +380,11 @@ namespace DrillFlow.Tests
         [Fact]
         public void RejectsUnknownTopLevelActionMembersButAllowsDynamicResultFields()
         {
-            var first = ValidMove("first");
-            var typo = ValidMove("typo");
-            typo.MoveX = ParameterBinding.Expression("first.paramters.move_x");
-            var dynamicResult = ValidMove("dynamic_result");
-            dynamicResult.MoveX = ParameterBinding.Expression("first.result.equipment_defined_value");
+            var first = ValidStage("first");
+            var typo = ValidStage("typo");
+            typo.StageX = ParameterBinding.Expression("first.paramters.stage_x");
+            var dynamicResult = ValidStage("dynamic_result");
+            dynamicResult.StageX = ParameterBinding.Expression("first.result.equipment_defined_value");
 
             var result = _validator.Validate(Document(first, typo, dynamicResult));
 
@@ -215,11 +397,11 @@ namespace DrillFlow.Tests
         [Fact]
         public void RepeatBodyResultsAreAvailableAfterAtLeastOneIteration()
         {
-            var inner = new MeasureNode { Key = "inner_measure" };
+            var inner = new FocusNode { Key = "inner_focus" };
             var repeat = new RepeatNode { Key = "repeat_1", Count = ParameterBinding.Literal("1") };
             repeat.Body.Add(inner);
-            var after = ValidMove("after");
-            after.MoveX = ParameterBinding.Expression("inner_measure.results.last.measured_distance");
+            var after = ValidStage("after");
+            after.StageX = ParameterBinding.Expression("inner_focus.results.last.z_to_sharpness_2d[0][0]");
 
             Assert.True(_validator.Validate(Document(repeat, after)).IsValid);
         }
@@ -228,19 +410,23 @@ namespace DrillFlow.Tests
         public void ConditionalBranchAliasesAreNotGuaranteedAcrossBranchesOrAfterConditional()
         {
             var conditional = new ConditionalNode { Key = "choice" };
-            conditional.Branches[0].Body.Add(new MeasureNode { Key = "if_measure" });
+            conditional.Branches[0].Body.Add(new FocusNode { Key = "if_focus" });
             var elseBranch = new ConditionalBranch { Kind = ConditionalBranchKind.Else, Condition = null };
-            var siblingReference = ValidMove("else_move");
-            siblingReference.MoveX = ParameterBinding.Expression("if_measure.result.measured_distance");
+            var siblingReference = ValidStage("else_stage");
+            siblingReference.StageX = ParameterBinding.Expression("if_focus.result.value");
             elseBranch.Body.Add(siblingReference);
             conditional.Branches.Add(elseBranch);
-            var after = ValidMove("after");
-            after.MoveX = ParameterBinding.Expression("if_measure.result.measured_distance");
+            var after = ValidStage("after");
+            after.StageX = ParameterBinding.Expression("if_focus.result.value");
 
             var result = _validator.Validate(Document(conditional, after));
 
-            Assert.Contains(result.Issues, x => x.NodeId == siblingReference.Id && x.Code == "expression.reference_not_previous");
-            Assert.Contains(result.Issues, x => x.NodeId == after.Id && x.Code == "expression.reference_not_previous");
+            Assert.Contains(
+                result.Issues,
+                x => x.NodeId == siblingReference.Id && x.Code == "expression.reference_not_previous");
+            Assert.Contains(
+                result.Issues,
+                x => x.NodeId == after.Id && x.Code == "expression.reference_not_previous");
         }
 
         [Fact]
@@ -248,8 +434,16 @@ namespace DrillFlow.Tests
         {
             var conditional = new ConditionalNode { Key = "choice" };
             conditional.Branches[0].Kind = ConditionalBranchKind.ElseIf;
-            conditional.Branches.Add(new ConditionalBranch { Kind = ConditionalBranchKind.Else, Condition = ParameterBinding.Literal("true") });
-            conditional.Branches.Add(new ConditionalBranch { Kind = ConditionalBranchKind.ElseIf, Condition = ParameterBinding.Literal("true") });
+            conditional.Branches.Add(new ConditionalBranch
+            {
+                Kind = ConditionalBranchKind.Else,
+                Condition = ParameterBinding.Literal("true")
+            });
+            conditional.Branches.Add(new ConditionalBranch
+            {
+                Kind = ConditionalBranchKind.ElseIf,
+                Condition = ParameterBinding.Literal("true")
+            });
 
             var result = _validator.Validate(Document(conditional));
 
@@ -273,12 +467,33 @@ namespace DrillFlow.Tests
         [Fact]
         public void RuntimeValueRulesGuardEvaluatedExpressionsBeforeRequestCreation()
         {
-            Assert.Equal(MoveCoordinateMode.Absolute, ParameterValueValidator.GetMoveMode(ExpressionValue.String("ABSOLUTE")));
-            Assert.Equal(-0.499, ParameterValueValidator.GetMoveCoordinate(ExpressionValue.Number(-0.499), "x"), 12);
-            Assert.Equal(0.0024, ParameterValueValidator.GetThickness(ExpressionValue.Number(0.0024)), 12);
+            Assert.Equal(
+                MoveCoordinateMode.Absolute,
+                ParameterValueValidator.GetMoveMode(ExpressionValue.String("ABSOLUTE")));
+            Assert.Equal(
+                MoveCoordinateMode.Relative,
+                ParameterValueValidator.GetMoveMode(ExpressionValue.String(" relative ")));
+            Assert.Equal(
+                -1E100,
+                ParameterValueValidator.GetFiniteCoordinate(ExpressionValue.Number(-1E100), "x"),
+                12);
+            Assert.Equal(
+                2.399E-3,
+                ParameterValueValidator.GetHorizontalFieldWidth(ExpressionValue.Number(2.399E-3)),
+                12);
+            Assert.Equal(4, ParameterValueValidator.GetFocusSteps(ExpressionValue.Number(4)));
+            Assert.Equal(64, ParameterValueValidator.GetIntegrationFrameCount(ExpressionValue.Number(64)));
+            Assert.Equal(1, ParameterValueValidator.GetLiveFrameCount(ExpressionValue.Number(1)));
+            Assert.Equal(
+                @"\\server\share\image.png",
+                ParameterValueValidator.GetAbsoluteImagePath(
+                    ExpressionValue.String(@" \\server\share\image.png ")));
             Assert.Equal(29999, ParameterValueValidator.GetDelayMilliseconds(ExpressionValue.Number(29999)));
             Assert.Equal(int.MaxValue, ParameterValueValidator.GetRepeatCount(ExpressionValue.Number(int.MaxValue)));
-            Assert.Throws<ParameterValidationException>(() => ParameterValueValidator.GetMoveCoordinate(ExpressionValue.Number(-0.5), "x"));
+            Assert.Throws<ParameterValidationException>(
+                () => ParameterValueValidator.GetHorizontalFieldWidth(ExpressionValue.Number(2.4E-3)));
+            Assert.Throws<ParameterValidationException>(
+                () => ParameterValueValidator.GetIntegrationFrameCount(ExpressionValue.Number(3)));
         }
 
         [Fact]
@@ -323,10 +538,18 @@ namespace DrillFlow.Tests
             var result = _validator.Validate(Document(node));
 
             Assert.False(result.IsValid);
-            Assert.Contains(result.Issues, x => x.Path.EndsWith(".method") && x.Code == "parameter.range_or_type");
-            Assert.Contains(result.Issues, x => x.Path.EndsWith(".url") && x.Code == "parameter.range_or_type");
-            Assert.Contains(result.Issues, x => x.Path.EndsWith(".headers") && x.Code == "parameter.range_or_type");
-            Assert.Contains(result.Issues, x => x.Path.EndsWith(".timeoutMilliseconds") && x.Code == "parameter.range_or_type");
+            Assert.Contains(
+                result.Issues,
+                x => x.Path.EndsWith(".method") && x.Code == "parameter.range_or_type");
+            Assert.Contains(
+                result.Issues,
+                x => x.Path.EndsWith(".url") && x.Code == "parameter.range_or_type");
+            Assert.Contains(
+                result.Issues,
+                x => x.Path.EndsWith(".headers") && x.Code == "parameter.range_or_type");
+            Assert.Contains(
+                result.Issues,
+                x => x.Path.EndsWith(".timeoutMilliseconds") && x.Code == "parameter.range_or_type");
         }
 
         private static WorkflowDocument Document(params WorkflowNode[] nodes)
@@ -336,14 +559,14 @@ namespace DrillFlow.Tests
             return document;
         }
 
-        private static MoveNode ValidMove(string key)
+        private static StageNode ValidStage(string key)
         {
-            return new MoveNode
+            return new StageNode
             {
                 Key = key,
                 MoveMode = ParameterBinding.Literal("relative"),
-                MoveX = ParameterBinding.Literal("0"),
-                MoveY = ParameterBinding.Literal("0")
+                StageX = ParameterBinding.Literal("0"),
+                StageY = ParameterBinding.Literal("0")
             };
         }
 
@@ -351,7 +574,9 @@ namespace DrillFlow.Tests
         {
             var result = _validator.Validate(document);
             Assert.False(result.IsValid);
-            Assert.Contains(result.Issues, x => x.Code == code && x.Path.EndsWith(pathSuffix, StringComparison.Ordinal));
+            Assert.Contains(
+                result.Issues,
+                x => x.Code == code && x.Path.EndsWith(pathSuffix, StringComparison.Ordinal));
         }
     }
 }

@@ -39,7 +39,8 @@ public sealed class ResponseSimulationDialogViewModel : ObservableObject
         string payload,
         ResponseSimulationPreview? initialPreview,
         Func<string, Task<ResponseSimulationPreview?>> regeneratePreviewAsync,
-        string imageGenerationFailedMessage)
+        string imageGenerationFailedMessage,
+        bool canGenerateImage = true)
     {
         ActionSummary = actionSummary;
         PayloadFormat = payloadFormat;
@@ -49,7 +50,8 @@ public sealed class ResponseSimulationDialogViewModel : ObservableObject
         _regeneratePreviewAsync = regeneratePreviewAsync
                                   ?? throw new ArgumentNullException(nameof(regeneratePreviewAsync));
         _imageGenerationFailedMessage = imageGenerationFailedMessage ?? string.Empty;
-        RegenerateImageCommand = new AsyncRelayCommand(RegenerateImageAsync);
+        CanGenerateImage = canGenerateImage;
+        RegenerateImageCommand = new AsyncRelayCommand(RegenerateImageAsync, () => CanGenerateImage);
 
         if (initialPreview != null)
         {
@@ -73,6 +75,8 @@ public sealed class ResponseSimulationDialogViewModel : ObservableObject
 
     public bool HasGeneratedImage => PreviewImage != null
                                      && !string.IsNullOrWhiteSpace(GeneratedImagePath);
+
+    public bool CanGenerateImage { get; }
 
     public IAsyncRelayCommand RegenerateImageCommand { get; }
 

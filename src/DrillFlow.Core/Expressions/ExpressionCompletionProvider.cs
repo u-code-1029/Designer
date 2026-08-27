@@ -45,8 +45,8 @@ namespace DrillFlow.Core.Expressions
             var chainStart = FindChainStart(text, caretIndex);
             var chain = text.Substring(chainStart, caretIndex - chainStart);
 
-            // If the complete token is already an object (for example "move_1" or
-            // "move_1.parameters"), Ctrl+Space means "show that object's members".
+            // If the complete token is already an object (for example "stage_1" or
+            // "stage_1.parameters"), Ctrl+Space means "show that object's members".
             if (chain.Length > 0
                 && chain[chain.Length - 1] != '.'
                 && (caretIndex == text.Length
@@ -245,17 +245,32 @@ namespace DrillFlow.Core.Expressions
             WorkflowNode node,
             IReadOnlyDictionary<Guid, IReadOnlyCollection<string>>? runtimeResultMembers)
         {
-            var members = new List<string> { "index", "iteration_path" };
+            var members = new List<string> { "correlation_id", "iteration_path" };
             switch (node.Kind)
             {
-                case WorkflowNodeKind.Move:
-                case WorkflowNodeKind.Measure:
-                case WorkflowNodeKind.Drill:
-                case WorkflowNodeKind.Abort:
-                    members.Add("command");
-                    members.Add("stage_x");
-                    members.Add("stage_y");
+                case WorkflowNodeKind.Stage:
+                    AddEquipmentEnvelope(members);
+                    members.Add("current_stage_x");
+                    members.Add("current_stage_y");
+                    break;
+                case WorkflowNodeKind.Camera:
+                    AddEquipmentEnvelope(members);
+                    members.Add("current_camera_x");
+                    members.Add("current_camera_y");
+                    break;
+                case WorkflowNodeKind.Focus:
+                    AddEquipmentEnvelope(members);
+                    members.Add("z_to_sharpness_2d");
+                    break;
+                case WorkflowNodeKind.Integration:
+                case WorkflowNodeKind.Live:
+                    AddEquipmentEnvelope(members);
+                    members.Add("hfw");
+                    members.Add("frame_count");
                     members.Add("image_path");
+                    break;
+                case WorkflowNodeKind.Abort:
+                    AddEquipmentEnvelope(members);
                     break;
                 case WorkflowNodeKind.Http:
                     members.Add("status_code");
@@ -285,6 +300,14 @@ namespace DrillFlow.Core.Expressions
             }
 
             return members.Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static void AddEquipmentEnvelope(ICollection<string> members)
+        {
+            members.Add("type");
+            members.Add("correlation_id");
+            members.Add("action");
+            members.Add("result");
         }
 
         private static bool TryResolvePath(

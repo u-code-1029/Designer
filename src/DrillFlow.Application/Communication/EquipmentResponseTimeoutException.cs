@@ -4,20 +4,19 @@ namespace DrillFlow.Application.Communication;
 
 public sealed class EquipmentResponseTimeoutException : TimeoutException
 {
-    public EquipmentResponseTimeoutException(int correlationIndex, int attempts, TimeSpan timeoutPerAttempt)
+    public EquipmentResponseTimeoutException(int correlationId, int attempts, TimeSpan timeoutPerAttempt)
         : base(
-            $"No matching equipment response was received for correlation index {correlationIndex} "
+            $"No matching equipment response was received for correlation ID {correlationId} "
             + $"after {attempts} attempt(s), each with a {timeoutPerAttempt} timeout.")
     {
-        CorrelationIndex = correlationIndex;
+        CorrelationId = correlationId;
         Attempts = attempts;
         TimeoutPerAttempt = timeoutPerAttempt;
     }
 
-    public int CorrelationIndex { get; }
+    public int CorrelationId { get; }
 
     public int Attempts { get; }
 
     public TimeSpan TimeoutPerAttempt { get; }
 }
-

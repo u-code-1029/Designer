@@ -25,6 +25,26 @@ public sealed class InfrastructureOptionsTests
             string.Join(Environment.NewLine, result.Failures ?? Array.Empty<string>()));
         Assert.Equal(ApplicationResponseFileLifecycle.DeleteAfterRead, options.ApplicationResponseLifecycle);
         Assert.False(options.RetryEnabled);
+        Assert.Equal("request.xml", options.RequestFileName);
+        Assert.Equal("response.xml", options.ResponseFileName);
+    }
+
+    [Theory]
+    [InlineData("C:/Exchange/Frames", @"C:\Exchange\Frames")]
+    [InlineData("//server/share/Exchange", @"\\server\share\Exchange")]
+    public void EquipmentOptions_NormalizeAcceptedWindowsDirectorySeparators(
+        string configured,
+        string expected)
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = configured,
+        };
+
+        var result = new EquipmentCommunicationOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expected, options.ExchangeDirectory);
     }
 
     [Fact]
@@ -50,6 +70,25 @@ public sealed class InfrastructureOptionsTests
     }
 
     [Theory]
+    [InlineData(@"C:Exchange")]
+    [InlineData(@"\Exchange")]
+    [InlineData(@"//server")]
+    public void EquipmentOptions_RejectDriveRelativeAndCurrentDriveRootedDirectories(string path)
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = path
+        };
+
+        var result = new EquipmentCommunicationOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures,
+            failure => failure.Contains("absolute", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void EquipmentOptions_ReserveTheCrossProcessExchangeLockFileName(bool useAsRequest)
@@ -59,9 +98,9 @@ public sealed class InfrastructureOptionsTests
             ExchangeDirectory = Path.GetFullPath(Path.GetTempPath()),
             RequestFileName = useAsRequest
                 ? EquipmentCommunicationOptions.ExchangeLockFileName
-                : "request.json",
+                : "request.xml",
             ResponseFileName = useAsRequest
-                ? "response.json"
+                ? "response.xml"
                 : EquipmentCommunicationOptions.ExchangeLockFileName,
         };
 

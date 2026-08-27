@@ -31,6 +31,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
     private bool _isCurrent;
     private bool _isEditingEnabled = true;
     private string _aliasValidationMessage = string.Empty;
+    private string _validationErrorText = string.Empty;
     private WorkflowNodeExecutionState _runtimeState = WorkflowNodeExecutionState.Waiting;
     private CancellationTokenSource? _latestImageLoadCancellation;
     private long _latestImageLoadGeneration;
@@ -107,9 +108,11 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
     public string Title => _localization[Model.Kind switch
     {
-        WorkflowNodeKind.Move => "ActionMove",
-        WorkflowNodeKind.Measure => "ActionMeasure",
-        WorkflowNodeKind.Drill => "ActionDrill",
+        WorkflowNodeKind.Stage => "ActionStage",
+        WorkflowNodeKind.Camera => "ActionCamera",
+        WorkflowNodeKind.Focus => "ActionFocus",
+        WorkflowNodeKind.Integration => "ActionIntegration",
+        WorkflowNodeKind.Live => "ActionLive",
         WorkflowNodeKind.Abort => "ActionAbort",
         WorkflowNodeKind.Http => "ActionHttp",
         WorkflowNodeKind.Delay => "ActionDelay",
@@ -119,9 +122,11 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
     public SymbolRegular Icon => Model.Kind switch
     {
-        WorkflowNodeKind.Move => SymbolRegular.ArrowMove20,
-        WorkflowNodeKind.Measure => SymbolRegular.Ruler20,
-        WorkflowNodeKind.Drill => SymbolRegular.Toolbox20,
+        WorkflowNodeKind.Stage => SymbolRegular.ArrowMove20,
+        WorkflowNodeKind.Camera => SymbolRegular.Camera20,
+        WorkflowNodeKind.Focus => SymbolRegular.ScanCamera20,
+        WorkflowNodeKind.Integration => SymbolRegular.ImageMultiple20,
+        WorkflowNodeKind.Live => SymbolRegular.Live20,
         WorkflowNodeKind.Abort => SymbolRegular.Stop20,
         WorkflowNodeKind.Http => SymbolRegular.Globe20,
         WorkflowNodeKind.Delay => SymbolRegular.Timer20,
@@ -243,9 +248,11 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
     public bool IsRunning => RuntimeState == WorkflowNodeExecutionState.Running;
 
-    public string RunningStatusText => _localization[Kind is WorkflowNodeKind.Move
-        or WorkflowNodeKind.Measure
-        or WorkflowNodeKind.Drill
+    public string RunningStatusText => _localization[Kind is WorkflowNodeKind.Stage
+        or WorkflowNodeKind.Camera
+        or WorkflowNodeKind.Focus
+        or WorkflowNodeKind.Integration
+        or WorkflowNodeKind.Live
         or WorkflowNodeKind.Abort
             ? "ActionRunning"
             : "DesignerActionRunning"];
@@ -327,9 +334,33 @@ public sealed class WorkflowActionViewModel : ObservableObject
 
     public bool HasAliasError => !string.IsNullOrEmpty(AliasValidationMessage);
 
+    public string ValidationErrorText
+    {
+        get => _validationErrorText;
+        private set
+        {
+            if (SetProperty(ref _validationErrorText, value))
+            {
+                OnPropertyChanged(nameof(HasValidationError));
+            }
+        }
+    }
+
+    public bool HasValidationError => !string.IsNullOrWhiteSpace(ValidationErrorText);
+
     public void SetExternalAliasError(string message)
     {
         AliasValidationMessage = message ?? string.Empty;
+    }
+
+    public void SetValidationErrors(IEnumerable<string> messages)
+    {
+        ValidationErrorText = string.Join(
+            Environment.NewLine,
+            (messages ?? Enumerable.Empty<string>())
+                .Where(message => !string.IsNullOrWhiteSpace(message))
+                .Select(message => message.Trim())
+                .Distinct(StringComparer.Ordinal));
     }
 
     public bool Validate()
@@ -688,10 +719,15 @@ public sealed class WorkflowActionViewModel : ObservableObject
     private static string GetParameterLabelKey(string name) => name switch
     {
         "move_mode" => "ParamMoveMode",
-        "move_x" => "ParamMoveX",
-        "move_y" => "ParamMoveY",
-        "thickness" => "ParamThickness",
-        "drill_result_path" => "ParamResultPath",
+        "stage_x" => "ParamStageX",
+        "stage_y" => "ParamStageY",
+        "camera_x" => "ParamCameraX",
+        "camera_y" => "ParamCameraY",
+        "hfw" => "ParamHfw",
+        "range" => "ParamFocusRange",
+        "steps" => "ParamFocusSteps",
+        "frame_count" => "ParamFrameCount",
+        "image_path" => "ParamImagePath",
         "method" => "ParamHttpMethod",
         "url" => "ParamHttpUrl",
         "headers" => "ParamHttpHeaders",

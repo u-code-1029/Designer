@@ -2,81 +2,155 @@ using System.Collections.Generic;
 
 namespace DrillFlow.Core.Workflows
 {
-    public sealed class MoveNode : WorkflowNode
+    public sealed class StageNode : WorkflowNode
     {
-        public MoveNode()
+        public StageNode()
         {
-            Key = "move";
-            DisplayName = "Move drill head";
+            Key = "stage";
+            DisplayName = "Move stage";
             MoveMode = ParameterBinding.Literal("relative");
-            MoveX = ParameterBinding.Literal("0E0");
-            MoveY = ParameterBinding.Literal("0E0");
+            StageX = ParameterBinding.Literal("0E0");
+            StageY = ParameterBinding.Literal("0E0");
         }
 
-        public override WorkflowNodeKind Kind => WorkflowNodeKind.Move;
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Stage;
 
         public ParameterBinding MoveMode { get; set; }
 
-        public ParameterBinding MoveX { get; set; }
+        public ParameterBinding StageX { get; set; }
 
-        public ParameterBinding MoveY { get; set; }
+        public ParameterBinding StageY { get; set; }
 
         public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
         {
             return new Dictionary<string, ParameterBinding>
             {
                 ["move_mode"] = MoveMode,
-                ["move_x"] = MoveX,
-                ["move_y"] = MoveY
+                ["stage_x"] = StageX,
+                ["stage_y"] = StageY
             };
         }
     }
 
-    public sealed class MeasureNode : WorkflowNode
+    public sealed class CameraNode : WorkflowNode
     {
-        public MeasureNode()
+        public CameraNode()
         {
-            Key = "measure";
-            DisplayName = "Measure distance";
-            Thickness = ParameterBinding.Literal("1E-3");
+            Key = "camera";
+            DisplayName = "Move camera";
+            MoveMode = ParameterBinding.Literal("relative");
+            CameraX = ParameterBinding.Literal("0E0");
+            CameraY = ParameterBinding.Literal("0E0");
         }
 
-        public override WorkflowNodeKind Kind => WorkflowNodeKind.Measure;
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Camera;
 
-        public ParameterBinding Thickness { get; set; }
+        public ParameterBinding MoveMode { get; set; }
+
+        public ParameterBinding CameraX { get; set; }
+
+        public ParameterBinding CameraY { get; set; }
 
         public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
         {
             return new Dictionary<string, ParameterBinding>
             {
-                ["thickness"] = Thickness
+                ["move_mode"] = MoveMode,
+                ["camera_x"] = CameraX,
+                ["camera_y"] = CameraY
             };
         }
     }
 
-    public sealed class DrillNode : WorkflowNode
+    public sealed class FocusNode : WorkflowNode
     {
-        public DrillNode()
+        public FocusNode()
         {
-            Key = "drill";
-            DisplayName = "Drill";
-            Thickness = ParameterBinding.Literal("1E-3");
-            DrillResultPath = ParameterBinding.Literal(string.Empty);
+            Key = "focus";
+            DisplayName = "Auto focus";
+            HorizontalFieldWidth = ParameterBinding.Literal("3.02E-6");
+            Range = ParameterBinding.Literal("50E-6");
+            Steps = ParameterBinding.Literal("13");
         }
 
-        public override WorkflowNodeKind Kind => WorkflowNodeKind.Drill;
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Focus;
 
-        public ParameterBinding Thickness { get; set; }
+        public ParameterBinding HorizontalFieldWidth { get; set; }
 
-        /// <summary>The destination path sent to the equipment.</summary>
-        public ParameterBinding DrillResultPath { get; set; }
+        public ParameterBinding Range { get; set; }
+
+        public ParameterBinding Steps { get; set; }
 
         public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
         {
             return new Dictionary<string, ParameterBinding>
             {
-                ["thickness"] = Thickness,
-                ["drill_result_path"] = DrillResultPath
+                ["hfw"] = HorizontalFieldWidth,
+                ["range"] = Range,
+                ["steps"] = Steps
+            };
+        }
+    }
+
+    public sealed class IntegrationNode : WorkflowNode
+    {
+        public IntegrationNode()
+        {
+            Key = "integration";
+            DisplayName = "Capture integrated image";
+            HorizontalFieldWidth = ParameterBinding.Literal("3.02E-6");
+            FrameCount = ParameterBinding.Literal("8");
+            ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\integration.png");
+        }
+
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Integration;
+
+        public ParameterBinding HorizontalFieldWidth { get; set; }
+
+        public ParameterBinding FrameCount { get; set; }
+
+        /// <summary>The absolute local or UNC pathname where equipment should save the image.</summary>
+        public ParameterBinding ImagePath { get; set; }
+
+        public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
+        {
+            return new Dictionary<string, ParameterBinding>
+            {
+                ["hfw"] = HorizontalFieldWidth,
+                ["frame_count"] = FrameCount,
+                ["image_path"] = ImagePath
+            };
+        }
+    }
+
+    public sealed class LiveNode : WorkflowNode
+    {
+        public LiveNode()
+        {
+            Key = "live";
+            DisplayName = "Capture live frame";
+            HorizontalFieldWidth = ParameterBinding.Literal("1E-3");
+            FrameCount = ParameterBinding.Literal("1");
+            ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\live.png");
+        }
+
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Live;
+
+        public ParameterBinding HorizontalFieldWidth { get; set; }
+
+        /// <summary>Live acquisition is one frame; validation requires this binding to evaluate to 1.</summary>
+        public ParameterBinding FrameCount { get; set; }
+
+        /// <summary>The absolute local or UNC pathname where equipment should save the frame.</summary>
+        public ParameterBinding ImagePath { get; set; }
+
+        public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
+        {
+            return new Dictionary<string, ParameterBinding>
+            {
+                ["hfw"] = HorizontalFieldWidth,
+                ["frame_count"] = FrameCount,
+                ["image_path"] = ImagePath
             };
         }
     }

@@ -25,22 +25,44 @@ public sealed class EquipmentResponseSimulationDraft
 
 public sealed class EquipmentRequestSnapshot
 {
-    public EquipmentRequestSnapshot(int index, string command)
+    public EquipmentRequestSnapshot(
+        int correlationId,
+        string action,
+        IReadOnlyDictionary<string, object?>? parameters = null)
     {
-        Index = index;
-        Command = command ?? string.Empty;
+        if (correlationId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(correlationId));
+        }
+
+        CorrelationId = correlationId;
+        Action = EquipmentActionNames.Normalize(action);
+        var parameterCopy = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (parameters != null)
+        {
+            foreach (var pair in parameters)
+            {
+                parameterCopy.Add(pair.Key, pair.Value);
+            }
+        }
+
+        Parameters = parameterCopy;
     }
 
-    public int Index { get; }
+    public int CorrelationId { get; }
 
-    public string Command { get; }
+    public string Action { get; }
+
+    public IReadOnlyDictionary<string, object?> Parameters { get; }
+
 }
 
 public enum FrameResponseSimulationStatus
 {
     Published,
     NoActiveRequest,
-    ActiveRequestIsNotFrame,
+    ActiveRequestIsNotLive,
+    ActiveRequestIsNotFrame = ActiveRequestIsNotLive,
     ActiveRequestChanged,
     ResponseAlreadyExists
 }

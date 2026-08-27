@@ -104,7 +104,8 @@
                                              IsIndeterminate="True"
                                              Visibility="{Binding RegenerateImageCommand.IsRunning, Converter={StaticResource BoolToVisibility}}" />
                             <ui:Button Content="{DynamicResource ResponseTestRegenerateImage}"
-                                       Command="{Binding RegenerateImageCommand}">
+                                       Command="{Binding RegenerateImageCommand}"
+                                       Visibility="{Binding CanGenerateImage, Converter={StaticResource BoolToVisibility}}">
                                 <ui:Button.Icon>
                                     <ui:SymbolIcon Symbol="Image24" />
                                 </ui:Button.Icon>

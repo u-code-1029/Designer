@@ -10,50 +10,50 @@ namespace DrillFlow.Tests
         [Fact]
         public void CloneForInsertionDeepCopiesNestedNodesWithFreshIdentitiesAndUniqueAliases()
         {
-            var inner = new MeasureNode { Key = "measure_1" };
+            var inner = new FocusNode { Key = "focus_1" };
             var repeat = new RepeatNode { Key = "repeat_1" };
             repeat.Body.Add(inner);
 
             var clone = Assert.IsType<RepeatNode>(WorkflowNodeCopy.CloneForInsertion(
                 repeat,
-                new[] { "repeat_1", "repeat_1_copy", "measure_1" }));
+                new[] { "repeat_1", "repeat_1_copy", "focus_1" }));
 
-            var clonedInner = Assert.IsType<MeasureNode>(Assert.Single(clone.Body));
+            var clonedInner = Assert.IsType<FocusNode>(Assert.Single(clone.Body));
             Assert.Equal("repeat_1_copy2", clone.Key);
-            Assert.Equal("measure_1_copy", clonedInner.Key);
+            Assert.Equal("focus_1_copy", clonedInner.Key);
             Assert.NotEqual(repeat.Id, clone.Id);
             Assert.NotEqual(inner.Id, clonedInner.Id);
             Assert.NotSame(repeat.Count, clone.Count);
-            Assert.NotSame(inner.Thickness, clonedInner.Thickness);
+            Assert.NotSame(inner.HorizontalFieldWidth, clonedInner.HorizontalFieldWidth);
         }
 
         [Fact]
         public void CloneForInsertionRewritesOnlyReferencesToActionsInsideCopiedSubtree()
         {
-            var first = new MeasureNode { Key = "measurement" };
-            var move = new MoveNode
+            var first = new FocusNode { Key = "focus" };
+            var stage = new StageNode
             {
-                Key = "move_1",
-                MoveX = ParameterBinding.Expression(
-                    "measurement.result.distance + external.result.offset + 'measurement.result.literal'")
+                Key = "stage_1",
+                StageX = ParameterBinding.Expression(
+                    "focus.result.value + external.result.offset + 'focus.result.literal'")
             };
             var conditional = new ConditionalNode { Key = "choice" };
             conditional.Branches[0].Condition = ParameterBinding.Expression(
-                "move_1.parameters.move_x > 0 && move_1 != null && external.result.ready");
+                "stage_1.parameters.stage_x > 0 && stage_1 != null && external.result.ready");
             conditional.Branches[0].Body.Add(first);
-            conditional.Branches[0].Body.Add(move);
+            conditional.Branches[0].Body.Add(stage);
 
             var clone = Assert.IsType<ConditionalNode>(WorkflowNodeCopy.CloneForInsertion(
                 conditional,
-                new[] { "choice", "measurement", "move_1" }));
+                new[] { "choice", "focus", "stage_1" }));
 
             var clonedNodes = clone.Branches[0].Body.ToArray();
-            var clonedMove = Assert.IsType<MoveNode>(clonedNodes[1]);
+            var clonedStage = Assert.IsType<StageNode>(clonedNodes[1]);
             Assert.Equal(
-                "=measurement_copy.result.distance + external.result.offset + 'measurement.result.literal'",
-                clonedMove.MoveX.RawText);
+                "=focus_copy.result.value + external.result.offset + 'focus.result.literal'",
+                clonedStage.StageX.RawText);
             Assert.Equal(
-                "=move_1_copy.parameters.move_x > 0 && move_1_copy != null && external.result.ready",
+                "=stage_1_copy.parameters.stage_x > 0 && stage_1_copy != null && external.result.ready",
                 clone.Branches[0].Condition!.RawText);
             Assert.NotEqual(conditional.Branches[0].Id, clone.Branches[0].Id);
         }
@@ -61,27 +61,67 @@ namespace DrillFlow.Tests
         [Fact]
         public void CloneManyForInsertionPreservesOrderAndRewritesReferencesAcrossSelectedRoots()
         {
-            var measure = new MeasureNode { Key = "measure_1" };
-            var drill = new DrillNode
+            var focus = new FocusNode { Key = "focus_1" };
+            var integration = new IntegrationNode
             {
-                Key = "drill_1",
-                Thickness = ParameterBinding.Expression(
-                    "measure_1.result.measured_distance + external.parameters.offset")
+                Key = "integration_1",
+                HorizontalFieldWidth = ParameterBinding.Expression(
+                    "focus_1.parameters.hfw + external.parameters.offset")
             };
 
             var clones = WorkflowNodeCopy.CloneManyForInsertion(
-                new WorkflowNode[] { measure, drill },
-                new[] { "measure_1", "drill_1" });
+                new WorkflowNode[] { focus, integration },
+                new[] { "focus_1", "integration_1" });
 
-            var clonedMeasure = Assert.IsType<MeasureNode>(clones[0]);
-            var clonedDrill = Assert.IsType<DrillNode>(clones[1]);
-            Assert.Equal("measure_1_copy", clonedMeasure.Key);
-            Assert.Equal("drill_1_copy", clonedDrill.Key);
+            var clonedFocus = Assert.IsType<FocusNode>(clones[0]);
+            var clonedIntegration = Assert.IsType<IntegrationNode>(clones[1]);
+            Assert.Equal("focus_1_copy", clonedFocus.Key);
+            Assert.Equal("integration_1_copy", clonedIntegration.Key);
             Assert.Equal(
-                "=measure_1_copy.result.measured_distance + external.parameters.offset",
-                clonedDrill.Thickness.RawText);
-            Assert.NotEqual(measure.Id, clonedMeasure.Id);
-            Assert.NotEqual(drill.Id, clonedDrill.Id);
+                "=focus_1_copy.parameters.hfw + external.parameters.offset",
+                clonedIntegration.HorizontalFieldWidth.RawText);
+            Assert.NotEqual(focus.Id, clonedFocus.Id);
+            Assert.NotEqual(integration.Id, clonedIntegration.Id);
+        }
+
+        [Fact]
+        public void CloneManyForInsertionDeepCopiesEveryEquipmentActionBinding()
+        {
+            WorkflowNode[] sources =
+            {
+                new StageNode { Key = "stage_1" },
+                new CameraNode { Key = "camera_1" },
+                new FocusNode { Key = "focus_1" },
+                new IntegrationNode { Key = "integration_1" },
+                new LiveNode { Key = "live_1" },
+                new AbortNode { Key = "abort_1" }
+            };
+
+            var clones = WorkflowNodeCopy.CloneManyForInsertion(
+                sources,
+                sources.Select(node => node.Key));
+
+            Assert.Collection(
+                clones,
+                node => Assert.IsType<StageNode>(node),
+                node => Assert.IsType<CameraNode>(node),
+                node => Assert.IsType<FocusNode>(node),
+                node => Assert.IsType<IntegrationNode>(node),
+                node => Assert.IsType<LiveNode>(node),
+                node => Assert.IsType<AbortNode>(node));
+            for (var index = 0; index < sources.Length; index++)
+            {
+                Assert.NotEqual(sources[index].Id, clones[index].Id);
+                Assert.Equal(sources[index].Key + "_copy", clones[index].Key);
+                var sourceBindings = sources[index].GetParameterBindings();
+                var cloneBindings = clones[index].GetParameterBindings();
+                Assert.Equal(sourceBindings.Keys, cloneBindings.Keys);
+                foreach (var key in sourceBindings.Keys)
+                {
+                    Assert.NotSame(sourceBindings[key], cloneBindings[key]);
+                    Assert.Equal(sourceBindings[key].RawText, cloneBindings[key].RawText);
+                }
+            }
         }
 
         [Fact]
@@ -104,10 +144,10 @@ namespace DrillFlow.Tests
                 null!,
                 Array.Empty<string>()));
             Assert.Throws<ArgumentException>(() => WorkflowNodeCopy.CloneManyForInsertion(
-                new WorkflowNode[] { new MoveNode(), null! },
+                new WorkflowNode[] { new StageNode(), null! },
                 Array.Empty<string>()));
 
-            var repeatedRoot = new MeasureNode { Key = "measure_1" };
+            var repeatedRoot = new FocusNode { Key = "focus_1" };
             Assert.Throws<ArgumentException>(() => WorkflowNodeCopy.CloneManyForInsertion(
                 new WorkflowNode[] { repeatedRoot, repeatedRoot },
                 Array.Empty<string>()));
@@ -119,7 +159,7 @@ namespace DrillFlow.Tests
                 new WorkflowNode[] { parent, child },
                 Array.Empty<string>()));
 
-            var duplicateAlias = new AbortNode { Key = "MEASURE_1" };
+            var duplicateAlias = new AbortNode { Key = "FOCUS_1" };
             Assert.Throws<ArgumentException>(() => WorkflowNodeCopy.CloneManyForInsertion(
                 new WorkflowNode[] { repeatedRoot, duplicateAlias },
                 Array.Empty<string>()));
@@ -137,7 +177,7 @@ namespace DrillFlow.Tests
         [Fact]
         public void CloneManyForInsertionUsesCaseInsensitiveAliasesAcrossTheWholeBatch()
         {
-            var first = new MeasureNode { Key = "Action" };
+            var first = new FocusNode { Key = "Action" };
             var second = new DelayNode
             {
                 Key = "Wait",
@@ -157,7 +197,7 @@ namespace DrillFlow.Tests
         [Fact]
         public void CloneManyForInsertionDeepCopiesHttpExpressionsInsideNestedContainers()
         {
-            var seed = new MeasureNode { Key = "seed" };
+            var seed = new FocusNode { Key = "seed" };
             var http = new HttpActionNode
             {
                 Key = "http_call",
@@ -178,7 +218,7 @@ namespace DrillFlow.Tests
                 new WorkflowNode[] { seed, repeat },
                 new[] { "seed", "http_call", "group" });
 
-            var clonedSeed = Assert.IsType<MeasureNode>(clones[0]);
+            var clonedSeed = Assert.IsType<FocusNode>(clones[0]);
             var clonedRepeat = Assert.IsType<RepeatNode>(clones[1]);
             var clonedHttp = Assert.IsType<HttpActionNode>(Assert.Single(clonedRepeat.Body));
             Assert.Equal("seed_copy", clonedSeed.Key);

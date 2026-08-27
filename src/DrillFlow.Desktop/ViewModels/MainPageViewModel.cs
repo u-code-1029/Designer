@@ -46,6 +46,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private bool _isDirty;
     private bool _suppressCollectionSync;
     private WorkflowRunState _runState = WorkflowRunState.Idle;
+    private bool _isWorkflowValid = true;
     private string _statusMessage = string.Empty;
     private bool _statusIsError;
     private TaskCompletionSource<bool>? _terminalStateWaiter;
@@ -86,9 +87,11 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
         EquipmentToolboxItems = new ObservableCollection<ToolboxItemViewModel>
         {
-            new(WorkflowNodeKind.Move, "ActionMove", "ToolboxMoveDescription", SymbolRegular.ArrowMove20, localization),
-            new(WorkflowNodeKind.Measure, "ActionMeasure", "ToolboxMeasureDescription", SymbolRegular.Ruler20, localization),
-            new(WorkflowNodeKind.Drill, "ActionDrill", "ToolboxDrillDescription", SymbolRegular.Toolbox20, localization),
+            new(WorkflowNodeKind.Stage, "ActionStage", "ToolboxStageDescription", SymbolRegular.ArrowMove20, localization),
+            new(WorkflowNodeKind.Camera, "ActionCamera", "ToolboxCameraDescription", SymbolRegular.Camera20, localization),
+            new(WorkflowNodeKind.Focus, "ActionFocus", "ToolboxFocusDescription", SymbolRegular.ScanCamera20, localization),
+            new(WorkflowNodeKind.Integration, "ActionIntegration", "ToolboxIntegrationDescription", SymbolRegular.ImageMultiple20, localization),
+            new(WorkflowNodeKind.Live, "ActionLive", "ToolboxLiveDescription", SymbolRegular.Live20, localization),
             new(WorkflowNodeKind.Abort, "ActionAbort", "ToolboxAbortDescription", SymbolRegular.Stop20, localization)
         };
         FlowToolboxItems = new ObservableCollection<ToolboxItemViewModel>
@@ -108,10 +111,14 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         ValidateCommand = new RelayCommand(
             () => ValidateWorkflow(true),
             () => !IsExecutionBusy && !_liveInteraction.IsInteractionActive);
-        RunCommand = new AsyncRelayCommand(RunAsync, () => Actions.Count > 0 && IsWorkflowEditingEnabled);
+        RunCommand = new AsyncRelayCommand(
+            RunAsync,
+            () => Actions.Count > 0 && IsWorkflowEditingEnabled && IsWorkflowValid);
         RunSelectedCommand = new AsyncRelayCommand(
             RunSelectedAsync,
-            () => SelectedAction is { IsNodeEnabled: true } && IsWorkflowEditingEnabled);
+            () => SelectedAction is { IsNodeEnabled: true, HasValidationError: false }
+                  && IsWorkflowEditingEnabled
+                  && IsWorkflowValid);
         TestResponseCommand = new AsyncRelayCommand(
             TestResponseAsync,
             () => SelectedAction is not null
@@ -311,6 +318,19 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                                             && !_liveInteraction.IsInteractionActive;
 
     public bool CanCompleteExpressions => IsWorkflowEditingEnabled;
+
+    public bool IsWorkflowValid
+    {
+        get => _isWorkflowValid;
+        private set
+        {
+            if (SetProperty(ref _isWorkflowValid, value))
+            {
+                RunCommand.NotifyCanExecuteChanged();
+                RunSelectedCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
 
     public string StatusMessage
     {
@@ -859,7 +879,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     {
         var valid = true;
         var all = EnumerateActions().ToArray();
-        foreach (var action in all)
+        foreach (var action in Actions)
         {
             valid &= action.Validate();
         }
@@ -886,6 +906,23 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             .ToArray();
         valid &= coreResult.IsValid;
 
+        var coreErrorsByNodeId = coreErrors
+            .Where(issue => issue.NodeId.HasValue)
+            .ToLookup(issue => issue.NodeId!.Value);
+        foreach (var action in all)
+        {
+            var localErrors = EnumerateLocalValidationErrors(action).ToArray();
+            var coreActionErrors = coreErrorsByNodeId[action.Id]
+                .Select(FormatValidationDetail)
+                .ToArray();
+            action.SetValidationErrors(coreActionErrors.Length > 0
+                ? localErrors.Concat(coreActionErrors)
+                : localErrors);
+        }
+
+        IsWorkflowValid = valid;
+        RunSelectedCommand.NotifyCanExecuteChanged();
+
         if (updateStatus)
         {
             if (valid)
@@ -907,14 +944,35 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             else
             {
                 StatusMessage = _localization["ValidationFailed"];
-                SelectAction(all.FirstOrDefault(action =>
-                    action.HasAliasError || action.Parameters.Any(parameter => parameter.HasError)));
+                SelectAction(all.FirstOrDefault(action => action.HasValidationError));
             }
 
             StatusIsError = !valid;
         }
 
         return valid;
+    }
+
+    private static IEnumerable<string> EnumerateLocalValidationErrors(
+        WorkflowActionViewModel action)
+    {
+        if (action.HasAliasError)
+        {
+            yield return action.AliasValidationMessage;
+        }
+
+        foreach (var parameter in action.Parameters.Where(parameter => parameter.HasError))
+        {
+            yield return parameter.Label + ": " + parameter.ValidationMessage;
+        }
+
+        foreach (var branch in action.Branches)
+        {
+            if (branch.Condition is { HasError: true } condition)
+            {
+                yield return condition.Label + ": " + condition.ValidationMessage;
+            }
+        }
     }
 
     private async Task RunAsync()
@@ -1461,6 +1519,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         OnPropertyChanged(nameof(DocumentName));
         OnPropertyChanged(nameof(DocumentDisplayName));
         OnPropertyChanged(nameof(DocumentPath));
+        ValidateWorkflow(false);
         NotifyCommandStates();
     }
 
@@ -1469,8 +1528,13 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         action.PropertyChanged += (_, eventArgs) =>
         {
             if (eventArgs.PropertyName is nameof(WorkflowActionViewModel.Alias)
-                or nameof(WorkflowActionViewModel.HasBreakpoint)
                 or nameof(WorkflowActionViewModel.IsNodeEnabled))
+            {
+                IsDirty = true;
+                ValidateWorkflow(false);
+                NotifyCommandStates();
+            }
+            else if (eventArgs.PropertyName == nameof(WorkflowActionViewModel.HasBreakpoint))
             {
                 IsDirty = true;
                 NotifyCommandStates();
@@ -1496,9 +1560,13 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 if (eventArgs.PropertyName == nameof(ActionParameterViewModel.Value))
                 {
                     IsDirty = true;
+                    ValidateWorkflow(false);
                 }
             };
         }
+
+        action.Children.CollectionChanged += OnWorkflowStructureChanged;
+        action.Branches.CollectionChanged += OnWorkflowStructureChanged;
 
         foreach (var child in action.Children)
         {
@@ -1520,9 +1588,12 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 if (eventArgs.PropertyName == nameof(ActionParameterViewModel.Value))
                 {
                     IsDirty = true;
+                    ValidateWorkflow(false);
                 }
             };
         }
+
+        branch.Children.CollectionChanged += OnWorkflowStructureChanged;
 
         foreach (var child in branch.Children)
         {
@@ -1540,7 +1611,16 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _document.Nodes.Clear();
         _document.Nodes.AddRange(Actions.Select(action => action.Model));
         IsDirty = true;
+        ValidateWorkflow(false);
         NotifyCommandStates();
+    }
+
+    private void OnWorkflowStructureChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (!_suppressCollectionSync)
+        {
+            ValidateWorkflow(false);
+        }
     }
 
     private void OnRunStateChanged(object? sender, WorkflowRunStateChangedEventArgs e)
@@ -1652,6 +1732,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         OnPropertyChanged(nameof(DocumentName));
         OnPropertyChanged(nameof(DocumentDisplayName));
         OnPropertyChanged(nameof(RuntimeStatusText));
+        ValidateWorkflow(false);
         NotifyCommandStates();
     }
 
@@ -1891,9 +1972,11 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             or WorkflowRunState.Stopping;
 
     private static bool IsEquipmentAction(WorkflowNodeKind kind) =>
-        kind is WorkflowNodeKind.Move
-            or WorkflowNodeKind.Measure
-            or WorkflowNodeKind.Drill
+        kind is WorkflowNodeKind.Stage
+            or WorkflowNodeKind.Camera
+            or WorkflowNodeKind.Focus
+            or WorkflowNodeKind.Integration
+            or WorkflowNodeKind.Live
             or WorkflowNodeKind.Abort;
 
     private string FormatValidationDetail(ValidationIssue issue)

@@ -41,21 +41,23 @@ namespace DrillFlow.Tests
         [Fact]
         public void ActionContextExposesParametersLatestAndAllIterationResults()
         {
-            var action = new MeasureNode { Key = "measure_1" };
+            var action = new StageNode { Key = "stage_1" };
             var first = Result(action, 10, 0.001);
             var second = Result(action, 11, 0.002);
             var context = new ExpressionContext().SetAction(
                 action,
-                new Dictionary<string, object?> { ["thickness"] = 0.0024 },
+                new Dictionary<string, object?> { ["stage_x"] = 0.0024 },
                 new[] { first, second });
 
-            Assert.Equal(0.0024, _engine.Evaluate("=measure_1.parameters.thickness", context).AsNumber(), 12);
-            Assert.Equal(0.002, _engine.Evaluate("measure_1.result.measured_distance", context).AsNumber(), 12);
-            Assert.Equal(0.001, _engine.Evaluate("measure_1.results[0].measured_distance", context).AsNumber(), 12);
-            Assert.Equal(0.002, _engine.Evaluate("measure_1.results.last.measured_distance", context).AsNumber(), 12);
-            Assert.Equal(0.002, _engine.Evaluate("measure_1.last.measured_distance", context).AsNumber(), 12);
-            Assert.Equal(2d, _engine.Evaluate("measure_1.results.count", context).AsNumber());
-            Assert.Equal(11d, _engine.Evaluate("measure_1.result.index", context).AsNumber());
+            Assert.Equal(0.0024, _engine.Evaluate("=stage_1.parameters.stage_x", context).AsNumber(), 12);
+            Assert.Equal(0.002, _engine.Evaluate("stage_1.result.current_stage_x", context).AsNumber(), 12);
+            Assert.Equal(0.001, _engine.Evaluate("stage_1.results[0].current_stage_x", context).AsNumber(), 12);
+            Assert.Equal(0.002, _engine.Evaluate("stage_1.results.last.current_stage_x", context).AsNumber(), 12);
+            Assert.Equal(0.002, _engine.Evaluate("stage_1.last.current_stage_x", context).AsNumber(), 12);
+            Assert.Equal(2d, _engine.Evaluate("stage_1.results.count", context).AsNumber());
+            Assert.Equal(11d, _engine.Evaluate("stage_1.result.correlation_id", context).AsNumber());
+            Assert.Throws<ExpressionEvaluationException>(
+                () => _engine.Evaluate("stage_1.result.index", context));
         }
 
         [Fact]
@@ -81,21 +83,21 @@ namespace DrillFlow.Tests
         [Fact]
         public void AnalyzeReturnsOnlyRootActionIdentifiers()
         {
-            var analysis = _engine.Analyze("measure_1.result.value + move_1.parameters.move_x");
+            var analysis = _engine.Analyze("focus_1.result.value + stage_1.parameters.stage_x");
 
             Assert.Equal(2, analysis.RootIdentifiers.Count);
-            Assert.Contains("measure_1", analysis.RootIdentifiers);
-            Assert.Contains("move_1", analysis.RootIdentifiers);
+            Assert.Contains("focus_1", analysis.RootIdentifiers);
+            Assert.Contains("stage_1", analysis.RootIdentifiers);
             Assert.DoesNotContain("result", analysis.RootIdentifiers);
             Assert.Contains(
                 analysis.FirstLevelMemberReferences,
-                reference => reference.RootIdentifier == "measure_1" && reference.MemberName == "result");
+                reference => reference.RootIdentifier == "focus_1" && reference.MemberName == "result");
             Assert.Contains(
                 analysis.FirstLevelMemberReferences,
-                reference => reference.RootIdentifier == "move_1" && reference.MemberName == "parameters");
+                reference => reference.RootIdentifier == "stage_1" && reference.MemberName == "parameters");
             Assert.DoesNotContain(
                 analysis.FirstLevelMemberReferences,
-                reference => reference.MemberName == "value" || reference.MemberName == "move_x");
+                reference => reference.MemberName == "value" || reference.MemberName == "stage_x");
         }
 
         [Fact]
@@ -141,8 +143,10 @@ namespace DrillFlow.Tests
                 CorrelationId = index,
                 Values = new Dictionary<string, object?>
                 {
-                    ["command"] = "return",
-                    ["measured_distance"] = distance
+                    ["type"] = "response",
+                    ["action"] = "stage",
+                    ["result"] = 0,
+                    ["current_stage_x"] = distance
                 }
             };
         }

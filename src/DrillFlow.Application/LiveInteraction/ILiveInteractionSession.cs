@@ -6,34 +6,41 @@ using DrillFlow.Application.Communication;
 namespace DrillFlow.Application.LiveInteraction;
 
 /// <summary>
-/// Performs operator-driven camera and stage exchanges outside a persisted workflow. Every call
-/// owns one complete request/response exchange and is serialized with other calls made through
-/// this session. The shared equipment transport also excludes workflow exchanges while one of
-/// these calls is in flight.
+/// Performs operator-driven exchanges outside a persisted workflow. Calls are serialized for the
+/// whole request/response exchange and share the transport gate with Designer workflow actions.
 /// </summary>
 public interface ILiveInteractionSession
 {
-    /// <summary>Whether a live request currently owns the session exchange gate.</summary>
     bool IsBusy { get; }
 
-    /// <summary>Raised whenever <see cref="IsBusy"/> changes.</summary>
     event EventHandler? BusyChanged;
 
-    /// <summary>
-    /// Requests one low-latency camera frame at the supplied horizontal field width in metres.
-    /// A smaller width represents greater magnification.
-    /// </summary>
-    Task<EquipmentResponseMessage> RequestFrameAsync(
+    /// <summary>Requests one low-latency image using the canonical <c>live</c> action.</summary>
+    Task<LiveImageExchangeResult> RequestFrameAsync(
         double horizontalFieldWidthMetres,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Moves the stage by the supplied offsets in metres.</summary>
-    Task<EquipmentResponseMessage> MoveRelativeAsync(
-        double moveXMetres,
-        double moveYMetres,
+    Task<EquipmentResponseMessage> MoveStageAsync(
+        string moveMode,
+        double stageXMetres,
+        double stageYMetres,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Requests a high-quality still capture.</summary>
-    Task<EquipmentResponseMessage> CaptureAsync(
+    Task<EquipmentResponseMessage> MoveCameraAsync(
+        string moveMode,
+        double cameraXMetres,
+        double cameraYMetres,
+        CancellationToken cancellationToken = default);
+
+    Task<EquipmentResponseMessage> FocusAsync(
+        double horizontalFieldWidthMetres,
+        double rangeMetres,
+        int steps,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Requests a high-quality integrated image at the supplied HFW and frame count.</summary>
+    Task<LiveImageExchangeResult> IntegrateAsync(
+        double horizontalFieldWidthMetres,
+        int frameCount,
         CancellationToken cancellationToken = default);
 }

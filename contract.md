@@ -1,395 +1,333 @@
 # DrillFlow 장비 파일 통신 계약
 
-> 상태: 구현 기준 문서 · 계약 버전 4 · 최종 확인 2026-08-27
-> 범위: 드릴 장비와 주고받는 단일 동작의 request/response 파일
-> 비범위: 디자이너 워크플로 파일(`*.drillflow.json`)의 저장 스키마
+> 상태: 구현 기준 문서 · 계약 버전 5 · 최종 확인 2026-08-28
+> 범위: Designer/Live Interaction과 장비 사이의 단일 Action request/response
+> 비범위: 워크플로 저장 파일(`*.drillflow.json`), HTTP 및 로컬 Control Flow
 
-이 문서는 장비 입·출력 구조를 변경하는 개발자나 에이전트가 현재 계약과 변경 지점을 빠르게 찾기 위한 기준 문서다. 현재 전송 표현은 **UTF-8(BOM 없음) JSON**으로 고정되어 있다. 설정의 파일 확장자는 파일명일 뿐 codec을 선택하지 않는다. 예를 들어 파일명을 `request.xml`로 바꾸더라도 현재 구현은 JSON을 기록한다. XML 또는 다른 형식을 실제로 지원하려면 [포맷 변경 지점](#json--xml-등-포맷-변경-지점)을 함께 수정해야 한다.
+이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 장비에 게시하고 장비에서 읽는 파일은 **UTF-8(BOM 없음) XML**이다.
 
-Designer 내부의 Delay/Repeat/Conditional 및 HTTP Action은 이 장비 파일 계약의 범위 밖이다. 특히 HTTP 응답은 `command: "return"` 구조를 요구하지 않으며 HTTP Action의 동적 런타임 결과로 별도 처리한다.
+XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿에서 `{{{field_name}}}` 자리만 XML-safe 값으로 치환하거나 추출한다. 실제 장비 XML이 확정되면 [템플릿 폴더](#8-xml-템플릿과-변경-방법)의 12개 Dummy 파일을 실제 양식으로 바꾸고 placeholder 이름과 의미를 유지한다.
 
-## 1. 공통 처리 모델
+## 1. 공통 처리 순서
 
-한 번에 하나의 Action만 다음 순서로 처리한다.
+한 exchange에는 request 하나와 response 하나만 존재한다.
 
-1. 앱이 양의 `Int32` correlation ID를 발급한다.
-2. 앱이 request 파일을 임시 파일에 완전히 기록한 후 설정된 request 파일명으로 원자적으로 게시한다.
-3. 장비가 request를 감지하고 동작한다.
-4. 장비가 같은 `index`의 response 파일을 만든다.
-5. 앱은 안정적으로 기록된 response를 메모리에 확보하고, `index`가 일치하며 `command`가 정확히 `return`이고 필수 필드가 유효한 파일만 현재 요청의 응답으로 인정한다. correlation을 확인하려면 response를 읽어야 하므로 이 stable snapshot 확보는 다음 파일 정리보다 먼저 일어난다.
-6. `ApplicationRequestLifecycle = DeleteAfterResponse`이면 앱은 matching response를 감지한 직후 처리 완료된 request 파일을 먼저 best-effort로 삭제한다. 이미 없거나 삭제할 수 없어도 정상 response 처리는 실패시키지 않는다.
-7. 앱은 확보해 둔 response snapshot을 런타임 결과로 materialize한 뒤, `ApplicationResponseLifecycle = DeleteAfterRead`이면 response 파일을 best-effort로 삭제하고 materialize한 결과를 호출자에게 반환한다. 따라서 기본 순서는 **matching response 감지 → request 삭제 시도 → 결과 materialize → response 삭제 시도 → 결과 반환**이며, 두 삭제는 각각 설정에서 retain/overwrite 방식으로 바꿀 수 있다.
-8. response의 확장 필드는 현재 Run의 해당 Action 결과 또는 Live Interaction의 최신 상태로 보존된다. “이 Action만 실행”은 현재 Run 결과 세션을 이어 쓰며, 새 전체 Workflow Run·New/Open·명시적 전체 결과 초기화에서만 이전 결과 세션을 비운다.
-9. 사용자가 실행을 정지하면 현재 response 대기를 즉시 취소한다. request가 이미 게시되었다면 앱은 process/SMB exchange lock을 유지한 채 **게시한 byte와 현재 request가 정확히 같은 경우에만** 해당 파일을 best-effort로 삭제한다. 이미 없으면 성공으로 보고, 내용이 다르면 다른 주체의 파일로 간주해 보존하며, 잠금·권한 문제는 제한 시간 동안 재시도한 뒤 경고만 남긴다. 이 취소 정리는 `ApplicationRequestLifecycle` 설정과 무관하게 적용된다. 일반 Stop/HFW 전환은 UI를 먼저 반환하지만, 앱 종료 시에는 이미 예약된 정리 작업을 그 작업의 원래 2초 deadline 중 남은 시간까지만 join해 프로세스 종료가 정상 로컬 정리보다 앞서지 않게 한다. 중단할 수 없는 UNC/SMB OS 호출이 deadline을 넘으면 종료를 계속한다.
+1. 앱이 양의 `Int32` `correlation_id`를 발급한다. 실행 순서가 아니라 correlation 전용 값이다.
+2. 앱이 Action의 논리 request 객체를 만든다.
+3. Action별 XML request 템플릿의 placeholder를 치환해 설정된 request 파일명으로 원자적으로 게시한다.
+4. 장비가 request를 읽고 동작을 완료한다.
+5. 장비가 같은 `correlation_id`와 같은 `action`을 가진 XML response를 게시한다.
+6. 앱은 안정적으로 기록된 response snapshot을 읽고 해당 Action의 response 템플릿으로 파싱한다. 다른 correlation/action, 깨진 XML, 유효하지 않은 필드는 현재 응답으로 인정하지 않는다.
+7. matching response가 확인되면 기본 설정에서 request를 먼저 best-effort 삭제한다.
+8. response를 런타임 결과로 materialize한 다음 기본 설정에서 response도 best-effort 삭제한다.
+9. `result = 0`이면 성공한다. `result = 1`이면 해당 Action을 `Faulted`로 기록하고 이후 Workflow를 즉시 중단한다.
 
-현재 프로토콜에는 별도의 완료 신호 파일이나 상태 비트가 없다. 같은 `index`를 가진 유효한 response가 안정적으로 게시되는 것이 해당 request의 완료 신호다.
+request/response 삭제가 이미 완료되었거나 공유·권한 문제로 실패해도 유효한 응답 처리와 다음 동작은 계속된다. 삭제 실패는 warning으로 기록한다. 사용자가 Stop하면 response timeout을 기다리지 않고 현재 대기를 취소하며, 앱이 게시한 byte와 현재 request가 정확히 같을 때만 그 request를 회수한다. 이는 장비가 이미 시작한 물리 동작을 취소하지 않는다. 물리 중단이 필요하면 명시적인 `abort` Action을 사용한다.
 
-현재 장비 동작은 모두 성공한다고 가정한다. 오류 코드, 성공 여부, 오류 응답 및 보상 동작은 계약에 없다. 툴바의 Stop은 장비 명령이 아니며 실행기를 즉시 멈춘다. request 삭제도 아직 장비가 읽지 않은 파일의 회수일 뿐, 이미 시작한 물리 동작을 취소하지 않는다. Canvas의 명시적인 Abort Action만 `command: "abort"` request를 전송한다.
+Correlation ID 제공자는 영구 high-water mark 블록을 예약하므로 정상 발급된 값은 프로세스 재시작 뒤에도 재사용하지 않는다. timeout retry를 켜면 동일한 `correlation_id`와 동일 payload를 재게시한다. 장비가 이를 idempotency key로 처리하지 않으면 물리 동작은 at-least-once일 수 있으므로 retry 기본값은 꺼져 있다.
 
-Correlation ID 저장소는 마지막 발급값이 아니라 **영구 예약된 high-water mark**를 기록한다. 각 프로바이더는 프로세스 간 파일 잠금 아래 최대 256개의 양의 `Int32` ID 블록을 원자적으로 예약한 뒤 메모리에서 소비한다. 따라서 정상 발급된 ID는 재시작이나 여러 프로바이더 인스턴스 사이에서도 재사용되지 않지만, 비정상 종료 후 미사용 예약분은 건너뛰며 여러 인스턴스에서 관찰한 ID 순서에는 간격이나 교차가 생길 수 있다. `index`는 실행 순서 번호가 아니라 correlation 전용 값이다. `Int32.MaxValue`까지 소진되면 stale response를 다시 받아들이는 wrap/reset 대신 명시적으로 실패한다.
+## 2. 공통 논리 envelope
 
-### 공통 request envelope
+아래 JSON은 파일이 아니라 메모리 객체와 디버깅 표현이다.
 
-| 필드 | JSON 타입 | 필수 | 의미/제약 |
-|---|---:|:---:|---|
-| `index` | integer | 예 | 양의 `Int32` correlation ID. retry에도 **동일한 값**과 동일 payload를 사용한다. |
-| `command` | string | 예 | 현재 `move`, `measure`, `drill`, `abort`, `frame`, `capture` 중 하나. 대소문자는 현재 소문자 고정이다. |
-| 그 밖의 필드 | command별 | 조건부 | 아래 command 표를 따른다. `index`, `command`는 파라미터 이름으로 사용할 수 없다. |
+### Request
 
-### 공통 response envelope
-
-| 필드 | JSON 타입 | 필수 | 의미/제약 |
-|---|---:|:---:|---|
-| `index` | integer | 예 | 처리한 request의 `index`와 정확히 같아야 한다. 현재 요청과 다르면 stale/다른 응답으로 무시한다. |
-| `command` | string | 예 | 정확히 소문자 `return`이어야 한다. |
-| `stage_x` | number | 예 | 응답 시점 stage의 home `(0, 0)` 기준 절대 X 좌표. 단위는 metre이며 유한 `double`이어야 한다. |
-| `stage_y` | number | 예 | 응답 시점 stage의 home `(0, 0)` 기준 절대 Y 좌표. 단위는 metre이며 유한 `double`이어야 한다. |
-| `image_path` | string | 조건부 | 장비가 저장한 결과 이미지의 경로. `frame`/`capture` 응답에는 필수이고 그 밖의 응답에서는 선택적이다. 존재할 때 빈 문자열일 수 없으며 앱에서 접근 가능한 절대 로컬 또는 UNC 경로여야 한다. |
-| 임의 확장 필드 | JSON 값 | 아니요 | 향후 필드를 허용한다. string/number/integer/boolean/null/array/object를 손실 없이 런타임 결과에 보존한다. |
-
-`image_path`는 촬영 결과가 없는 Action에서는 생략할 수 있다. 단, `frame`과 `capture`는 이미지 획득 자체가 동작 목적이므로 이 필드가 없으면 해당 Live 요청은 실패로 처리한다. 경로가 존재하지만 파일이 없거나 읽을 수 없는 경우에도 response 자체는 수신된 것으로 보존하되 UI는 이전 정상 이미지를 유지하고 오류 상태를 표시한다. response 필드는 위의 알려진 필드로 폐쇄되어 있지 않다. `EquipmentResponseMessage.Properties`는 알 수 없는 필드를 의도적으로 보존하며 Expression에서 접근할 수 있다. 현재 parser는 `index`와 `command`의 JSON property name을 정확한 소문자로 기대한다.
-
-## 2. command별 request
-
-모든 길이의 논리 단위는 **metre(m)**다. JSON에는 문자열이 아니라 number로 기록하며 serializer는 유한 `double`을 대문자 `E` 과학 표기법으로 출력한다. `1E-3`, `2.56E-4`, `0.0256E-2`처럼 같은 수를 표현하는 입력은 동일한 수로 평가된다. NaN과 ±Infinity는 허용하지 않는다.
-
-### 2.1 Move — 드릴 헤드 이동
-
-| 필드 | JSON 타입 | 필수 | 범위/의미 |
-|---|---:|:---:|---|
-| `index` | integer | 예 | 공통 envelope |
-| `command` | string | 예 | `move` |
-| `move_mode` | string | 예 | `relative` 또는 `absolute` |
-| `move_x` | number | 예 | `-0.5 < move_x < 0.5` m. 음수 가능 |
-| `move_y` | number | 예 | `-0.5 < move_y < 0.5` m. 음수 가능 |
-
-`absolute`는 장비 home position `(0, 0)`을 중심으로 한 좌표이며, `relative`는 현재 위치 기준 변위다. 두 모드 모두 좌/우 및 상/하를 나타내기 위해 음수를 허용한다.
-
-```json
+~~~json
 {
-  "index": 101,
-  "command": "move",
-  "move_mode": "relative",
-  "move_x": 3E-3,
-  "move_y": -2.56E-4
+  "type": "request",
+  "correlation_id": 1,
+  "action": "stage"
 }
-```
+~~~
 
-### 2.2 Measure — 철판과 헤드 사이 거리 측정
-
-| 필드 | JSON 타입 | 필수 | 범위/의미 |
-|---|---:|:---:|---|
-| `index` | integer | 예 | 공통 envelope |
-| `command` | string | 예 | `measure` |
-| `thickness` | number | 예 | `0 < thickness <= 2.4E-3` m |
-
-```json
-{
-  "index": 102,
-  "command": "measure",
-  "thickness": 1E-3
-}
-```
-
-### 2.3 Drill — 구멍 가공
-
-| 필드 | JSON 타입 | 필수 | 범위/의미 |
-|---|---:|:---:|---|
-| `index` | integer | 예 | 공통 envelope |
-| `command` | string | 예 | `drill` |
-| `thickness` | number | 예 | `0 < thickness <= 2.4E-3` m |
-| `drill_result_path` | string | 예 | 장비가 가공 결과 CSV를 기록할 목적지 경로. 빈 문자열 불가 |
-
-```json
-{
-  "index": 103,
-  "command": "drill",
-  "thickness": 2.4E-3,
-  "drill_result_path": "C:\\DrillResults\\hole-103.csv"
-}
-```
-
-### 2.4 Abort — 장비 중단
-
-추가 파라미터가 없다. 이 command는 Canvas에 Abort Action이 있을 때만 전송한다.
-
-```json
-{
-  "index": 104,
-  "command": "abort"
-}
-```
-
-### 2.5 Frame — Live 저지연 1프레임
-
-| 필드 | JSON 타입 | 필수 | 범위/의미 |
-|---|---:|:---:|---|
-| `index` | integer | 예 | 공통 envelope |
-| `command` | string | 예 | `frame` |
-| `hfw` | number | 예 | metre 기준 Horizontal Field Width. 0보다 큰 유한값이며, 작을수록 높은 배율 |
-
-Live Interaction 페이지가 동영상과 유사한 미리보기를 만들기 위해 한 번에 한 요청씩 순차적으로 사용한다. 장비는 요청된 `hfw`로 프레임 파일 기록을 완료한 뒤 `image_path`가 포함된 공통 response를 게시해야 한다.
-
-```json
-{
-  "index": 105,
-  "command": "frame",
-  "hfw": 1E-2
-}
-```
-
-### 2.6 Capture — 고화질 정지 이미지 촬영
-
-추가 파라미터가 없다. Live 미리보기보다 시간이 더 걸리더라도 저장용 고화질 정지 이미지를 만든다. 장비는 이미지 파일 기록을 완료한 뒤 `image_path`가 포함된 공통 response를 게시해야 한다.
-
-```json
-{
-  "index": 106,
-  "command": "capture"
-}
-```
-
-## 3. response 예시와 런타임 표현
-
-현재 최소 예시는 다음과 같다.
-
-```json
-{
-  "index": 103,
-  "command": "return",
-  "stage_x": 3E-3,
-  "stage_y": -2.56E-4
-}
-```
-
-### Live Interaction 순서와 좌표 계약
-
-Live 페이지는 `frame response 수신 → image_path 파일을 완전히 메모리에 로드하고 파일 handle 해제 → 화면 갱신 → 다음 frame request` 순서를 지킨다. 장비가 매 프레임 같은 이미지 경로를 덮어쓸 수 있으므로 이미지 로드 전에 다음 request를 게시하지 않는다.
-
-Designer의 HFW 기본값은 편집 가능한 `10 mm`이며 metre 환산 결과가 0보다 큰 유한값일 때만 frame request에 사용한다. 이미지 위 마우스 휠 또는 편집 컨트롤 밖의 `+`/`-` 키는 HFW를 각각 절반(확대)/2배(축소)로 변경한다. 유효한 Pixel Pitch가 입력되어 있으면 같은 HFW 비율로 자동 보정한다. HFW가 바뀌면 이전 HFW로 이미 게시된 frame exchange를 즉시 취소·회수하고 최신 HFW로 다시 요청한다. 화면에 남은 이전 프레임은 새 HFW 프레임이 수신·디코딩될 때까지 보정 대기 상태이며, 이 동안 더블클릭/오른쪽 클릭 Stage 이동을 차단한다.
-
-하나의 물리 장비와 `ExchangeDirectory`에는 동시에 **하나의 active controller만** 연결해야 한다. `.drillflow.exchange.lock`은 개별 exchange가 섞이는 것만 막으며 여러 운전자가 장비를 번갈아 움직이는 장기 session ownership을 대신하지 않는다. 일반 Workflow Action의 `image_path`는 현재 Run이 끝날 때까지 correlation별로 고유하거나 내용이 변하지 않아야 한다. Live `frame`만 위의 순차 읽기 경계 안에서 같은 경로 덮어쓰기를 허용한다.
-
-이미지 더블클릭 또는 오른쪽 클릭 메뉴의 “해당 위치로 이동”은 마지막 정상 이미지의 **중심**을 카메라 기준점으로 사용한다. 두 입력 경로는 동일한 좌표 mapper를 사용한다. 원본 이미지의 오른쪽이 기본 `+X`, 아래쪽이 기본 `+Y`이며 장비의 카메라 설치 방향에 따라 각 축을 UI에서 반전할 수 있다. WPF가 BitmapSource의 pixel 크기뿐 아니라 X/Y DPI로 자연 DIP 크기를 정한다는 점까지 반영해 `Stretch=Uniform` letterbox를 제거하며, letterbox 영역은 이동 지점이 아니다. 원본 pixel 좌표 차이에 사용자가 입력한 pixel pitch를 metre로 환산해 곱하고, 기존 `move`의 `relative` request로 전송한다. 계산된 각 축 이동량도 `-0.5 m < value < 0.5 m` 범위를 만족해야 하며 범위를 넘으면 clamp하지 않고 요청을 차단한다.
-
-이동 또는 고화질 촬영을 시작할 때는 새 frame 예약을 멈추고 현재 frame exchange를 즉시 취소한다. transport가 자신이 게시한 correlation·command·payload와 현재 request가 모두 일치할 때만 그 request를 회수하며, 이 cleanup이 소유한 exchange gate가 풀린 뒤에만 `move` 또는 `capture` 하나를 게시한다. 따라서 frame과 interactive request는 파일 경로에서 겹치지 않는다. 이미지 지점 이동은 matching move response가 성공한 뒤 페이지가 활성 상태이면 이전 Stop 상태와 관계없이 frame 루프를 시작하고, 실패·취소·페이지 이탈 때는 재개하지 않는다. Capture는 직전 Live 상태가 재생 중이었을 때 후속 처리가 끝난 뒤 frame 루프를 복원한다. Stop은 활성 frame을, 페이지 이탈과 앱 종료는 앱이 소유한 활성 frame/move/capture를 취소하지만 장비가 이미 읽어 실행한 명령을 되돌리는 `abort`는 게시하지 않는다.
-
-`capture` response를 받으면 앱은 장비 소유 `image_path`를 bounded stable-read로 전용 LocalAppData 스냅샷에 원본 바이트 그대로 확보한다. WIC 검증에 실패하면 장비 경로에서 다시 스냅샷을 얻는 과정까지 bounded retry하며, 미리보기와 사용자 저장은 검증된 동일 스냅샷만 사용한다. 장비가 이후 원본을 교체·삭제해도 저장 내용은 변하지 않는다. UNC 파일 open 자체는 Windows 네트워크 공급자에 의해 OS timeout까지 지연될 수 있어 UI thread 밖에서 수행한다. 취소 시 앱은 그 worker를 더 기다리지 않아 UI 종료를 진행하지만, 이미 시작된 open 자체가 즉시 중단된다고 보장하지 않으며 뒤늦게 남은 staging 파일은 worker 완료 또는 다음 앱 시작에서 정리한다.
-
-이미지와 확장 필드가 있는 응답도 허용된다.
-
-```json
-{
-  "index": 103,
-  "command": "return",
-  "stage_x": 3E-3,
-  "stage_y": -2.56E-4,
-  "image_path": "C:\\DrillImages\\hole-103.png",
-  "metadata": {
-    "head": "A"
-  },
-  "samples": [0.12, 0.13]
-}
-```
-
-Expression에서 이전 Action alias가 `drill_1`이라면 다음 객체를 제공한다.
-
-| 접근 경로 | 값 |
-|---|---|
-| `drill_1.parameters` | 실행 시 평가된 request 파라미터. `index`와 `command`는 포함하지 않는다. |
-| `drill_1.result` | 현재 Run의 가장 최근 결과. 실행 전에는 `null` |
-| `drill_1.last` | `result`와 동일 |
-| `drill_1.results` | Repeat를 포함한 현재 Run의 모든 결과 배열 |
-| `drill_1.results.last` | 결과 배열의 마지막 값 또는 빈 배열이면 `null` |
-| `drill_1.results.count` / `.length` | 결과 개수 |
-| `drill_1.results[0]` | 0-based 결과 접근 |
-
-각 result에는 response 확장 필드 외에 `index`와 `iteration_path`가 노출된다. 장비 Action에는 `command: "return"`도 노출된다. 예: `=drill_1.last.image_path`, `=move_1.result.stage_x`, `=measure_1.result.stage_y`.
-
-### 디자이너의 테스트 Response 기본값
-
-MainPage의 **Response 테스트** ContentDialog는 commissioning 편의를 위해 선택한 장비 Action별 편집 가능한 JSON 초안을 만든다.
-
-| Action | 초안의 결과 필드 |
-|---|---|
-| Move / Measure / Drill / Abort | `stage_x: 0`, `stage_y: 0`, 선택적 `image_path` |
-
-ContentDialog를 열 때 앱은 768×512 모자이크 PNG를 사용자 LocalAppData의 전용 임시 폴더에 만들고 `image_path` 초깃값으로 제안하며, 같은 bitmap을 메모리에 유지해 미리보기로 표시한다. `다른 이미지`를 선택하면 사용자가 편집한 나머지 JSON 필드는 그대로 두고 새 이미지와 `image_path`만 함께 바꾼다. 게시할 때는 화면에 보이는 생성 이미지 경로를 다시 동기화하므로 미리보기와 실제 테스트 response가 항상 같은 이미지를 가리킨다. 앱이 만든 임시 이미지는 프로세스 종료 시 모두 삭제하며, 다음 정상 시작에서도 이전 비정상 종료가 남긴 전용 임시 파일을 정리한다.
-
-이 표는 **시뮬레이터의 편집 시작값**이며 response의 확장 필드를 폐쇄하지 않는다. 실제 response의 추가 필드는 계속 보존되고, 한 번 관찰된 필드는 현재 Run에서 Ctrl+Space 자동완성 후보에도 합쳐진다. 테스트 게시 시 현재 request 파일이 있으면 그 `index`를 우선 사용한다. `EquipmentDeletesAfterRead` 모드에서는 response `index`와 같은 request만 장비처럼 삭제한 후 response를 원자적으로 게시한다.
-
-Control flow Action은 장비 파일을 만들지 않지만 동일한 Expression 객체를 가진다.
-
-| Action | parameters | result 필드 |
+| 필드 | 타입 | 제약 |
 |---|---|---|
-| Delay | `milliseconds` (`0..29999` ms) | `elapsed_milliseconds`, `index`(0), `iteration_path` |
-| Repeat | `count` (`1..Int32.MaxValue`) | `count`, `index`(0), `iteration_path` |
-| Conditional | 없음 | `branch_index`(선택 없음은 -1), `branch_kind`(`if`/`elseif`/`else`/`none`), `index`(0), `iteration_path` |
+| `type` | string | 항상 `request` |
+| `correlation_id` | integer | 양의 `Int32`; retry에도 동일 값 사용 |
+| `action` | string | `stage`, `camera`, `focus`, `integration`, `live`, `abort` 중 하나 |
 
-Expression은 앞의 첫 non-whitespace 문자가 `=`일 때만 적용된다. 안전 parser는 산술, 비교, 논리, member/index 접근만 지원하며 C# 실행, reflection, method call은 허용하지 않는다. 참조할 수 있는 alias는 해당 위치보다 앞서 실행되고 결과가 보장되는 활성 Action뿐이다.
+### Response
 
-- Repeat 본문의 다음 Action은 같은 본문의 앞선 활성 Action을 볼 수 있다.
-- 활성 Repeat는 count가 최소 1이므로 본문의 활성 alias를 Repeat 다음 위치에서 볼 수 있다.
-- Conditional branch 내부에서는 같은 branch의 앞선 alias를 볼 수 있다.
-- 특정 branch가 선택된다는 보장이 없으므로 branch 내부 alias는 Conditional 바깥으로 나오지 않는다.
-- 비활성 Action과 현재/뒤쪽 Action은 참조할 수 없다.
+~~~json
+{
+  "type": "response",
+  "correlation_id": 1,
+  "action": "stage",
+  "result": 0
+}
+~~~
 
-## 4. 파일 및 재시도 계약
+| 필드 | 타입 | 제약 |
+|---|---|---|
+| `type` | string | 항상 `response` |
+| `correlation_id` | integer | 현재 request와 정확히 같아야 함 |
+| `action` | string | 현재 request와 정확히 같아야 함 |
+| `result` | integer | `0`: Success, `1`: Fail/Fault |
 
-설정은 `EquipmentCommunicationOptions`에 매핑된다.
+숫자는 논리적으로 JSON number이며 XML에서는 invariant culture의 과학적 표기법으로 기록한다. 모든 metre 값은 `NaN`, `Infinity`, `-Infinity`가 아닌 유한한 `double`이어야 한다.
 
-| 설정 | 현재 동작 |
+## 3. Action 계약
+
+Designer의 장비 Action은 아래 여섯 개뿐이다. 예전 `move`는 `stage`로 schema migration하고, 기존 Expression의 `parameters.move_x/y`, `result/last.stage_x/y`, `results[n].stage_x/y`, `index`, `command` 참조도 각각 `stage_x/y`, `current_stage_x/y`, `correlation_id`, `type`으로 갱신한다. 문자열 literal 안의 텍스트는 바꾸지 않는다. `measure`와 `drill`은 더 이상 지원하지 않는다. Delay/Repeat/Conditional/HTTP는 Designer 내부 Action이며 장비 파일을 만들지 않는다.
+
+### 3.1 Stage Move — `stage`
+
+~~~json
+{
+  "type": "request",
+  "correlation_id": 1,
+  "action": "stage",
+  "move_mode": "relative",
+  "stage_x": 1E-6,
+  "stage_y": -2.56E-3
+}
+~~~
+
+~~~json
+{
+  "type": "response",
+  "correlation_id": 1,
+  "action": "stage",
+  "result": 0,
+  "current_stage_x": -3.2E-6,
+  "current_stage_y": 4.12E-4
+}
+~~~
+
+- `move_mode`: 정확히 `relative` 또는 `absolute`.
+- `stage_x`, `stage_y`: metre 기준 유한 signed number. 음수/0/양수 모두 허용한다.
+- `absolute`: 장비 home `(0, 0)` 기준 위치. `relative`: 현재 위치 기준 변위.
+- `current_stage_x`, `current_stage_y`: 동작 후 home 기준 절대 좌표이며 유한 signed number.
+
+### 3.2 Camera Move — `camera`
+
+Request parameter는 `move_mode`, `camera_x`, `camera_y`이고 Stage와 같은 유한 signed-number 규칙을 사용한다. Response는 `current_camera_x`, `current_camera_y`를 필수로 가진다.
+
+~~~json
+{
+  "type": "request",
+  "correlation_id": 2,
+  "action": "camera",
+  "move_mode": "absolute",
+  "camera_x": -1E-6,
+  "camera_y": 8.2E-3
+}
+~~~
+
+~~~json
+{
+  "type": "response",
+  "correlation_id": 2,
+  "action": "camera",
+  "result": 0,
+  "current_camera_x": -3.2E-9,
+  "current_camera_y": 7.62E-6
+}
+~~~
+
+### 3.3 Auto Focus — `focus`
+
+~~~json
+{
+  "type": "request",
+  "correlation_id": 3,
+  "action": "focus",
+  "hfw": 3.02E-6,
+  "range": 50E-6,
+  "steps": 13
+}
+~~~
+
+~~~json
+{
+  "type": "response",
+  "correlation_id": 3,
+  "action": "focus",
+  "result": 0,
+  "z_to_sharpness_2d": [[1E-7, 500], [1.5E-6, 600], [2.1E-6, 1200]]
+}
+~~~
+
+- `hfw`: `0 < hfw < 2.4E-3` m.
+- `range`: `range > 0` m인 유한 number.
+- `steps`: 3보다 큰 정수, 즉 `4..Int32.MaxValue`.
+- `z_to_sharpness_2d`: `null`, 빈 배열, 또는 `[z, sharpness]` pair 배열.
+- 각 pair는 정확히 두 값이며 Z와 sharpness 모두 유한하고 `> 0`이다. Z의 단위는 metre다.
+
+Dummy XML은 `z_to_sharpness_2d`를 한 placeholder 문자열로 다룬다. 현재 codec은 `null`, `[]`, `[[z,sharpness],...]` 모양의 invariant 숫자 문자열을 사용한다. 실제 장비 표기가 다르면 Focus response 템플릿과 codec의 해당 field adapter를 함께 바꾼다.
+
+### 3.4 Integration — `integration`
+
+~~~json
+{
+  "type": "request",
+  "correlation_id": 4,
+  "action": "integration",
+  "hfw": 3.02E-6,
+  "frame_count": 8,
+  "image_path": "C:\\EquipmentImages\\integration-4.bmp"
+}
+~~~
+
+Response는 같은 이름의 `hfw`, `frame_count`, `image_path`와 공통 `result`를 가진다. 장비는 request와 다른 절대 경로를 반환할 수 있고 앱은 response 경로를 최종 결과로 사용한다.
+
+- `hfw`: `0 < hfw < 2.4E-3` m.
+- `frame_count`: 1, 2, 4, 8, 16, 32, 64 중 하나.
+- `image_path`: 파일명을 포함한 절대 Windows 로컬 경로 또는 UNC 경로. 빈 값과 상대 경로는 금지한다.
+
+### 3.5 Live frame — `live`
+
+~~~json
+{
+  "type": "request",
+  "correlation_id": 5,
+  "action": "live",
+  "hfw": 1E-3,
+  "frame_count": 1,
+  "image_path": "C:\\Exchange\\.drillflow-live\\live-5.bmp"
+}
+~~~
+
+Response는 공통 envelope/result와 `hfw`, `frame_count`, `image_path`를 가진다.
+
+- `hfw`: `0 < hfw < 2.4E-3` m. UI 기본값은 `1E-3` m(1mm).
+- `frame_count`: request와 response 모두 항상 `1`.
+- `image_path`: Integration과 같은 절대 파일 경로 규칙.
+
+Live Interaction은 한 번에 하나의 frame만 요청한다. response 이미지를 file handle 없이 메모리에 완전히 decode한 뒤 다음 request를 만든다. 앱이 요청 경로로 만든 `.drillflow-live/<action>-<correlation_id>.bmp`와 response 경로가 정확히 같을 때만 앱 소유 임시 파일로 간주해 사용 후 best-effort 삭제한다. 장비가 다른 경로를 반환하면 장비 소유로 간주해 보존한다. 실제 장비가 별도 내부 프레임 파일을 더 만든다면 그 파일의 정리는 장비가 책임지는 것이 안전하다.
+
+### 3.6 Abort — `abort`
+
+추가 request parameter가 없고 response도 공통 `result`만 가진다.
+
+~~~json
+{
+  "type": "request",
+  "correlation_id": 6,
+  "action": "abort"
+}
+~~~
+
+툴바 Stop과 Abort는 다르다. Stop은 앱의 현재 실행/response 대기를 즉시 취소하고 다음 Action을 시작하지 않지만 장비에 abort를 보내지 않는다. Canvas의 Abort Action만 `action = abort` request를 전송한다.
+
+## 4. Designer validation과 Expression
+
+파라미터 입력은 literal 또는 첫 non-whitespace 문자가 `=`인 Expression이다. 실행 시 평가 결과에도 동일한 validation을 다시 적용한다.
+
+| Action | 입력 필드 |
 |---|---|
-| `ExchangeDirectory` | request와 response가 함께 존재하는 절대 로컬 또는 UNC 폴더 |
-| `RequestFileName` / `ResponseFileName` | 경로 없는 leaf name이며 확장자 필수. 서로 달라야 함 |
-| `EquipmentRequestLifecycle = EquipmentDeletesAfterRead` | 게시 전/응답 후/재시도 전 장비가 request를 삭제할 때까지 bounded wait. 늦은 삭제가 다음 request를 지우지 않게 한다. |
-| `EquipmentRequestLifecycle = RetainUntilOverwritten` | 다음 게시에서 완료된 request를 원자적으로 교체 |
-| `ApplicationRequestLifecycle = DeleteAfterResponse` | matching response를 정상 수신한 뒤 앱이 해당 request를 best-effort로 삭제(기본값). 파일이 이미 없거나 권한·공유 등으로 삭제에 실패해도 warning만 기록하고 response 반환 및 다음 처리를 계속한다. |
-| `ApplicationRequestLifecycle = RetainUntilOverwritten` | response 수신 뒤에도 앱이 request를 남기며 다음 게시가 원자적으로 교체하도록 허용 |
-| `ApplicationResponseLifecycle = DeleteAfterRead` | 정상 matching response를 읽은 후 앱이 삭제(기본 UX 선택) |
-| `ApplicationResponseLifecycle = RetainUntilOverwritten` | response를 남기고 다음 장비 응답이 교체하도록 허용 |
-| `ResponseTimeout` | matching response 대기 시간 및 관련 bounded I/O 대기 기준 |
-| `RetryEnabled`, `MaximumRetryCount`, `RetryDelay` | timeout 시 동일 `index` 및 payload를 재게시. MaximumRetryCount는 최초 시도 외 추가 횟수 |
-| `PollingInterval`, `StableReadDelay` | 로컬/SMB 모두 polling을 source of truth로 사용하고 크기/수정시간이 안정된 파일만 읽음. 신규 설치의 polling 기본값은 Live 응답성을 위해 50ms이며 설정에서 조절 가능 |
+| Stage | `move_mode`, `stage_x`, `stage_y` |
+| Camera | `move_mode`, `camera_x`, `camera_y` |
+| Focus | `hfw`, `range`, `steps` |
+| Integration | `hfw`, `frame_count`, `image_path` |
+| Live | `hfw`, 고정 `frame_count = 1`, `image_path` |
+| Abort | 없음 |
 
-동일 폴더의 전체 exchange는 `.drillflow.exchange.lock`을 `FileShare.None`으로 열어 프로세스/워크스테이션 간 직렬화한다. 이미 존재하는 response와 byte-for-byte 같은 내용은 새 응답으로 인정하지 않는다.
+각 Action은 `parameters`, `result`, `last`, `results`를 가진 Expression 객체로 노출된다.
 
-`EquipmentRequestLifecycle`은 장비가 request를 언제 제거하는지에 관한 handshake 정책이고, `ApplicationRequestLifecycle`은 matching response가 확인된 뒤 앱이 남은 request를 정리하는 정책이다. 두 설정은 독립적이다. 기본 조합은 장비가 request를 유지·덮어쓰는 환경에서도 라이브 `frame` 요청 파일이 계속 남지 않도록 앱이 응답마다 request를 삭제한다. 사후 삭제는 이미 완료된 물리 동작의 성공 여부를 바꾸지 않으므로 실패를 실행 오류로 승격하지 않는다. 남은 파일은 다음 원자적 게시에서 교체할 수 있다.
+~~~text
+=stage_1.parameters.stage_x
+=stage_1.result.current_stage_x
+=focus_1.result.z_to_sharpness_2d[0][0]
+=integration_1.last.image_path
+~~~
 
-## 5. 코드의 현재 Source of Truth
+장비 result에는 `type`, `correlation_id`, `action`, `result`와 Action별 response field가 포함된다. Repeat 내부 결과는 iteration마다 `results`에 모두 보존한다. response `result = 1`도 해당 Action 결과로 먼저 보존한 뒤 Workflow를 Fault로 종료한다. 런타임 결과는 새 전체 Run, New/Open, 명시적 전체 초기화 또는 프로세스 종료 전까지 메모리에 남는다.
 
-### 논리 message와 실행 매핑
+## 5. Live Interaction의 독점 동작
 
-- `src/DrillFlow.Application/Communication/EquipmentRequestMessage.cs`
-  `index`, `command`, 동적 request parameters 및 예약 필드 검사
-- `src/DrillFlow.Application/Communication/EquipmentResponseMessage.cs`
-  `index`, `command`, 임의 response properties 보존
-- `src/DrillFlow.Application/Execution/WorkflowRunner.cs`
-  Action→command 매핑, `EvaluateMove/Measure/Drill`, response→런타임 result, control flow result
-- `src/DrillFlow.Application/LiveInteraction/ILiveInteractionSession.cs`,
-  `LiveInteractionSession.cs`, `LiveInteractionProtocol.cs`
-  `frame`/`capture`/상대 `move` logical contract, correlation 검증, Live 호출 직렬화
-- `src/DrillFlow.Application/LiveInteraction/LiveImageCoordinateMapper.cs`
-  원본 pixel·Uniform letterbox·중심·pixel pitch·축 방향의 상대 이동 계산
-- `src/DrillFlow.Core/Workflows/EquipmentNodes.cs`
-  command별 authored `ParameterBinding`과 Expression 변수명
-- `src/DrillFlow.Core/Validation/ParameterValueValidator.cs`
-  단위, 타입, 수치 범위의 실행/도메인 검증
-- `src/DrillFlow.Core/Validation/WorkflowValidator.cs`
-  저장 전 전체 workflow 및 이전 Action 참조 규칙 검증
-- `src/DrillFlow.Core/Expressions/ExpressionContext.cs`
-  `parameters/result/results/last` 런타임 object shape
-- `src/DrillFlow.Core/Expressions/ExpressionCompletionProvider.cs`
-  Ctrl+Space 후보의 알려진 parameter/result field catalog
+Live 페이지는 `live`, `integration`, `stage`, `camera`, `focus`를 사용할 수 있고 `abort`는 제공하지 않는다.
 
-### 파일 표현과 I/O
+- frame streaming 중 다른 장비 동작을 시작하면 active live request를 즉시 취소하고 자신이 게시한 request만 회수한다.
+- Stage/Camera/Focus/Integration response가 올 때까지 새 live request를 만들지 않는다.
+- 성공 후 사용자가 streaming을 원했던 상태이면 자동으로 live frame을 재개한다.
+- 이미지 왼쪽 더블클릭 또는 “해당 위치로 이동”은 이미지 중심과 pixel pitch로 metre 단위 상대 X/Y를 계산해 `stage` request를 보낸다. 계산 좌표는 유한 signed number만 검사한다.
+- 마우스 휠 또는 `+`/`-`는 HFW를 절반/2배로 바꾸되 `0 < hfw < 2.4mm` 범위를 지킨다. 이후 frame도 새 HFW를 유지한다.
 
-- `src/DrillFlow.Application/Communication/IEquipmentFileTransport.cs`
-  실행 계층이 의존하는 논리 exchange 경계
-- `src/DrillFlow.Infrastructure/Communication/FileEquipmentTransport.cs`
-  현재 JSON serialization/deserialization, stable polling, correlation match, lifecycle/retry
-- `src/DrillFlow.Application/Communication/IEquipmentResponseSimulator.cs` 및
-  `src/DrillFlow.Infrastructure/Communication/JsonEquipmentResponseSimulator.cs`
-  선택 Action의 테스트 response 초안/검증/원자적 게시 경계. UI는 format-neutral interface만
-  사용하므로 XML 전환 시 이 구현과 DI 등록을 함께 교체한다.
-- `src/DrillFlow.Infrastructure/IO/AtomicFilePublisher.cs`
-  완료된 temp 파일의 원자적 publish/replace와 UNC fallback
-- `src/DrillFlow.Application/Communication/ApplicationRequestFileLifecycle.cs`,
-  `src/DrillFlow.Application/Communication/EquipmentCommunicationOptions.cs` 및
-  `src/DrillFlow.Infrastructure/Communication/EquipmentCommunicationOptionsValidator.cs`
-  폴더/파일명/timeout, 장비 request lifecycle, 앱 request 정리 lifecycle, response lifecycle 설정 계약
-- `src/DrillFlow.Infrastructure/Persistence/PersistentCorrelationIdProvider.cs`
-  원자적 high-water 블록 예약, 재사용 없는 양의 Int32 correlation ID
+Designer Workflow 실행과 Live Interaction 장비 동작은 같은 파일명을 공유하므로 동시에 실행하지 않는다.
 
-### UI 및 테스트
+## 6. 파일 설정과 수명주기
 
-- `src/DrillFlow.Desktop/ViewModels/ActionParameterViewModel.cs`
-  입력 즉시 검증과 변수명/설명 표시
-- `src/DrillFlow.Desktop/Views/MainPage.xaml`
-  authored parameter 및 현재 Run result 표시
-- `src/DrillFlow.Desktop/ViewModels/LiveInteractionPageViewModel.cs` 및
-  `src/DrillFlow.Desktop/Views/LiveInteractionPage.xaml(.cs)`
-  순차 frame loop, 이미지 로드, 이동/촬영 전환, Live 화면과 pointer hit testing
-- `src/DrillFlow.Desktop/Services/ILiveCaptureSnapshotStore.cs`
-  장비 capture 파일의 stable 원본-byte 스냅샷, 취소, 전용 LocalAppData 수명/잔여물 정리
-- `src/DrillFlow.Desktop/Services/ILiveImageDecoder.cs`
-  전용 STA decode queue, frozen preview, 취소된 queued work 생략, image byte/pixel 안전 상한
-- `src/DrillFlow.Desktop/Services/ResponseSimulationDialogService.cs` 및
-  `src/DrillFlow.Desktop/Views/ResponseSimulationDialogContent.xaml`
-  WPF-UI ContentDialog 기반 테스트 response 편집/게시 UI
-- `tests/DrillFlow.Tests/ApplicationWorkflowRunnerTests.cs`
-  command/parameter 매핑, dynamic response, Repeat/Stop/Breakpoint 실행
-- `tests/DrillFlow.Tests/InfrastructureFileTransportTests.cs`
-  실제 request JSON, response parser, stale/mismatch, timeout/retry/lifecycle
-- `tests/DrillFlow.Tests/CoreWorkflowValidatorTests.cs`
-  값 범위와 Expression visibility
-- `tests/DrillFlow.Tests/CoreExpressionCompletionProviderTests.cs`
-  자동완성 후보/중첩 visibility/token replacement
-- `tests/DrillFlow.Tests/InfrastructureResponseSimulatorTests.cs`
-  Action별 초안, validation, atomic publish, matching request 삭제 및 실제 transport 연동
-- `tests/DrillFlow.Tests/ApplicationLiveInteractionSessionTests.cs`,
-  `ApplicationLiveImageCoordinateMapperTests.cs`, `InfrastructureLiveInteractionSessionTests.cs`
-  Live payload/correlation/직렬화, 좌표·letterbox 변환, workflow와의 transport 상호 배제
-- `tests/DrillFlow.Tests/DesktopLiveCaptureSnapshotStoreTests.cs`
-  capture 원본 교체 이후에도 보존되는 snapshot byte와 안정성 판정
-- `tests/DrillFlow.Tests/DesktopLiveImageDecoderTests.cs`
-  STA WIC decode, byte/pixel 상한, queued 취소 및 decoder 종료
-- `tests/DrillFlow.Tests/DesktopRuntimeResultImageTests.cs`
-  Action 결과 이미지의 공용 stable-read/STA decode 사용 및 표시 실패 비치명 처리
+| 설정 | 의미 |
+|---|---|
+| `ExchangeDirectory` | request/response가 함께 존재하는 절대 로컬 또는 UNC 폴더. 입력한 `/`는 wire image path와 일관되도록 `\`로 정규화 |
+| `RequestFileName` | 확장자를 포함한 leaf filename. 기본 `request.xml` |
+| `ResponseFileName` | 확장자를 포함한 leaf filename. 기본 `response.xml` |
+| `EquipmentRequestLifecycle` | 장비가 request를 읽고 삭제하는지, 다음 request가 덮어쓰는지 |
+| `ApplicationRequestLifecycle` | matching response 뒤 앱이 request를 삭제(기본)하거나 보존하는지 |
+| `ApplicationResponseLifecycle` | materialize 뒤 앱이 response를 삭제(기본)하거나 보존하는지 |
+| `ResponseTimeout` | matching response 대기 시간 |
+| `RetryEnabled`, `MaximumRetryCount`, `RetryDelay` | timeout 재시도 정책 |
+| `PollingInterval`, `StableReadDelay` | 로컬/UNC stable polling 간격 |
 
-워크플로 문서 serializer인 `JsonWorkflowDocumentSerializer`는 장비 통신 codec과 별개다. 장비 protocol을 XML로 바꿀 때 `.drillflow.json`까지 바꿀 필요는 없다.
+request와 response filename은 서로 달라야 하고 경로가 아닌 leaf name이어야 한다. 게시에는 같은 폴더의 임시 파일과 atomic replace/move를 사용한다. 폴더별 `.drillflow.exchange.lock`과 프로세스 내부 gate가 exchange를 직렬화한다. 이 lock은 개별 exchange 충돌을 막지만 여러 운영자의 장기 장비 소유권까지 보장하지 않으므로 물리 장비/폴더에는 한 active controller만 연결한다.
 
-## 6. JSON → XML 등 포맷 변경 지점
+## 7. Response 테스트
 
-현재 JSON codec은 `FileEquipmentTransport`의 private `SerializeRequest`, `TryParseMatchingResponse`, `ConvertToken`, `ScientificNotationJsonTextWriter`에 결합되어 있다. 포맷을 하나 더 추가하거나 전환할 때 권장하는 변경 순서는 다음과 같다.
+Designer의 “Response 테스트”와 Live의 1회/연속 테스트는 편집 가능한 **논리 JSON 초안**을 보여 주지만 게시 시에는 Action별 XML response 템플릿을 사용한다.
 
-1. Application 계층의 `EquipmentRequestMessage`/`EquipmentResponseMessage`를 포맷 독립 logical contract로 유지한다.
-2. Infrastructure에 `IEquipmentMessageCodec` 같은 경계를 만들고 다음을 분리한다.
-   - `SerializeRequest(EquipmentRequestMessage) -> byte[]`
-   - `TryDeserializeResponse(byte[], expectedIndex) -> EquipmentResponseMessage`
-   - content/encoding 및 선택된 format 정보
-3. 현재 코드를 `JsonEquipmentMessageCodec`으로 이동하고, XML이면 `XmlEquipmentMessageCodec`을 추가한다.
-4. `FileEquipmentTransport`는 byte publish/stable read/lifecycle/retry만 담당하고 codec을 DI로 받게 한다.
-5. `EquipmentCommunicationOptions`에 `MessageFormat` enum(`Json`, `Xml`)을 명시적으로 추가한다. **확장자로 format을 암묵 추론하지 않는 것**을 권장한다.
-6. Settings UI와 `DesignerOptions`/`UserSettingsStore`에 format 선택을 추가한다.
-7. format별 golden request/response, 잘못된 root/envelope/type, encoding, namespace, correlation mismatch 테스트를 추가한다.
+- 현재 request가 있으면 그 `correlation_id`와 `action`을 사용한다.
+- Stage/Camera/Focus/Abort는 이미지 생성 UI를 표시하지 않는다.
+- Integration/Live는 768×512 모자이크 bitmap을 LocalAppData의 앱 전용 임시 폴더에 만들고 `image_path` 기본값으로 사용한다.
+- “다른 이미지”는 메모리 preview와 경로를 함께 교체한다.
+- 앱 전용 테스트 이미지는 정상 종료와 다음 정상 시작에서 정리한다.
+- 실제 response XML은 설정된 `ResponseFileName`으로 원자적으로 게시한다.
 
-논리 XML 예시는 다음과 같이 설계할 수 있지만, 아직 구현된 계약은 아니다. element/attribute, namespace, 숫자 직렬화 규칙은 장비 담당자와 합의 후 이 문서의 계약 버전을 올려야 한다.
+시뮬레이터 초안의 `PayloadFormat` 문자열은 UI 호환을 위해 현재 `JSON`이지만 이는 중간 파일을 뜻하지 않는다.
 
-```xml
+## 8. XML 템플릿과 변경 방법
+
+Dummy 템플릿은 다음 위치에 Embedded Resource로 포함된다.
+
+~~~text
+src/DrillFlow.Infrastructure/Communication/Templates/
+├─ Stage/request.xml, response.xml
+├─ Camera/request.xml, response.xml
+├─ Focus/request.xml, response.xml
+├─ Integration/request.xml, response.xml
+├─ Live/request.xml, response.xml
+└─ Abort/request.xml, response.xml
+~~~
+
+템플릿과 실제 request/response wire payload는 각각 UTF-8 기준 최대 **4 MiB**다. 앱은 이보다 큰 response 파일을 배열로 할당하기 전에 무시하며, 유효한 response가 제한 시간 안에 오지 않은 것과 동일하게 timeout 처리한다. 템플릿 파일은 UTF-8 **BOM 없이** 저장해야 하며 BOM/U+FEFF가 있으면 앱 시작 시 계약 오류로 즉시 거부한다.
+
+현재 예시는 사람이 바로 찾을 수 있는 placeholder를 사용한다.
+
+~~~xml
 <?xml version="1.0" encoding="utf-8"?>
-<request index="103" command="drill">
-  <thickness>2.4E-3</thickness>
-  <drill_result_path>C:\DrillResults\hole-103.csv</drill_result_path>
+<request>
+  <type>{{{type}}}</type>
+  <correlation_id>{{{correlation_id}}}</correlation_id>
+  <action>{{{action}}}</action>
+  <move_mode>{{{move_mode}}}</move_mode>
+  <stage_x>{{{stage_x}}}</stage_x>
+  <stage_y>{{{stage_y}}}</stage_y>
 </request>
-```
+~~~
 
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<response index="103" command="return">
-  <stage_x>3E-3</stage_x>
-  <stage_y>-2.56E-4</stage_y>
-  <image_path>C:\DrillImages\hole-103.png</image_path>
-</response>
-```
+실제 양식으로 교체할 때:
 
-## 7. 필드 변경 체크리스트
+1. Action/방향에 맞는 파일 하나만 바꾼다.
+2. 해당 계약의 placeholder를 정확히 한 번씩 남긴다. 임의 placeholder를 추가하거나 필수 placeholder를 제거하지 않는다.
+3. 고정 태그·namespace·속성·공백은 실제 장비 정답지와 같게 작성하고, UTF-8 BOM 없이 4 MiB 미만으로 저장한다.
+4. 문자 필드는 codec이 XML escaping하고 숫자는 invariant scientific notation으로 치환한다.
+5. `InfrastructureXmlTemplateEquipmentMessageCodecTests`에 실제 fixture round-trip과 잘못된 응답 rejection 사례를 추가한다.
+6. XML에서 한 논리 필드를 여러 토큰으로 표현해야 한다면 `XmlTemplateEquipmentMessageCodec`의 field adapter와 이 문서를 함께 바꾼다.
 
-request/response 구조를 바꾸는 작업은 최소한 다음을 모두 확인한다.
+## 9. 코드 변경 지도
 
-- [ ] 이 문서의 계약 버전, 표, 예시, Expression result shape 갱신
-- [ ] `EquipmentNodes.cs`의 ParameterBinding 추가/삭제/이름 변경
-- [ ] `WorkflowRunner`의 command 매핑 및 `Evaluate*` 결과 dictionary 갱신
-- [ ] `ParameterValueValidator`와 `WorkflowValidator` 타입/단위/범위 갱신
-- [ ] `FileEquipmentTransport` 또는 분리된 codec의 serialization/parser 갱신
-- [ ] `LiveInteractionProtocol`/`LiveInteractionSession`의 frame·capture·move payload와 필수 응답 갱신
-- [ ] `ActionParameterViewModel`의 변수명 우선 label, 설명, 즉시 validation 갱신
-- [ ] 한·영 resource 갱신
-- [ ] `ExpressionContext` object shape와 `ExpressionCompletionProvider` 후보 갱신
-- [ ] workflow persistence의 구/신 문서 migration 또는 schemaVersion 정책 검토
-- [ ] request golden test와 response 확장/오류/mismatch test 갱신
-- [ ] runner와 Expression 참조 regression test 갱신
-- [ ] Live frame decode, 원본 좌표 변환, 이동/촬영 pause-resume 회귀 테스트 갱신
-- [ ] 로컬 폴더 및 실제 UNC/SMB에서 atomic publish, stable read, lifecycle 재검증
+| 변경 대상 | 주요 위치 |
+|---|---|
+| 논리 request/response | `DrillFlow.Application/Communication/Equipment*Message.cs` |
+| Action 이름/parameter/result 모델 | `DrillFlow.Core/Workflows/EquipmentNodes.cs` |
+| 입력 validation | `DrillFlow.Core/Validation/ParameterValueValidator.cs`, `WorkflowValidator.cs` |
+| XML placeholder 렌더/파싱 | `DrillFlow.Infrastructure/Communication/XmlTemplateEquipmentMessageCodec.cs` |
+| 12개 XML 정답지 | `DrillFlow.Infrastructure/Communication/Templates/` |
+| atomic 파일 exchange/lifecycle/retry | `DrillFlow.Infrastructure/Communication/FileEquipmentTransport.cs` |
+| 테스트 response 생성 | `JsonEquipmentResponseSimulator.cs`, Desktop dialog/service |
+| Workflow request/result mapping | `DrillFlow.Application/Execution/WorkflowRunner.cs` |
+| Live request와 임시 이미지 경로 | `DrillFlow.Application/LiveInteraction/` |
+| Toolbox/Inspector/result UI | `DrillFlow.Desktop/ViewModels/` 및 `Views/` |
+| workflow schema migration | `JsonWorkflowDocumentSerializer.cs` |
 
-호환성을 깨는 변경(필수 필드 삭제/이름 변경, 타입/단위 변경, envelope 변경)은 계약 버전을 올리고 장비와 앱을 함께 배포해야 한다. 선택적 response 필드 추가처럼 기존 parser가 보존할 수 있는 변경도 알려진 자동완성/기본 테스트 response가 필요하면 catalog와 테스트를 함께 갱신한다.
+장비 계약을 바꿀 때는 템플릿만 보고 끝내지 말고 모델, validator, runner, simulator, Expression completion/result 표시, Live 사용 여부, serialization migration, 한·영 리소스와 관련 테스트를 함께 검토한다.

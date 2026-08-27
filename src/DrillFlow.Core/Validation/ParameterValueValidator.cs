@@ -19,14 +19,15 @@ namespace DrillFlow.Core.Validation
     /// </summary>
     public static class ParameterValueValidator
     {
-        public const double MoveCoordinateLimitMetres = 0.5d;
-        public const double MaximumThicknessMetres = 2.4E-3d;
+        public const double MaximumHorizontalFieldWidthMetres = 2.4E-3d;
+        public const int MinimumFocusSteps = 4;
+        public const int MaximumIntegrationFrameCount = 64;
         public const int MaximumDelayMilliseconds = 29999;
         public const int MaximumHttpTimeoutMilliseconds = 300000;
 
         public static MoveCoordinateMode GetMoveMode(ExpressionValue value)
         {
-            var text = GetString(value, "Move mode");
+            var text = GetString(value, "Move mode").Trim();
             if (string.Equals(text, "relative", StringComparison.OrdinalIgnoreCase))
             {
                 return MoveCoordinateMode.Relative;
@@ -42,39 +43,167 @@ namespace DrillFlow.Core.Validation
 
         public static double GetMoveCoordinate(ExpressionValue value, string parameterName)
         {
-            return GetMoveCoordinate(GetFiniteNumber(value, parameterName), parameterName);
+            return GetFiniteCoordinate(value, parameterName);
+        }
+
+        public static double GetCoordinate(ExpressionValue value, string parameterName)
+        {
+            return GetFiniteCoordinate(value, parameterName);
+        }
+
+        public static double GetFiniteCoordinate(ExpressionValue value, string parameterName)
+        {
+            return GetFiniteNumber(value, parameterName);
         }
 
         /// <summary>
-        /// Validates a move coordinate that already has a numeric value. Live equipment
-        /// interaction uses this overload so it shares the workflow request limits without
-        /// manufacturing an expression value.
+        /// Validates a coordinate that already has a numeric value. Live equipment interaction
+        /// uses this overload without manufacturing an expression value.
         /// </summary>
         public static double GetMoveCoordinate(double number, string parameterName)
+        {
+            return GetFiniteCoordinate(number, parameterName);
+        }
+
+        public static double GetCoordinate(double number, string parameterName)
+        {
+            return GetFiniteCoordinate(number, parameterName);
+        }
+
+        public static double GetFiniteCoordinate(double number, string parameterName)
         {
             if (double.IsNaN(number) || double.IsInfinity(number))
             {
                 throw new ParameterValidationException($"{parameterName} must be finite.");
             }
 
-            if (number <= -MoveCoordinateLimitMetres || number >= MoveCoordinateLimitMetres)
+            return number;
+        }
+
+        public static double GetHorizontalFieldWidth(ExpressionValue value)
+        {
+            var number = GetFiniteNumber(value, "Horizontal field width");
+            if (number <= 0d || number >= MaximumHorizontalFieldWidthMetres)
             {
                 throw new ParameterValidationException(
-                    $"{parameterName} must be greater than -0.5 m and less than 0.5 m.");
+                    "Horizontal field width must be greater than 0 m and less than 2.4E-3 m.");
             }
 
             return number;
         }
 
-        public static double GetThickness(ExpressionValue value)
+        public static double GetFocusRange(ExpressionValue value)
         {
-            var number = GetFiniteNumber(value, "Thickness");
-            if (number <= 0d || number > MaximumThicknessMetres)
+            var number = GetFiniteNumber(value, "Focus range");
+            if (number <= 0d)
             {
-                throw new ParameterValidationException("Thickness must be greater than 0 m and at most 2.4E-3 m.");
+                throw new ParameterValidationException("Focus range must be greater than 0 m.");
             }
 
             return number;
+        }
+
+        public static int GetFocusSteps(ExpressionValue value)
+        {
+            return GetInteger(value, "Focus steps", MinimumFocusSteps, int.MaxValue);
+        }
+
+        public static int GetIntegrationFrameCount(ExpressionValue value)
+        {
+            var count = GetInteger(value, "Integration frame count", 1, MaximumIntegrationFrameCount);
+            if ((count & (count - 1)) != 0)
+            {
+                throw new ParameterValidationException(
+                    "Integration frame count must be a power of two from 1 through 64.");
+            }
+
+            return count;
+        }
+
+        public static int GetLiveFrameCount(ExpressionValue value)
+        {
+            return GetInteger(value, "Live frame count", 1, 1);
+        }
+
+        public static string GetImagePath(ExpressionValue value)
+        {
+            return GetAbsoluteImagePath(value);
+        }
+
+        public static string GetAbsoluteImagePath(ExpressionValue value)
+        {
+            var path = GetNonEmptyString(value, "Image path").Trim();
+            if (!IsSupportedAbsoluteWindowsFilePath(path))
+            {
+                throw new ParameterValidationException(
+                    "Image path must be an absolute local or UNC Windows filename.");
+            }
+
+            return path;
+        }
+
+        public static bool IsSupportedAbsoluteWindowsFilePath(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || path![path.Length - 1] == '\\')
+            {
+                return false;
+            }
+
+            var driveRooted = path.Length > 3
+                              && IsAsciiLetter(path[0])
+                              && path[1] == ':'
+                              && path[2] == '\\';
+            var uncRooted = false;
+            if (path.Length > 5 && path[0] == '\\' && path[1] == '\\' && path[2] != '\\')
+            {
+                var serverEnd = path.IndexOf('\\', 2);
+                if (serverEnd > 2)
+                {
+                    var shareEnd = path.IndexOf('\\', serverEnd + 1);
+                    uncRooted = shareEnd > serverEnd + 1 && shareEnd < path.Length - 1;
+                }
+            }
+
+            if (!driveRooted && !uncRooted)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < path.Length; index++)
+            {
+                var character = path[index];
+                if (character < ' '
+                    || character == '"'
+                    || character == '<'
+                    || character == '>'
+                    || character == '|'
+                    || character == '?'
+                    || character == '*'
+                    || character == '/')
+                {
+                    return false;
+                }
+
+                if (character == ':' && (!driveRooted || index != 1))
+                {
+                    return false;
+                }
+            }
+
+            var lastSeparator = path.LastIndexOf('\\');
+            var fileName = lastSeparator >= 0
+                ? path.Substring(lastSeparator + 1)
+                : string.Empty;
+            if (fileName.Length == 0
+                || string.Equals(fileName, ".", StringComparison.Ordinal)
+                || string.Equals(fileName, "..", StringComparison.Ordinal)
+                || fileName[fileName.Length - 1] == '.'
+                || fileName[fileName.Length - 1] == ' ')
+            {
+                return false;
+            }
+
+            return true;
         }
 
         public static int GetRepeatCount(ExpressionValue value)
@@ -192,6 +321,11 @@ namespace DrillFlow.Core.Validation
             }
 
             return (int)number;
+        }
+
+        private static bool IsAsciiLetter(char value)
+        {
+            return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
         }
     }
 }

@@ -10,26 +10,26 @@ namespace DrillFlow.Tests
         [Fact]
         public void NewNodesHaveStableNonEmptyIdsAndRawBindings()
         {
-            var move = new MoveNode
+            var stage = new StageNode
             {
-                Key = "move_1",
-                MoveX = new ParameterBinding("  =measure_1.result.distance * 2 ")
+                Key = "stage_1",
+                StageX = new ParameterBinding("  =camera_1.result.current_camera_x * 2 ")
             };
-            var originalId = move.Id;
+            var originalId = stage.Id;
 
             Assert.NotEqual(Guid.Empty, originalId);
-            Assert.Equal(originalId, move.Id);
-            Assert.True(move.MoveX.IsExpression);
-            Assert.Equal("measure_1.result.distance * 2", move.MoveX.ExpressionText);
-            Assert.Equal("  =measure_1.result.distance * 2 ", move.MoveX.RawText);
-            Assert.Equal(WorkflowNodeKind.Move, move.Kind);
+            Assert.Equal(originalId, stage.Id);
+            Assert.True(stage.StageX.IsExpression);
+            Assert.Equal("camera_1.result.current_camera_x * 2", stage.StageX.ExpressionText);
+            Assert.Equal("  =camera_1.result.current_camera_x * 2 ", stage.StageX.RawText);
+            Assert.Equal(WorkflowNodeKind.Stage, stage.Kind);
         }
 
         [Fact]
         public void DocumentEnumeratesNestedNodesInDisplayOrder()
         {
-            var first = new MoveNode { Key = "first" };
-            var inner = new MeasureNode { Key = "inner" };
+            var first = new StageNode { Key = "first" };
+            var inner = new FocusNode { Key = "inner" };
             var repeat = new RepeatNode { Key = "loop" };
             repeat.Body.Add(inner);
             var branchAction = new DelayNode { Key = "branch_delay" };
@@ -52,9 +52,11 @@ namespace DrillFlow.Tests
         {
             WorkflowNode[] nodes =
             {
-                new MoveNode(),
-                new MeasureNode(),
-                new DrillNode(),
+                new StageNode(),
+                new CameraNode(),
+                new FocusNode(),
+                new IntegrationNode(),
+                new LiveNode(),
                 new AbortNode(),
                 new DelayNode(),
                 new RepeatNode(),
@@ -68,11 +70,23 @@ namespace DrillFlow.Tests
             }
 
             Assert.Equal(
-                new[] { "move_mode", "move_x", "move_y" },
+                new[] { "move_mode", "stage_x", "stage_y" },
                 nodes[0].GetParameterBindings().Keys);
             Assert.Equal(
-                new[] { "thickness", "drill_result_path" },
+                new[] { "move_mode", "camera_x", "camera_y" },
+                nodes[1].GetParameterBindings().Keys);
+            Assert.Equal(
+                new[] { "hfw", "range", "steps" },
                 nodes[2].GetParameterBindings().Keys);
+            Assert.Equal(
+                new[] { "hfw", "frame_count", "image_path" },
+                nodes[3].GetParameterBindings().Keys);
+            Assert.Equal(
+                new[] { "hfw", "frame_count", "image_path" },
+                nodes[4].GetParameterBindings().Keys);
+            Assert.Equal(
+                "1E-3",
+                Assert.IsType<LiveNode>(nodes[4]).HorizontalFieldWidth.RawText);
         }
     }
 }

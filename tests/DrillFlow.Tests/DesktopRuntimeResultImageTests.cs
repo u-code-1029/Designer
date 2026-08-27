@@ -78,7 +78,7 @@ public sealed class DesktopRuntimeResultImageTests
             var image = new DrawingImage();
             image.Freeze();
             var action = new WorkflowActionViewModel(
-                new MoveNode { Key = "move_1" },
+                new StageNode { Key = "stage_1" },
                 new StubLocalizationService(),
                 new StubImageDecoder(image));
 
@@ -110,11 +110,11 @@ public sealed class DesktopRuntimeResultImageTests
             var localization = new StubLocalizationService();
             var decoder = new StubImageDecoder(decodedImage);
             var first = new WorkflowActionViewModel(
-                new MoveNode { Key = "first" },
+                new StageNode { Key = "first" },
                 localization,
                 decoder);
             var second = new WorkflowActionViewModel(
-                new MeasureNode { Key = "second" },
+                new CameraNode { Key = "second" },
                 localization,
                 decoder);
 
@@ -142,7 +142,7 @@ public sealed class DesktopRuntimeResultImageTests
     public async Task WorkflowAction_ReportsImagePathThatCannotBeLoaded()
     {
         var action = new WorkflowActionViewModel(
-            new MoveNode { Key = "move_1" },
+            new StageNode { Key = "stage_1" },
             new StubLocalizationService(),
             new StubImageDecoder(new DrawingImage()));
 
@@ -165,7 +165,7 @@ public sealed class DesktopRuntimeResultImageTests
             var image = new DrawingImage();
             image.Freeze();
             var action = new WorkflowActionViewModel(
-                new MoveNode { Key = "move_1" },
+                new StageNode { Key = "stage_1" },
                 new StubLocalizationService(),
                 new StubImageDecoder(image));
             action.AddResult(CreateExecutionResult(imagePath));
@@ -217,7 +217,7 @@ public sealed class DesktopRuntimeResultImageTests
             var localization = new StubLocalizationService();
             var decoder = new StubImageDecoder(image);
             var source = new WorkflowActionViewModel(
-                new MoveNode { Id = nodeId, Key = "before" },
+                new StageNode { Id = nodeId, Key = "before" },
                 localization,
                 decoder);
             source.AddResult(CreateExecutionResult(imagePath));
@@ -226,7 +226,7 @@ public sealed class DesktopRuntimeResultImageTests
             source.ZoomResultImageIn();
 
             var restored = new WorkflowActionViewModel(
-                new MoveNode { Id = nodeId, Key = "after" },
+                new StageNode { Id = nodeId, Key = "after" },
                 localization,
                 decoder);
             restored.RestoreRuntimeFrom(source);
@@ -308,14 +308,14 @@ public sealed class DesktopRuntimeResultImageTests
             var localization = new StubLocalizationService();
             var decoder = new StubImageDecoder(image);
             var source = new WorkflowActionViewModel(
-                new MoveNode { Key = "source" },
+                new StageNode { Key = "source" },
                 localization,
                 decoder);
             source.AddResult(CreateExecutionResult(imagePath));
             await WaitUntilAsync(() => source.HasLatestImage);
             var snapshot = CutActionRuntimeSnapshot.Capture(new[] { source });
             var copied = new WorkflowActionViewModel(
-                new MoveNode { Key = "copy" },
+                new StageNode { Key = "copy" },
                 localization,
                 decoder);
 
@@ -361,7 +361,7 @@ public sealed class DesktopRuntimeResultImageTests
             Key = "repeat_1",
             Body = new List<WorkflowNode>
             {
-                new MoveNode { Id = childId, Key = childAlias }
+                new StageNode { Id = childId, Key = childAlias }
             }
         };
         return new WorkflowActionViewModel(repeat, localization, decoder);

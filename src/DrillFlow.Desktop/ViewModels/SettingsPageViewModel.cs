@@ -28,8 +28,8 @@ public sealed class SettingsPageViewModel : ObservableObject
     private string _language = "Auto";
     private string _theme = ThemeSelection.System;
     private string _exchangeFolder = string.Empty;
-    private string _requestFileName = "request.json";
-    private string _responseFileName = "response.json";
+    private string _requestFileName = "request.xml";
+    private string _responseFileName = "response.xml";
     private string _equipmentRequestHandling = "RetainUntilOverwritten";
     private string _appRequestHandling = "DeleteAfterResponse";
     private string _appResponseHandling = "DeleteAfterRead";
@@ -448,7 +448,7 @@ public sealed class SettingsPageViewModel : ObservableObject
 
     private CommunicationSettings BuildSettings() => new()
     {
-        ExchangeFolder = ExchangeFolder.Trim(),
+        ExchangeFolder = EquipmentCommunicationOptions.NormalizeExchangeDirectory(ExchangeFolder),
         RequestFileName = RequestFileName.Trim(),
         ResponseFileName = ResponseFileName.Trim(),
         EquipmentRequestHandling = EquipmentRequestHandling,

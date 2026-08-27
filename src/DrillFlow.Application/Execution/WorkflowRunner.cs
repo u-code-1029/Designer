@@ -363,6 +363,16 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 RaiseNodeState(node, WorkflowNodeExecutionState.Stopped, FormatPath(iterationPath));
                 throw;
             }
+            catch (EquipmentActionFailedException exception)
+            {
+                RaiseNodeState(
+                    node,
+                    WorkflowNodeExecutionState.Faulted,
+                    FormatPath(iterationPath),
+                    exception.Result,
+                    exception);
+                throw;
+            }
             catch (Exception exception)
             {
                 RaiseNodeState(node, WorkflowNodeExecutionState.Faulted, FormatPath(iterationPath), null, exception);
@@ -394,29 +404,47 @@ public sealed class WorkflowRunner : IWorkflowRunner
     {
         switch (node)
         {
-            case MoveNode move:
+            case StageNode stage:
                 return await ExecuteEquipmentNodeAsync(
-                        move,
-                        "move",
-                        EvaluateMove(move),
+                        stage,
+                        EquipmentActionNames.Stage,
+                        EvaluateStage(stage),
                         iterationPath,
                         cancellationToken)
                     .ConfigureAwait(false);
 
-            case MeasureNode measure:
+            case CameraNode camera:
                 return await ExecuteEquipmentNodeAsync(
-                        measure,
-                        "measure",
-                        EvaluateMeasure(measure),
+                        camera,
+                        EquipmentActionNames.Camera,
+                        EvaluateCamera(camera),
                         iterationPath,
                         cancellationToken)
                     .ConfigureAwait(false);
 
-            case DrillNode drill:
+            case FocusNode focus:
                 return await ExecuteEquipmentNodeAsync(
-                        drill,
-                        "drill",
-                        EvaluateDrill(drill),
+                        focus,
+                        EquipmentActionNames.Focus,
+                        EvaluateFocus(focus),
+                        iterationPath,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            case IntegrationNode integration:
+                return await ExecuteEquipmentNodeAsync(
+                        integration,
+                        EquipmentActionNames.Integration,
+                        EvaluateIntegration(integration),
+                        iterationPath,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            case LiveNode live:
+                return await ExecuteEquipmentNodeAsync(
+                        live,
+                        EquipmentActionNames.Live,
+                        EvaluateLive(live),
                         iterationPath,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -424,7 +452,7 @@ public sealed class WorkflowRunner : IWorkflowRunner
             case AbortNode abort:
                 await ExecuteEquipmentNodeAsync(
                         abort,
-                        "abort",
+                        EquipmentActionNames.Abort,
                         EmptyParameters(),
                         iterationPath,
                         cancellationToken)
@@ -452,17 +480,17 @@ public sealed class WorkflowRunner : IWorkflowRunner
 
     private async Task<SequenceOutcome> ExecuteEquipmentNodeAsync(
         WorkflowNode node,
-        string command,
+        string action,
         IReadOnlyDictionary<string, object?> parameters,
         List<int> iterationPath,
         CancellationToken cancellationToken)
     {
         RememberParameters(node, parameters);
         var index = await _correlationIds.NextAsync(cancellationToken).ConfigureAwait(false);
-        var request = new EquipmentRequestMessage(index, command, parameters);
+        var request = new EquipmentRequestMessage(index, action, parameters);
         _logger.LogInformation(
-            "Publishing command {Command} with correlation {CorrelationId} for action {ActionKey}",
-            command,
+            "Publishing equipment action {EquipmentAction} with correlation {CorrelationId} for workflow action {ActionKey}",
+            action,
             index,
             node.Key);
 
@@ -472,18 +500,37 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 request,
                 cancellationToken)
             .ConfigureAwait(false);
-        if (response.Index != request.Index)
+        if (response.CorrelationId != request.CorrelationId)
         {
             throw new WorkflowExecutionException(
-                $"Equipment response index {response.Index} does not match request index {request.Index}.");
+                $"Equipment response correlation ID {response.CorrelationId} does not match request "
+                + $"correlation ID {request.CorrelationId}.");
+        }
+
+        if (!string.Equals(response.Action, request.Action, StringComparison.Ordinal))
+        {
+            throw new WorkflowExecutionException(
+                $"Equipment response action '{response.Action}' does not match request action "
+                + $"'{request.Action}'.");
         }
 
         var values = response.Properties.ToDictionary(
             pair => pair.Key,
             pair => pair.Value,
             StringComparer.OrdinalIgnoreCase);
-        values["command"] = response.Command;
+        values["type"] = response.Type;
+        values["correlation_id"] = response.CorrelationId;
+        values["action"] = response.Action;
+        values["result"] = response.Result;
         var result = RecordResult(node, index, iterationPath, values);
+        if (!response.IsSuccess)
+        {
+            throw new EquipmentActionFailedException(
+                $"Equipment action '{response.Action}' failed with result 1 "
+                + $"(correlation ID {response.CorrelationId}).",
+                result);
+        }
+
         RaiseNodeState(node, WorkflowNodeExecutionState.Completed, FormatPath(iterationPath), result);
         MarkStepComplete();
         return SequenceOutcome.Continue;
@@ -541,10 +588,10 @@ public sealed class WorkflowRunner : IWorkflowRunner
             {
                 _logger.LogWarning(
                     exception,
-                    "The canceled equipment exchange for command {Command} with correlation ID "
+                    "The canceled equipment exchange for action {EquipmentAction} with correlation ID "
                     + "{CorrelationId} completed late.",
-                    request.Command,
-                    request.Index);
+                    request.Action,
+                    request.CorrelationId);
             }
             catch (Exception)
             {
@@ -848,43 +895,83 @@ public sealed class WorkflowRunner : IWorkflowRunner
         return SequenceOutcome.Continue;
     }
 
-    private IReadOnlyDictionary<string, object?> EvaluateMove(MoveNode node)
+    private IReadOnlyDictionary<string, object?> EvaluateStage(StageNode node)
     {
         var context = CreateExpressionContext();
         var mode = ParameterValueValidator.GetMoveMode(_expressions.Evaluate(node.MoveMode, context));
-        var x = ParameterValueValidator.GetMoveCoordinate(
-            _expressions.Evaluate(node.MoveX, context),
-            "move_x");
-        var y = ParameterValueValidator.GetMoveCoordinate(
-            _expressions.Evaluate(node.MoveY, context),
-            "move_y");
+        var x = ParameterValueValidator.GetFiniteCoordinate(
+            _expressions.Evaluate(node.StageX, context),
+            "stage_x");
+        var y = ParameterValueValidator.GetFiniteCoordinate(
+            _expressions.Evaluate(node.StageY, context),
+            "stage_y");
 
         return new Dictionary<string, object?>
         {
             ["move_mode"] = mode == MoveCoordinateMode.Relative ? "relative" : "absolute",
-            ["move_x"] = x,
-            ["move_y"] = y
+            ["stage_x"] = x,
+            ["stage_y"] = y
         };
     }
 
-    private IReadOnlyDictionary<string, object?> EvaluateMeasure(MeasureNode node)
-    {
-        var thickness = ParameterValueValidator.GetThickness(
-            _expressions.Evaluate(node.Thickness, CreateExpressionContext()));
-        return new Dictionary<string, object?> { ["thickness"] = thickness };
-    }
-
-    private IReadOnlyDictionary<string, object?> EvaluateDrill(DrillNode node)
+    private IReadOnlyDictionary<string, object?> EvaluateCamera(CameraNode node)
     {
         var context = CreateExpressionContext();
-        var thickness = ParameterValueValidator.GetThickness(_expressions.Evaluate(node.Thickness, context));
-        var resultPath = ParameterValueValidator.GetNonEmptyString(
-            _expressions.Evaluate(node.DrillResultPath, context),
-            "drill_result_path");
+        var mode = ParameterValueValidator.GetMoveMode(_expressions.Evaluate(node.MoveMode, context));
+        var x = ParameterValueValidator.GetFiniteCoordinate(
+            _expressions.Evaluate(node.CameraX, context),
+            "camera_x");
+        var y = ParameterValueValidator.GetFiniteCoordinate(
+            _expressions.Evaluate(node.CameraY, context),
+            "camera_y");
         return new Dictionary<string, object?>
         {
-            ["thickness"] = thickness,
-            ["drill_result_path"] = resultPath
+            ["move_mode"] = mode == MoveCoordinateMode.Relative ? "relative" : "absolute",
+            ["camera_x"] = x,
+            ["camera_y"] = y
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?> EvaluateFocus(FocusNode node)
+    {
+        var context = CreateExpressionContext();
+        var hfw = ParameterValueValidator.GetHorizontalFieldWidth(
+            _expressions.Evaluate(node.HorizontalFieldWidth, context));
+        var range = ParameterValueValidator.GetFocusRange(_expressions.Evaluate(node.Range, context));
+        var steps = ParameterValueValidator.GetFocusSteps(_expressions.Evaluate(node.Steps, context));
+        return new Dictionary<string, object?>
+        {
+            ["hfw"] = hfw,
+            ["range"] = range,
+            ["steps"] = steps
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?> EvaluateIntegration(IntegrationNode node)
+    {
+        var context = CreateExpressionContext();
+        return new Dictionary<string, object?>
+        {
+            ["hfw"] = ParameterValueValidator.GetHorizontalFieldWidth(
+                _expressions.Evaluate(node.HorizontalFieldWidth, context)),
+            ["frame_count"] = ParameterValueValidator.GetIntegrationFrameCount(
+                _expressions.Evaluate(node.FrameCount, context)),
+            ["image_path"] = ParameterValueValidator.GetAbsoluteImagePath(
+                _expressions.Evaluate(node.ImagePath, context))
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?> EvaluateLive(LiveNode node)
+    {
+        var context = CreateExpressionContext();
+        return new Dictionary<string, object?>
+        {
+            ["hfw"] = ParameterValueValidator.GetHorizontalFieldWidth(
+                _expressions.Evaluate(node.HorizontalFieldWidth, context)),
+            ["frame_count"] = ParameterValueValidator.GetLiveFrameCount(
+                _expressions.Evaluate(node.FrameCount, context)),
+            ["image_path"] = ParameterValueValidator.GetAbsoluteImagePath(
+                _expressions.Evaluate(node.ImagePath, context))
         };
     }
 

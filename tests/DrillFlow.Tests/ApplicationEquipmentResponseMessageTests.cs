@@ -8,76 +8,62 @@ namespace DrillFlow.Tests;
 public sealed class ApplicationEquipmentResponseMessageTests
 {
     [Fact]
-    public void Constructor_ExposesValidatedCoordinatesAndAbsoluteImagePaths()
+    public void Constructor_ExposesCanonicalEnvelopeAndTypedHelpers()
     {
-        var local = Create(@"C:\images\result.png");
-        var unc = Create(@"\\server\share\result.png");
+        var response = new EquipmentResponseMessage(
+            17,
+            EquipmentActionNames.Integration,
+            0,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 3.02E-6,
+                ["frame_count"] = 8,
+                ["image_path"] = @"C:\images\result.png"
+            });
 
-        Assert.Equal(0.125d, local.StageX);
-        Assert.Equal(-0.25d, local.StageY);
-        Assert.Equal(@"C:\images\result.png", local.ImagePath);
-        Assert.Equal(@"\\server\share\result.png", unc.ImagePath);
+        Assert.Equal("response", response.Type);
+        Assert.Equal(17, response.CorrelationId);
+        Assert.Equal("integration", response.Action);
+        Assert.Equal(0, response.Result);
+        Assert.True(response.IsSuccess);
+        Assert.Equal(3.02E-6, response.Hfw);
+        Assert.Equal(8, response.FrameCount);
+        Assert.Equal(@"C:\images\result.png", response.ImagePath);
     }
 
     [Fact]
-    public void Constructor_RequiresPositiveIndexAndExactReturnCommand()
+    public void Constructor_RequiresPositiveCorrelationKnownActionAndBinaryResult()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new EquipmentResponseMessage(0, "return", ValidProperties()));
+            new EquipmentResponseMessage(0, EquipmentActionNames.Abort, 0));
         Assert.Throws<ArgumentException>(() =>
-            new EquipmentResponseMessage(1, "Return", ValidProperties()));
-        Assert.Throws<ArgumentException>(() =>
-            new EquipmentResponseMessage(1, null!, ValidProperties()));
+            new EquipmentResponseMessage(1, "unknown", 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new EquipmentResponseMessage(1, EquipmentActionNames.Abort, 2));
     }
 
     [Fact]
-    public void Constructor_RequiresFiniteCanonicalStageCoordinates()
+    public void Constructor_RejectsCaseInsensitiveDuplicatesAndEnvelopeCollisions()
     {
-        Assert.Throws<InvalidOperationException>(() =>
-            new EquipmentResponseMessage(
-                1,
-                "return",
-                new Dictionary<string, object?> { ["stage_x"] = 0d }));
-        Assert.Throws<InvalidOperationException>(() =>
-            new EquipmentResponseMessage(
-                1,
-                "return",
-                new Dictionary<string, object?>
-                {
-                    ["stage_x"] = double.PositiveInfinity,
-                    ["stage_y"] = 0d
-                }));
-        Assert.Throws<InvalidOperationException>(() =>
-            new EquipmentResponseMessage(
-                1,
-                "return",
-                new Dictionary<string, object?>
-                {
-                    ["stage_x"] = "0",
-                    ["stage_y"] = 0d
-                }));
-    }
-
-    [Fact]
-    public void Constructor_RejectsCaseInsensitiveDuplicatesAndRuntimeMetadataCollisions()
-    {
-        var duplicateStage = ValidProperties();
-        duplicateStage["STAGE_X"] = 1d;
-        Assert.Throws<ArgumentException>(() =>
-            new EquipmentResponseMessage(1, "return", duplicateStage));
-
-        var duplicateExtension = ValidProperties();
-        duplicateExtension["Trace"] = 1;
-        duplicateExtension["trace"] = 2;
-        Assert.Throws<ArgumentException>(() =>
-            new EquipmentResponseMessage(1, "return", duplicateExtension));
-
-        foreach (var reservedName in new[] { "Index", "COMMAND", "iteration_path" })
+        var duplicate = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            var properties = ValidProperties();
-            properties[reservedName] = 7;
+            ["Trace"] = 1,
+            ["trace"] = 2
+        };
+        Assert.Throws<ArgumentException>(() =>
+            new EquipmentResponseMessage(1, EquipmentActionNames.Abort, 0, duplicate));
+
+        foreach (var reservedName in new[]
+                 {
+                     "Type", "CORRELATION_ID", "Action", "result", "iteration_path"
+                 })
+        {
             Assert.Throws<ArgumentException>(() =>
-                new EquipmentResponseMessage(1, "return", properties));
+                new EquipmentResponseMessage(
+                    1,
+                    EquipmentActionNames.Abort,
+                    0,
+                    new Dictionary<string, object?> { [reservedName] = 7 }));
         }
     }
 
@@ -90,32 +76,31 @@ public sealed class ApplicationEquipmentResponseMessageTests
                      @"C:result.png",
                      @"\rooted-on-current-drive.png",
                      @"\\server\share",
+                     @"C:\images\.",
+                     @"\\server\share\..",
+                     @"C:\images\trailing.",
                      @"C:\images\bad?.png",
                      "C:\\images\\bad\0.png"
                  })
         {
-            var exception = Record.Exception(() => Create(invalidPath));
+            var exception = Record.Exception(() => new EquipmentResponseMessage(
+                1,
+                EquipmentActionNames.Live,
+                0,
+                new Dictionary<string, object?> { ["image_path"] = invalidPath }));
             Assert.IsType<InvalidOperationException>(exception);
         }
     }
 
-    private static EquipmentResponseMessage Create(string? imagePath = null)
+    [Fact]
+    public void ResultOne_RemainsAFirstClassResponseForTheRunnerToDecide()
     {
-        var properties = ValidProperties();
-        if (imagePath != null)
-        {
-            properties["image_path"] = imagePath;
-        }
+        var response = new EquipmentResponseMessage(
+            1,
+            EquipmentActionNames.Abort,
+            1);
 
-        return new EquipmentResponseMessage(1, "return", properties);
-    }
-
-    private static Dictionary<string, object?> ValidProperties()
-    {
-        return new Dictionary<string, object?>(StringComparer.Ordinal)
-        {
-            ["stage_x"] = 0.125d,
-            ["stage_y"] = -0.25d
-        };
+        Assert.Equal(1, response.Result);
+        Assert.False(response.IsSuccess);
     }
 }

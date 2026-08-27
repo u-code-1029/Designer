@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -14,19 +16,28 @@ using Newtonsoft.Json.Linq;
 namespace DrillFlow.Infrastructure.Communication;
 
 /// <summary>
-/// JSON commissioning implementation. It deliberately does not take the equipment exchange lock:
-/// the real transport owns that lock while waiting for this response. Publication still uses a
-/// fully flushed temporary file and atomic pathname replacement.
+/// Keeps the commissioning editor's readable JSON logical shape while probing and publishing the
+/// same fixed-template XML wire payloads used by the real transport.
 /// </summary>
 public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
 {
     private readonly EquipmentCommunicationOptions _options;
+    private readonly IEquipmentMessageCodec _codec;
 
     public JsonEquipmentResponseSimulator(IOptions<EquipmentCommunicationOptions> options)
+        : this(options, new XmlTemplateEquipmentMessageCodec())
     {
-        _options = (options ?? throw new ArgumentNullException(nameof(options))).Value;
     }
 
+    public JsonEquipmentResponseSimulator(
+        IOptions<EquipmentCommunicationOptions> options,
+        IEquipmentMessageCodec codec)
+    {
+        _options = (options ?? throw new ArgumentNullException(nameof(options))).Value;
+        _codec = codec ?? throw new ArgumentNullException(nameof(codec));
+    }
+
+    // The dialog edits a logical JSON document. PublishAsync converts it to XML before writing.
     public string PayloadFormat => "JSON";
 
     public async Task<EquipmentResponseSimulationDraft> CreateDraftAsync(
@@ -35,18 +46,26 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         CancellationToken cancellationToken,
         string? generatedImagePath = null)
     {
-        if (node == null)
+        if (node is null)
         {
             throw new ArgumentNullException(nameof(node));
         }
 
-        var requestPath = Path.Combine(_options.ExchangeDirectory, _options.RequestFileName);
+        var action = GetAction(node);
         var responsePath = Path.Combine(_options.ExchangeDirectory, _options.ResponseFileName);
-        var activeRequest = await TryReadRequestAsync(requestPath, cancellationToken).ConfigureAwait(false);
-        var index = activeRequest?.Index ?? fallbackCorrelationId ?? 1;
-        var response = CreateTemplate(node, index, generatedImagePath);
+        var activeRequest = await GetActiveRequestAsync(cancellationToken).ConfigureAwait(false);
+        var correlationId = activeRequest != null
+                            && string.Equals(activeRequest.Action, action, StringComparison.Ordinal)
+            ? activeRequest.CorrelationId
+            : fallbackCorrelationId ?? 1;
+        var response = CreateDefaultResponse(
+            action,
+            correlationId,
+            activeRequest,
+            generatedImagePath);
+
         return new EquipmentResponseSimulationDraft(
-            response.ToString(Formatting.Indented),
+            SerializeLogicalJson(response),
             responsePath,
             activeRequest);
     }
@@ -55,10 +74,22 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         CancellationToken cancellationToken)
     {
         var requestPath = Path.Combine(_options.ExchangeDirectory, _options.RequestFileName);
-        // Opening an unavailable UNC path can block synchronously before FileStream exposes an
-        // awaitable operation. Keep the live page dispatcher out of all active-request probes.
         return Task.Run(
-            () => TryReadRequestAsync(requestPath, cancellationToken),
+            async () =>
+            {
+                var payload = await TryReadBytesAsync(requestPath, cancellationToken)
+                    .ConfigureAwait(false);
+                if (payload is null || !_codec.TryDeserializeRequest(payload, out var request)
+                                    || request is null)
+                {
+                    return null;
+                }
+
+                return new EquipmentRequestSnapshot(
+                    request.CorrelationId,
+                    request.Action,
+                    request.Parameters);
+            },
             CancellationToken.None);
     }
 
@@ -67,88 +98,77 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         string generatedImagePath,
         CancellationToken cancellationToken)
     {
-        if (expectedRequest == null)
+        if (expectedRequest is null)
         {
             throw new ArgumentNullException(nameof(expectedRequest));
+        }
+
+        if (!string.Equals(expectedRequest.Action, EquipmentActionNames.Live, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The continuous response simulator requires a live request snapshot.",
+                nameof(expectedRequest));
         }
 
         if (!EquipmentResponseMessage.IsSupportedAbsoluteImagePath(generatedImagePath))
         {
             throw new ArgumentException(
-                "A generated frame image path must be an absolute local or UNC pathname.",
+                "A generated live image path must be an absolute local or UNC pathname.",
                 nameof(generatedImagePath));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
         var requestPath = Path.Combine(_options.ExchangeDirectory, _options.RequestFileName);
         var responsePath = Path.Combine(_options.ExchangeDirectory, _options.ResponseFileName);
-        var activeRequest = await GetActiveRequestAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var readiness = GetFrameRequestReadiness(expectedRequest, activeRequest, responsePath);
+        var activeRequest = await GetActiveRequestAsync(cancellationToken).ConfigureAwait(false);
+        var readiness = GetLiveRequestReadiness(expectedRequest, activeRequest, responsePath);
         if (readiness != null)
         {
             return readiness;
         }
 
         Directory.CreateDirectory(_options.ExchangeDirectory);
-
         var existingResponse = await TryReadResponseSnapshotAsync(responsePath, cancellationToken)
             .ConfigureAwait(false);
         if (existingResponse.Exists
-            && (!existingResponse.Index.HasValue
-                || existingResponse.Index.Value == expectedRequest.Index))
+            && (!existingResponse.CorrelationId.HasValue
+                || existingResponse.CorrelationId.Value == expectedRequest.CorrelationId))
         {
-            // An unreadable response is treated as controller-owned. The simulator waits instead
-            // of replacing bytes that may still be in the process of being committed.
             return new FrameResponseSimulationResult(
                 FrameResponseSimulationStatus.ResponseAlreadyExists,
                 responsePath,
                 activeRequest);
         }
 
-        var response = new JObject
-        {
-            ["index"] = expectedRequest.Index,
-            ["command"] = "return",
-            ["stage_x"] = 0d,
-            ["stage_y"] = 0d,
-            ["image_path"] = Path.GetFullPath(generatedImagePath)
-        };
-        var payload = response.ToString(Formatting.Indented);
+        var response = new EquipmentResponseMessage(
+            expectedRequest.CorrelationId,
+            EquipmentActionNames.Live,
+            0,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["hfw"] = GetLiveHfw(expectedRequest),
+                ["frame_count"] = 1,
+                ["image_path"] = Path.GetFullPath(generatedImagePath)
+            });
+        var bytes = _codec.SerializeResponse(response);
         var tempPath = responsePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            var bytes = new UTF8Encoding(false).GetBytes(payload);
-            using (var stream = new FileStream(
-                       tempPath,
-                       FileMode.CreateNew,
-                       FileAccess.Write,
-                       FileShare.None,
-                       4096,
-                       FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken)
-                    .ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                stream.Flush(true);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            activeRequest = await GetActiveRequestAsync(cancellationToken)
+            await WriteCompletedTempFileAsync(tempPath, bytes, cancellationToken)
                 .ConfigureAwait(false);
-            readiness = GetFrameRequestReadiness(expectedRequest, activeRequest, responsePath);
+
+            activeRequest = await GetActiveRequestAsync(cancellationToken).ConfigureAwait(false);
+            readiness = GetLiveRequestReadiness(expectedRequest, activeRequest, responsePath);
             if (readiness != null)
             {
                 return readiness;
             }
 
-            // Give a real controller the final word. In the normal delete-response lifecycle a
-            // CreateNew-style move cannot overwrite a response that appeared after our check.
             var latestResponse = await TryReadResponseSnapshotAsync(responsePath, cancellationToken)
                 .ConfigureAwait(false);
             if (latestResponse.Exists
-                && (!latestResponse.Index.HasValue
-                    || latestResponse.Index.Value == expectedRequest.Index))
+                && (!latestResponse.CorrelationId.HasValue
+                    || latestResponse.CorrelationId.Value == expectedRequest.CorrelationId))
             {
                 return new FrameResponseSimulationResult(
                     FrameResponseSimulationStatus.ResponseAlreadyExists,
@@ -160,8 +180,8 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
                 == EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead)
             {
                 await DeleteMatchingRequestAsync(
-                        expectedRequest.Index,
-                        expectedRequest.Command,
+                        expectedRequest.CorrelationId,
+                        expectedRequest.Action,
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -183,8 +203,6 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
             }
             else
             {
-                // A retained response from an older correlation is the transport baseline. It
-                // must be replaced for the next frame to be observable.
                 AtomicFilePublisher.PublishCompletedTempFile(tempPath, responsePath);
             }
 
@@ -201,84 +219,43 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
 
     public ResponsePayloadValidationResult ValidatePayload(string payload)
     {
-        if (string.IsNullOrWhiteSpace(payload))
+        if (!TryParseLogicalResponseJson(payload, out var response, out var error))
         {
-            return ResponsePayloadValidationResult.Failure("Response payload is empty.");
+            return ResponsePayloadValidationResult.Failure(error);
         }
 
-        JObject root;
         try
         {
-            root = JObject.Parse(
-                payload,
-                new JsonLoadSettings
-                {
-                    DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error
-                });
+            _ = _codec.SerializeResponse(response!);
+            return ResponsePayloadValidationResult.Success;
         }
-        catch (JsonException exception)
+        catch (Exception exception) when (exception is ArgumentException
+                                          || exception is InvalidDataException
+                                          || exception is InvalidOperationException)
         {
-            return ResponsePayloadValidationResult.Failure("Invalid JSON: " + exception.Message);
+            return ResponsePayloadValidationResult.Failure(exception.Message);
         }
-
-        if (!HasValidResponsePropertyNames(root))
-        {
-            return ResponsePayloadValidationResult.Failure(
-                "Response property names must be unique ignoring case, use canonical casing, "
-                + "and cannot conflict with runtime metadata.");
-        }
-
-        if (!TryReadPositiveIndex(root["index"], out _))
-        {
-            return ResponsePayloadValidationResult.Failure("'index' must be a positive 32-bit integer.");
-        }
-
-        if (root["command"]?.Type != JTokenType.String
-            || !string.Equals(root["command"]!.Value<string>(), "return", StringComparison.Ordinal))
-        {
-            return ResponsePayloadValidationResult.Failure("'command' must be exactly 'return'.");
-        }
-
-        if (!TryReadFiniteNumber(root["stage_x"], out _))
-        {
-            return ResponsePayloadValidationResult.Failure(
-                "'stage_x' must be a finite JSON number in meters.");
-        }
-
-        if (!TryReadFiniteNumber(root["stage_y"], out _))
-        {
-            return ResponsePayloadValidationResult.Failure(
-                "'stage_y' must be a finite JSON number in meters.");
-        }
-
-        var imagePath = root["image_path"];
-        if (imagePath != null
-            && (imagePath.Type != JTokenType.String
-                || !EquipmentResponseMessage.IsSupportedAbsoluteImagePath(imagePath.Value<string>())))
-        {
-            return ResponsePayloadValidationResult.Failure(
-                "'image_path' must be an absolute local or UNC pathname when provided.");
-        }
-
-        return ResponsePayloadValidationResult.Success;
     }
 
     public async Task PublishAsync(string payload, CancellationToken cancellationToken)
     {
-        var validation = ValidatePayload(payload);
-        if (!validation.IsValid)
+        if (!TryParseLogicalResponseJson(payload, out var response, out var error)
+            || response is null)
         {
-            throw new InvalidDataException(string.Join(" ", validation.Errors));
+            throw new InvalidDataException(error);
         }
 
+        var bytes = _codec.SerializeResponse(response);
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(_options.ExchangeDirectory);
-        var responseRoot = JObject.Parse(payload);
-        TryReadPositiveIndex(responseRoot["index"], out var responseIndex);
+
         if (_options.EquipmentRequestLifecycle
             == EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead)
         {
-            await DeleteMatchingRequestAsync(responseIndex, null, cancellationToken)
+            await DeleteMatchingRequestAsync(
+                    response.CorrelationId,
+                    response.Action,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -286,20 +263,8 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         var tempPath = responsePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            var bytes = new UTF8Encoding(false).GetBytes(payload);
-            using (var stream = new FileStream(
-                       tempPath,
-                       FileMode.CreateNew,
-                       FileAccess.Write,
-                       FileShare.None,
-                       4096,
-                       FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                stream.Flush(true);
-            }
-
+            await WriteCompletedTempFileAsync(tempPath, bytes, cancellationToken)
+                .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             AtomicFilePublisher.PublishCompletedTempFile(tempPath, responsePath);
         }
@@ -310,29 +275,26 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
     }
 
     private async Task DeleteMatchingRequestAsync(
-        int responseIndex,
-        string? expectedCommand,
+        int responseCorrelationId,
+        string? expectedAction,
         CancellationToken cancellationToken)
     {
         var requestPath = Path.Combine(_options.ExchangeDirectory, _options.RequestFileName);
-        var activeRequest = await TryReadRequestAsync(requestPath, cancellationToken).ConfigureAwait(false);
-        if (activeRequest == null)
+        var payload = await TryReadBytesAsync(requestPath, cancellationToken).ConfigureAwait(false);
+        if (payload is null || !_codec.TryDeserializeRequest(payload, out var activeRequest)
+                            || activeRequest is null)
         {
-            // The real controller (or a previous test step) may already have consumed it.
             return;
         }
 
-        if (activeRequest.Index != responseIndex
-            || (expectedCommand != null
-                && !string.Equals(
-                    activeRequest.Command,
-                    expectedCommand,
-                    StringComparison.Ordinal)))
+        if (activeRequest.CorrelationId != responseCorrelationId
+            || expectedAction != null
+            && !string.Equals(activeRequest.Action, expectedAction, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"The active request is {activeRequest.Command}#{activeRequest.Index}, but the simulated "
-                + $"response belongs to {expectedCommand ?? "<unspecified>"}#{responseIndex}. The request "
-                + "was not deleted.");
+                $"The active request is {activeRequest.Action}#{activeRequest.CorrelationId}, but "
+                + $"the simulated response belongs to {expectedAction ?? "<unspecified>"}#"
+                + $"{responseCorrelationId}. The request was not deleted.");
         }
 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
@@ -363,123 +325,338 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         }
     }
 
-    private static JObject CreateTemplate(
-        WorkflowNode node,
-        int index,
+    private static EquipmentResponseMessage CreateDefaultResponse(
+        string action,
+        int correlationId,
+        EquipmentRequestSnapshot? activeRequest,
         string? generatedImagePath)
     {
-        if (!(node is MoveNode)
-            && !(node is MeasureNode)
-            && !(node is DrillNode)
-            && !(node is AbortNode))
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        switch (action)
         {
-            throw new ArgumentException(
-                "Only equipment actions have a response payload.",
-                nameof(node));
+            case EquipmentActionNames.Stage:
+                properties["current_stage_x"] = 0d;
+                properties["current_stage_y"] = 0d;
+                break;
+            case EquipmentActionNames.Camera:
+                properties["current_camera_x"] = 0d;
+                properties["current_camera_y"] = 0d;
+                break;
+            case EquipmentActionNames.Focus:
+                properties["z_to_sharpness_2d"] = Array.Empty<IReadOnlyList<double>>();
+                break;
+            case EquipmentActionNames.Integration:
+                properties["hfw"] = GetNumberOrDefault(activeRequest, "hfw", 1E-3d);
+                properties["frame_count"] = GetIntegerOrDefault(activeRequest, "frame_count", 8);
+                properties["image_path"] = GetSimulationImagePath(generatedImagePath);
+                break;
+            case EquipmentActionNames.Live:
+                properties["hfw"] = GetNumberOrDefault(activeRequest, "hfw", 1E-3d);
+                properties["frame_count"] = 1;
+                properties["image_path"] = GetSimulationImagePath(generatedImagePath);
+                break;
         }
 
-        if (!string.IsNullOrWhiteSpace(generatedImagePath)
-            && !EquipmentResponseMessage.IsSupportedAbsoluteImagePath(generatedImagePath))
+        return new EquipmentResponseMessage(correlationId, action, 0, properties);
+    }
+
+    private static string GetAction(WorkflowNode node)
+    {
+        switch (node)
+        {
+            case StageNode _: return EquipmentActionNames.Stage;
+            case CameraNode _: return EquipmentActionNames.Camera;
+            case FocusNode _: return EquipmentActionNames.Focus;
+            case IntegrationNode _: return EquipmentActionNames.Integration;
+            case LiveNode _: return EquipmentActionNames.Live;
+            case AbortNode _: return EquipmentActionNames.Abort;
+            default:
+                throw new ArgumentException(
+                    "Only equipment actions have an equipment response payload.",
+                    nameof(node));
+        }
+    }
+
+    private static string GetSimulationImagePath(string? generatedImagePath)
+    {
+        var path = string.IsNullOrWhiteSpace(generatedImagePath)
+            ? @"C:\DrillFlow\Images\simulated.png"
+            : generatedImagePath!;
+        if (!EquipmentResponseMessage.IsSupportedAbsoluteImagePath(path))
         {
             throw new ArgumentException(
                 "A generated response image path must be an absolute local or UNC pathname.",
                 nameof(generatedImagePath));
         }
 
-        var response = new JObject
-        {
-            ["index"] = index,
-            ["command"] = "return",
-            ["stage_x"] = 0d,
-            ["stage_y"] = 0d
-        };
-
-        if (!string.IsNullOrWhiteSpace(generatedImagePath))
-        {
-            response["image_path"] = generatedImagePath;
-        }
-
-        return response;
+        return path;
     }
 
-    private static async Task<EquipmentRequestSnapshot?> TryReadRequestAsync(
-        string requestPath,
-        CancellationToken cancellationToken)
+    private static double GetLiveHfw(EquipmentRequestSnapshot request)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        string json;
-        try
+        var hfw = GetNumberOrDefault(request, "hfw", 1E-3d);
+        return hfw > 0d && hfw < XmlTemplateEquipmentMessageCodec.MaximumHfwMetres
+            ? hfw
+            : 1E-3d;
+    }
+
+    private static double GetNumberOrDefault(
+        EquipmentRequestSnapshot? request,
+        string name,
+        double fallback)
+    {
+        if (request != null
+            && request.Parameters.TryGetValue(name, out var value)
+            && TryConvertNumber(value, out var number))
         {
-            using (var stream = new FileStream(
-                       requestPath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.ReadWrite | FileShare.Delete,
-                       4096,
-                       FileOptions.Asynchronous))
-            using (var reader = new StreamReader(stream, Encoding.UTF8, true))
-            {
-                json = await reader.ReadToEndAsync().ConfigureAwait(false);
-            }
-        }
-        catch (FileNotFoundException)
-        {
-            return null;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return null;
-        }
-        catch (IOException)
-        {
-            return null;
+            return number;
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        return fallback;
+    }
+
+    private static int GetIntegerOrDefault(
+        EquipmentRequestSnapshot? request,
+        string name,
+        int fallback)
+    {
+        var number = GetNumberOrDefault(request, name, fallback);
+        return number == Math.Truncate(number) && number >= int.MinValue && number <= int.MaxValue
+            ? (int)number
+            : fallback;
+    }
+
+    private static string SerializeLogicalJson(EquipmentResponseMessage response)
+    {
+        var root = new JObject
+        {
+            ["type"] = response.Type,
+            ["correlation_id"] = response.CorrelationId,
+            ["action"] = response.Action,
+            ["result"] = response.Result
+        };
+        foreach (var property in response.Properties)
+        {
+            root.Add(
+                property.Key,
+                property.Value is null ? JValue.CreateNull() : JToken.FromObject(property.Value));
+        }
+
+        return root.ToString(Formatting.Indented);
+    }
+
+    private static bool TryParseLogicalResponseJson(
+        string payload,
+        out EquipmentResponseMessage? response,
+        out string error)
+    {
+        response = null;
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            error = "Response payload is empty.";
+            return false;
+        }
+
+        JObject root;
         try
         {
-            var root = JObject.Parse(json);
-            var index = root["index"];
-            var command = root["command"];
-            if (!TryReadPositiveIndex(index, out var requestIndex)
-                || command?.Type != JTokenType.String)
+            root = JObject.Parse(
+                payload,
+                new JsonLoadSettings
+                {
+                    DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error
+                });
+        }
+        catch (JsonException exception)
+        {
+            error = "Invalid JSON: " + exception.Message;
+            return false;
+        }
+
+        if (!HasCanonicalLogicalPropertyNames(root))
+        {
+            error = "Logical response property names must be unique ignoring case and use canonical casing.";
+            return false;
+        }
+
+        if (root["type"]?.Type != JTokenType.String
+            || !string.Equals(root["type"]!.Value<string>(), "response", StringComparison.Ordinal))
+        {
+            error = "'type' must be exactly 'response'.";
+            return false;
+        }
+
+        if (!TryReadPositiveCorrelationId(root["correlation_id"], out var correlationId))
+        {
+            error = "'correlation_id' must be a positive 32-bit integer.";
+            return false;
+        }
+
+        if (root["action"]?.Type != JTokenType.String
+            || !EquipmentActionNames.IsKnown(root["action"]!.Value<string>()))
+        {
+            error = "'action' must be one of stage, camera, focus, integration, live, or abort.";
+            return false;
+        }
+
+        if (root["result"]?.Type != JTokenType.Integer
+            || !int.TryParse(
+                root["result"]!.ToString(Formatting.None),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var result)
+            || result < 0
+            || result > 1)
+        {
+            error = "'result' must be 0 (success) or 1 (failure).";
+            return false;
+        }
+
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var property in root.Properties())
+        {
+            if (property.Name == "type"
+                || property.Name == "correlation_id"
+                || property.Name == "action"
+                || property.Name == "result")
             {
-                return null;
+                continue;
             }
 
-            return new EquipmentRequestSnapshot(requestIndex, command.Value<string>()!);
+            properties.Add(property.Name, ConvertToken(property.Value));
         }
-        catch (JsonException)
+
+        try
         {
-            return null;
+            response = new EquipmentResponseMessage(
+                correlationId,
+                root["action"]!.Value<string>()!,
+                result,
+                properties);
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException
+                                          || exception is InvalidOperationException)
+        {
+            error = exception.Message;
+            response = null;
+            return false;
         }
     }
 
-    private static FrameResponseSimulationResult? GetFrameRequestReadiness(
+    private static bool HasCanonicalLogicalPropertyNames(JObject root)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in root.Properties())
+        {
+            if (string.IsNullOrWhiteSpace(property.Name) || !names.Add(property.Name))
+            {
+                return false;
+            }
+
+            if (IsNonCanonical(property.Name, "type")
+                || IsNonCanonical(property.Name, "correlation_id")
+                || IsNonCanonical(property.Name, "action")
+                || IsNonCanonical(property.Name, "result"))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsNonCanonical(string actual, string canonical)
+    {
+        return string.Equals(actual, canonical, StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(actual, canonical, StringComparison.Ordinal);
+    }
+
+    private static object? ConvertToken(JToken token)
+    {
+        switch (token.Type)
+        {
+            case JTokenType.Null:
+            case JTokenType.Undefined:
+                return null;
+            case JTokenType.Boolean:
+                return token.Value<bool>();
+            case JTokenType.Integer:
+                {
+                    var text = token.ToString(Formatting.None);
+                    if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue))
+                    {
+                        return intValue;
+                    }
+
+                    return long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var longValue)
+                        ? (object)longValue
+                        : text;
+                }
+            case JTokenType.Float:
+                return token.Value<double>();
+            case JTokenType.String:
+                return token.Value<string>();
+            case JTokenType.Array:
+                {
+                    var values = new List<object?>();
+                    foreach (var child in token.Children())
+                    {
+                        values.Add(ConvertToken(child));
+                    }
+
+                    return new ReadOnlyCollection<object?>(values);
+                }
+            case JTokenType.Object:
+                {
+                    var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                    foreach (var property in ((JObject)token).Properties())
+                    {
+                        values.Add(property.Name, ConvertToken(property.Value));
+                    }
+
+                    return new ReadOnlyDictionary<string, object?>(values);
+                }
+            default:
+                return token.ToString(Formatting.None, Array.Empty<JsonConverter>());
+        }
+    }
+
+    private static bool TryReadPositiveCorrelationId(JToken? token, out int correlationId)
+    {
+        correlationId = 0;
+        return token?.Type == JTokenType.Integer
+               && int.TryParse(
+                   token.ToString(Formatting.None),
+                   NumberStyles.None,
+                   CultureInfo.InvariantCulture,
+                   out correlationId)
+               && correlationId > 0;
+    }
+
+    private static FrameResponseSimulationResult? GetLiveRequestReadiness(
         EquipmentRequestSnapshot expectedRequest,
         EquipmentRequestSnapshot? activeRequest,
         string responsePath)
     {
-        if (activeRequest == null)
+        if (activeRequest is null)
         {
             return new FrameResponseSimulationResult(
                 FrameResponseSimulationStatus.NoActiveRequest,
                 responsePath);
         }
 
-        if (!string.Equals(activeRequest.Command, "frame", StringComparison.Ordinal))
+        if (!string.Equals(activeRequest.Action, EquipmentActionNames.Live, StringComparison.Ordinal))
         {
             return new FrameResponseSimulationResult(
-                FrameResponseSimulationStatus.ActiveRequestIsNotFrame,
+                FrameResponseSimulationStatus.ActiveRequestIsNotLive,
                 responsePath,
                 activeRequest);
         }
 
-        if (activeRequest.Index != expectedRequest.Index
-            || !string.Equals(
-                activeRequest.Command,
-                expectedRequest.Command,
-                StringComparison.Ordinal))
+        if (activeRequest.CorrelationId != expectedRequest.CorrelationId
+            || !string.Equals(activeRequest.Action, expectedRequest.Action, StringComparison.Ordinal))
         {
             return new FrameResponseSimulationResult(
                 FrameResponseSimulationStatus.ActiveRequestChanged,
@@ -490,126 +667,129 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         return null;
     }
 
-    private static async Task<ResponseFileSnapshot> TryReadResponseSnapshotAsync(
+    private async Task<ResponseFileSnapshot> TryReadResponseSnapshotAsync(
         string responsePath,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        string json;
-        try
-        {
-            using (var stream = new FileStream(
-                       responsePath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.ReadWrite | FileShare.Delete,
-                       4096,
-                       FileOptions.Asynchronous))
-            using (var reader = new StreamReader(stream, Encoding.UTF8, true))
-            {
-                json = await reader.ReadToEndAsync().ConfigureAwait(false);
-            }
-        }
-        catch (FileNotFoundException)
-        {
-            return ResponseFileSnapshot.Absent;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return ResponseFileSnapshot.Absent;
-        }
-        catch (IOException)
+        var payload = await TryReadBytesAsync(responsePath, cancellationToken).ConfigureAwait(false);
+        if (payload is null)
         {
             return File.Exists(responsePath)
                 ? ResponseFileSnapshot.Unreadable
                 : ResponseFileSnapshot.Absent;
         }
-        catch (UnauthorizedAccessException)
-        {
-            return ResponseFileSnapshot.Unreadable;
-        }
 
+        return _codec.TryDeserializeResponse(payload, out var response) && response != null
+            ? new ResponseFileSnapshot(true, response.CorrelationId)
+            : ResponseFileSnapshot.Unreadable;
+    }
+
+    private static async Task<byte[]?> TryReadBytesAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            var root = JObject.Parse(json);
-            return TryReadPositiveIndex(root["index"], out var index)
-                ? new ResponseFileSnapshot(true, index)
-                : ResponseFileSnapshot.Unreadable;
-        }
-        catch (JsonException)
-        {
-            return ResponseFileSnapshot.Unreadable;
-        }
-    }
-
-    private static bool TryReadPositiveIndex(JToken? token, out int index)
-    {
-        index = 0;
-        return token?.Type == JTokenType.Integer
-               && int.TryParse(
-                   token.ToString(Formatting.None),
-                   NumberStyles.Integer,
-                   CultureInfo.InvariantCulture,
-                   out index)
-               && index > 0;
-    }
-
-    private static bool HasValidResponsePropertyNames(JObject document)
-    {
-        var names = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in document.Properties())
-        {
-            if (string.IsNullOrWhiteSpace(property.Name) || !names.Add(property.Name))
+            using (var stream = new FileStream(
+                       path,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete,
+                       4096,
+                       FileOptions.Asynchronous))
             {
-                return false;
-            }
+                var length = stream.Length;
+                if (length > EquipmentMessageLimits.MaximumWirePayloadBytes)
+                {
+                    return null;
+                }
 
-            if (string.Equals(property.Name, "iteration_path", StringComparison.OrdinalIgnoreCase)
-                || IsNonCanonicalProperty(property.Name, "index")
-                || IsNonCanonicalProperty(property.Name, "command")
-                || IsNonCanonicalProperty(property.Name, "stage_x")
-                || IsNonCanonicalProperty(property.Name, "stage_y")
-                || IsNonCanonicalProperty(property.Name, "image_path"))
-            {
-                return false;
+                var bytes = new byte[(int)length];
+                var offset = 0;
+                while (offset < bytes.Length)
+                {
+                    var read = await stream.ReadAsync(
+                            bytes,
+                            offset,
+                            bytes.Length - offset,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        return null;
+                    }
+
+                    offset += read;
+                }
+
+                return bytes;
             }
         }
-
-        return true;
-    }
-
-    private static bool IsNonCanonicalProperty(string propertyName, string canonicalName)
-    {
-        return string.Equals(propertyName, canonicalName, StringComparison.OrdinalIgnoreCase)
-               && !string.Equals(propertyName, canonicalName, StringComparison.Ordinal);
-    }
-
-    private static bool TryReadFiniteNumber(JToken? token, out double value)
-    {
-        value = 0d;
-        if (token?.Type != JTokenType.Integer && token?.Type != JTokenType.Float)
+        catch (FileNotFoundException)
         {
-            return false;
+            return null;
         }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
+    private static async Task WriteCompletedTempFileAsync(
+        string tempPath,
+        byte[] bytes,
+        CancellationToken cancellationToken)
+    {
+        using (var stream = new FileStream(
+                   tempPath,
+                   FileMode.CreateNew,
+                   FileAccess.Write,
+                   FileShare.None,
+                   4096,
+                   FileOptions.Asynchronous | FileOptions.WriteThrough))
+        {
+            await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            stream.Flush(true);
+        }
+    }
+
+    private static bool TryConvertNumber(object? value, out double number)
+    {
+        number = 0d;
         try
         {
-            value = token.Value<double>();
-            return !double.IsNaN(value) && !double.IsInfinity(value);
-        }
-        catch (InvalidCastException)
-        {
-            return false;
-        }
-        catch (FormatException)
-        {
-            return false;
+            switch (value)
+            {
+                case byte item: number = item; break;
+                case sbyte item: number = item; break;
+                case short item: number = item; break;
+                case ushort item: number = item; break;
+                case int item: number = item; break;
+                case uint item: number = item; break;
+                case long item: number = item; break;
+                case ulong item: number = item; break;
+                case float item: number = item; break;
+                case double item: number = item; break;
+                case decimal item: number = Convert.ToDouble(item, CultureInfo.InvariantCulture); break;
+                default: return false;
+            }
         }
         catch (OverflowException)
         {
             return false;
         }
+
+        return !double.IsNaN(number) && !double.IsInfinity(number);
     }
 
     private static void TryDelete(string path)
@@ -631,20 +811,18 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
 
     private sealed class ResponseFileSnapshot
     {
-        public static ResponseFileSnapshot Absent { get; }
-            = new ResponseFileSnapshot(false, null);
+        public static ResponseFileSnapshot Absent { get; } = new ResponseFileSnapshot(false, null);
 
-        public static ResponseFileSnapshot Unreadable { get; }
-            = new ResponseFileSnapshot(true, null);
+        public static ResponseFileSnapshot Unreadable { get; } = new ResponseFileSnapshot(true, null);
 
-        public ResponseFileSnapshot(bool exists, int? index)
+        public ResponseFileSnapshot(bool exists, int? correlationId)
         {
             Exists = exists;
-            Index = index;
+            CorrelationId = correlationId;
         }
 
         public bool Exists { get; }
 
-        public int? Index { get; }
+        public int? CorrelationId { get; }
     }
 }

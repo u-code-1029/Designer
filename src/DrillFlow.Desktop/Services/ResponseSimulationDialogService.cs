@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using DrillFlow.Application.Communication;
+using DrillFlow.Core.Workflows;
 using DrillFlow.Desktop.ViewModels;
 using DrillFlow.Desktop.Views;
 using Microsoft.Extensions.Logging;
@@ -53,12 +54,16 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
         var host = ContentDialogHost.GetForWindow(System.Windows.Application.Current.MainWindow)
                    ?? throw new InvalidOperationException("The main ContentDialog host is unavailable.");
         var lastCorrelation = action.Results.LastOrDefault()?.CorrelationId;
+        var supportsImageResponse = action.Kind is WorkflowNodeKind.Integration or WorkflowNodeKind.Live;
         TemporaryResponseImage? generatedImage = null;
         try
         {
-            generatedImage = await Task.Run(
-                    () => _temporaryImages.CreateTemporaryImage())
-                .ConfigureAwait(true);
+            if (supportsImageResponse)
+            {
+                generatedImage = await Task.Run(
+                        () => _temporaryImages.CreateTemporaryImage())
+                    .ConfigureAwait(true);
+            }
         }
         catch (Exception exception)
         {
@@ -79,8 +84,8 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
             ? _localization["ResponseTestNoActiveRequest"]
             : string.Format(
                 _localization["ResponseTestActiveRequestValue"],
-                draft.ActiveRequest.Index,
-                draft.ActiveRequest.Command);
+                draft.ActiveRequest.CorrelationId,
+                draft.ActiveRequest.Action);
         var initialPreview = generatedImage == null
             ? null
             : new ResponseSimulationPreview(
@@ -96,6 +101,11 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
             initialPreview,
             async currentPayload =>
             {
+                if (!supportsImageResponse)
+                {
+                    return null;
+                }
+
                 try
                 {
                     var nextImage = await Task.Run(
@@ -104,8 +114,8 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
                     string nextPayload;
                     if (string.Equals(_simulator.PayloadFormat, "JSON", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Preserve stage_x, stage_y and any user-added dynamic fields. Only the
-                        // generated image pathname belongs to the preview button.
+                        // Preserve every user-edited logical response field. Only the generated
+                        // image pathname belongs to the preview button.
                         nextPayload = SynchronizeJsonImagePath(currentPayload, nextImage.Path);
                     }
                     else
@@ -135,7 +145,8 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
                     throw;
                 }
             },
-            _localization["ResponseTestImageGenerationFailed"]);
+            _localization["ResponseTestImageGenerationFailed"],
+            supportsImageResponse);
 
         while (true)
         {

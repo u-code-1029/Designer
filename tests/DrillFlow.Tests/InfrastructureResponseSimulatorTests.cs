@@ -1,12 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Infrastructure.Communication;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -15,352 +15,266 @@ namespace DrillFlow.Tests;
 
 public sealed class InfrastructureResponseSimulatorTests
 {
+    private readonly XmlTemplateEquipmentMessageCodec _codec = new();
+
     [Fact]
-    public async Task CreateDraft_UsesActiveRequestCorrelationAndCommonStageTemplate()
+    public async Task CreateDraft_KeepsJsonEditorShapeButReadsActiveXmlRequest()
     {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
-        File.WriteAllText(
+        var request = StageRequest(42);
+        File.WriteAllBytes(
             Path.Combine(directory.Path, options.RequestFileName),
-            "{\"index\":42,\"command\":\"measure\",\"thickness\":1E-3}");
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+            _codec.SerializeRequest(request));
+        var simulator = CreateSimulator(options);
 
         var draft = await simulator.CreateDraftAsync(
-            new MeasureNode { Key = "measure_1" },
+            new StageNode(),
             7,
             CancellationToken.None);
-        var response = JObject.Parse(draft.Payload);
+        var json = JObject.Parse(draft.Payload);
 
         Assert.Equal("JSON", simulator.PayloadFormat);
-        Assert.Equal(42, draft.ActiveRequest!.Index);
-        Assert.Equal("measure", draft.ActiveRequest.Command);
-        Assert.Equal(42, response.Value<int>("index"));
-        Assert.Equal("return", response.Value<string>("command"));
-        Assert.Equal(0d, response.Value<double>("stage_x"));
-        Assert.Equal(0d, response.Value<double>("stage_y"));
-        Assert.Null(response["image_path"]);
-        Assert.Null(response["measured_distance"]);
+        Assert.Equal("response", json["type"]!.Value<string>());
+        Assert.Equal(42, json["correlation_id"]!.Value<int>());
+        Assert.Equal("stage", json["action"]!.Value<string>());
+        Assert.Equal(0, json["result"]!.Value<int>());
+        Assert.Equal(0d, json["current_stage_x"]!.Value<double>());
+        Assert.Null(json["image_path"]);
+        Assert.Equal(42, draft.ActiveRequest!.CorrelationId);
+        Assert.Equal("stage", draft.ActiveRequest.Action);
         Assert.Equal(Path.Combine(directory.Path, options.ResponseFileName), draft.ResponsePath);
     }
 
     [Fact]
-    public async Task CreateDraft_UsesCurrentExchangeDirectoryAndResponseFileName()
+    public async Task CreateDraft_IntegrationUsesGeneratedImageAndActiveRequestValues()
     {
-        using var initialDirectory = new InfrastructureTestDirectory();
-        using var currentDirectory = new InfrastructureTestDirectory();
-        var options = CreateOptions(initialDirectory.Path);
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
-
-        // The settings page updates the live options instance. A newly opened dialog must use
-        // the values that are current when its draft is created, not the startup values.
-        options.ExchangeDirectory = currentDirectory.Path;
-        options.ResponseFileName = "current.response.json";
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var request = new EquipmentRequestMessage(
+            43,
+            EquipmentActionNames.Integration,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 2E-4,
+                ["frame_count"] = 16,
+                ["image_path"] = @"C:\Requested\integration.png"
+            });
+        File.WriteAllBytes(
+            Path.Combine(directory.Path, options.RequestFileName),
+            _codec.SerializeRequest(request));
+        var simulator = CreateSimulator(options);
 
         var draft = await simulator.CreateDraftAsync(
-            new MeasureNode(),
-            7,
-            CancellationToken.None);
-
-        Assert.Equal(
-            Path.Combine(currentDirectory.Path, "current.response.json"),
-            draft.ResponsePath);
-    }
-
-    [Fact]
-    public async Task CreateDraft_ProvidesSameCommonFieldsForEveryEquipmentAction()
-    {
-        using var directory = new InfrastructureTestDirectory();
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(CreateOptions(directory.Path)));
-        var move = JObject.Parse((await simulator.CreateDraftAsync(
-            new MoveNode(), 11, CancellationToken.None)).Payload);
-        var measure = JObject.Parse((await simulator.CreateDraftAsync(
-            new MeasureNode(), 12, CancellationToken.None)).Payload);
-        var drillResponse = JObject.Parse((await simulator.CreateDraftAsync(
-            new DrillNode(), 13, CancellationToken.None)).Payload);
-        var abort = JObject.Parse((await simulator.CreateDraftAsync(
-            new AbortNode(), 14, CancellationToken.None)).Payload);
-
-        foreach (var response in new[] { move, measure, drillResponse, abort })
-        {
-            Assert.Equal(0d, response.Value<double>("stage_x"));
-            Assert.Equal(0d, response.Value<double>("stage_y"));
-            Assert.Equal(4, response.Properties().Count());
-        }
-    }
-
-    [Fact]
-    public async Task CreateDraft_IncludesGeneratedImagePathWhenProvided()
-    {
-        using var directory = new InfrastructureTestDirectory();
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(CreateOptions(directory.Path)));
-        var generatedImagePath = Path.Combine(directory.Path, "generated.png");
-
-        var draft = await simulator.CreateDraftAsync(
-            new MeasureNode(),
-            15,
+            new IntegrationNode(),
+            null,
             CancellationToken.None,
-            generatedImagePath);
-        var response = JObject.Parse(draft.Payload);
+            @"C:\Generated\preview.png");
+        var json = JObject.Parse(draft.Payload);
 
-        Assert.Equal(generatedImagePath, response.Value<string>("image_path"));
+        Assert.Equal(43, json["correlation_id"]!.Value<int>());
+        Assert.Equal(2E-4, json["hfw"]!.Value<double>());
+        Assert.Equal(16, json["frame_count"]!.Value<int>());
+        Assert.Equal(@"C:\Generated\preview.png", json["image_path"]!.Value<string>());
     }
 
     [Theory]
-    [InlineData("")]
     [InlineData("not json")]
-    [InlineData("{\"index\":1,\"command\":\"measure\"}")]
-    [InlineData("{\"index\":1.5,\"command\":\"return\"}")]
-    [InlineData("{\"index\":0,\"command\":\"return\"}")]
-    [InlineData("{\"index\":-1,\"command\":\"return\"}")]
-    [InlineData("{\"index\":999999999999999999999,\"command\":\"return\"}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_y\":0}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":null}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":\"0\",\"stage_y\":0}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":NaN,\"stage_y\":0}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":Infinity}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"image_path\":\"  \"}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"image_path\":42}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"image_path\":\"result.png\"}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"image_path\":\"C:result.png\"}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"image_path\":\"\\\\\\\\server\\\\share\"}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"STAGE_X\":1,\"stage_y\":0}")]
-    [InlineData("{\"index\":1,\"Index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"Command\":\"return\",\"stage_x\":0,\"stage_y\":0}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"iteration_path\":[]}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,\"value\":1,\"VALUE\":2}")]
-    [InlineData("{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_x\":1,\"stage_y\":0}")]
-    public void ValidatePayload_RejectsMalformedEquipmentResponse(string payload)
+    [InlineData("{\"type\":\"request\",\"correlation_id\":1,\"action\":\"abort\",\"result\":0}")]
+    [InlineData("{\"type\":\"response\",\"correlation_id\":0,\"action\":\"abort\",\"result\":0}")]
+    [InlineData("{\"type\":\"response\",\"correlation_id\":1,\"action\":\"abort\",\"result\":2}")]
+    public void ValidatePayload_RejectsInvalidLogicalJson(string payload)
     {
-        using var directory = new InfrastructureTestDirectory();
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(CreateOptions(directory.Path)));
+        using var directory = new TempDirectory();
+        var simulator = CreateSimulator(CreateOptions(directory.Path));
 
-        var result = simulator.ValidatePayload(payload);
-
-        Assert.False(result.IsValid);
-        Assert.NotEmpty(result.Errors);
+        Assert.False(simulator.ValidatePayload(payload).IsValid);
     }
 
     [Fact]
-    public void ValidatePayload_AcceptsFiniteCoordinatesOptionalImageAndExtensions()
+    public void ValidatePayload_AppliesActionSpecificRules()
     {
-        using var directory = new InfrastructureTestDirectory();
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(CreateOptions(directory.Path)));
+        using var directory = new TempDirectory();
+        var simulator = CreateSimulator(CreateOptions(directory.Path));
+        const string invalidLive = "{\"type\":\"response\",\"correlation_id\":1,"
+                                   + "\"action\":\"live\",\"result\":0,\"hfw\":0.001,"
+                                   + "\"frame_count\":8,\"image_path\":\"C:\\\\Images\\\\live.png\"}";
 
-        var result = simulator.ValidatePayload(
-            "{\"index\":1,\"command\":\"return\",\"stage_x\":-0.125,\"stage_y\":2.5E-3,"
-            + "\"image_path\":\"C:\\\\images\\\\result.png\",\"controller_value\":17}");
+        var validation = simulator.ValidatePayload(invalidLive);
 
-        Assert.True(result.IsValid);
-        Assert.Empty(result.Errors);
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("exactly 1", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void ValidatePayload_AcceptsAbsoluteUncImagePath()
+    public async Task Publish_ConvertsLogicalJsonToXmlWirePayload()
     {
-        using var directory = new InfrastructureTestDirectory();
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(CreateOptions(directory.Path)));
-
-        var result = simulator.ValidatePayload(
-            "{\"index\":1,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,"
-            + "\"image_path\":\"\\\\\\\\server\\\\share\\\\result.png\"}");
-
-        Assert.True(result.IsValid);
-    }
-
-    [Fact]
-    public async Task CreateDraft_RejectsRelativeGeneratedImagePath()
-    {
-        using var directory = new InfrastructureTestDirectory();
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(CreateOptions(directory.Path)));
-
-        await Assert.ThrowsAsync<ArgumentException>(() => simulator.CreateDraftAsync(
-            new MeasureNode(),
-            16,
-            CancellationToken.None,
-            "result.png"));
-    }
-
-    [Fact]
-    public async Task PublishAsync_ReplacesResponseAtomicallyAndRemovesTemporaryFile()
-    {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
-        var responsePath = Path.Combine(directory.Path, options.ResponseFileName);
-        File.WriteAllText(
-            responsePath,
-            "{\"index\":8,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0}");
-        const string edited =
-            "{\"index\":9,\"command\":\"return\",\"stage_x\":0.1,\"stage_y\":-0.2,\"value\":123}";
+        var simulator = CreateSimulator(options);
+        const string payload = "{\"type\":\"response\",\"correlation_id\":77,"
+                               + "\"action\":\"camera\",\"result\":1,"
+                               + "\"current_camera_x\":-3.2e-9,\"current_camera_y\":7.62e-6}";
 
-        await simulator.PublishAsync(edited, CancellationToken.None);
+        await simulator.PublishAsync(payload, CancellationToken.None);
 
-        Assert.Equal(edited, File.ReadAllText(responsePath));
-        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
+        var bytes = File.ReadAllBytes(Path.Combine(directory.Path, options.ResponseFileName));
+        var xml = Encoding.UTF8.GetString(bytes);
+        Assert.StartsWith("<?xml", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("{\"type\"", xml, StringComparison.Ordinal);
+        Assert.True(_codec.TryDeserializeResponse(bytes, out var response));
+        Assert.Equal(77, response!.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Camera, response.Action);
+        Assert.Equal(1, response.Result);
     }
 
     [Fact]
-    public async Task PublishAsync_DeleteAfterReadMode_ConsumesMatchingRequestBeforeResponse()
+    public async Task Publish_EquipmentDeleteModeDeletesOnlyMatchingXmlRequest()
     {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
         options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead;
         var requestPath = Path.Combine(directory.Path, options.RequestFileName);
-        File.WriteAllText(requestPath, "{\"index\":55,\"command\":\"drill\"}");
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+        File.WriteAllBytes(requestPath, _codec.SerializeRequest(new EquipmentRequestMessage(
+            78,
+            EquipmentActionNames.Abort)));
+        var simulator = CreateSimulator(options);
 
         await simulator.PublishAsync(
-            "{\"index\":55,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0,"
-            + "\"image_path\":\"C:\\\\results\\\\result.png\"}",
+            "{\"type\":\"response\",\"correlation_id\":78,\"action\":\"abort\",\"result\":0}",
             CancellationToken.None);
 
         Assert.False(File.Exists(requestPath));
-        Assert.True(File.Exists(Path.Combine(directory.Path, options.ResponseFileName)));
     }
 
     [Fact]
-    public async Task PublishAsync_DeleteAfterReadMode_NeverDeletesDifferentActiveRequest()
+    public async Task Publish_MismatchedRequestIsPreservedAndRejected()
     {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
         options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead;
         var requestPath = Path.Combine(directory.Path, options.RequestFileName);
-        File.WriteAllText(requestPath, "{\"index\":56,\"command\":\"move\"}");
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+        var requestBytes = _codec.SerializeRequest(new EquipmentRequestMessage(
+            79,
+            EquipmentActionNames.Abort));
+        File.WriteAllBytes(requestPath, requestBytes);
+        var simulator = CreateSimulator(options);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => simulator.PublishAsync(
-            "{\"index\":55,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0}",
+            "{\"type\":\"response\",\"correlation_id\":80,\"action\":\"abort\",\"result\":0}",
             CancellationToken.None));
 
-        Assert.True(File.Exists(requestPath));
-        Assert.False(File.Exists(Path.Combine(directory.Path, options.ResponseFileName)));
+        Assert.Equal(requestBytes, File.ReadAllBytes(requestPath));
     }
 
     [Fact]
-    public async Task PublishAsync_CompletesRealDeleteAfterReadTransportExchange()
+    public async Task ContinuousLiveSimulator_PublishesMatchingXmlResponse()
     {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
-        options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead;
-        options.ApplicationResponseLifecycle = ApplicationResponseFileLifecycle.DeleteAfterRead;
-        options.ResponseTimeout = TimeSpan.FromSeconds(2);
-        options.PollingInterval = TimeSpan.FromMilliseconds(5);
-        options.StableReadDelay = TimeSpan.FromMilliseconds(5);
-        using var transport = new FileEquipmentTransport(
-            Options.Create(options),
-            NullLogger<FileEquipmentTransport>.Instance);
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
-        var exchange = transport.ExchangeAsync(
-            new EquipmentRequestMessage(77, "measure"),
-            CancellationToken.None);
-        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (!File.Exists(requestPath) && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(5);
-        }
-
-        Assert.True(File.Exists(requestPath));
-        var draft = await simulator.CreateDraftAsync(new MeasureNode(), null, CancellationToken.None);
-        await simulator.PublishAsync(draft.Payload, CancellationToken.None);
-        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
-
-        Assert.Equal(77, response.Index);
-        Assert.Equal(0d, response.Properties["stage_x"]);
-        Assert.Equal(0d, response.Properties["stage_y"]);
-        Assert.False(File.Exists(requestPath));
-    }
-
-    [Fact]
-    public async Task TryPublishFrameResponse_PublishesForTheObservedFrameCorrelation()
-    {
-        using var directory = new InfrastructureTestDirectory();
-        var options = CreateOptions(directory.Path);
-        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
-        var responsePath = Path.Combine(directory.Path, options.ResponseFileName);
-        var imagePath = Path.Combine(directory.Path, "frame.png");
-        File.WriteAllText(requestPath, "{\"index\":301,\"command\":\"frame\"}");
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
-        var observed = await simulator.GetActiveRequestAsync(CancellationToken.None);
+        var request = LiveRequest(81);
+        File.WriteAllBytes(
+            Path.Combine(directory.Path, options.RequestFileName),
+            _codec.SerializeRequest(request));
+        var simulator = CreateSimulator(options);
+        var snapshot = await simulator.GetActiveRequestAsync(CancellationToken.None);
 
         var result = await simulator.TryPublishFrameResponseAsync(
-            observed!,
-            imagePath,
+            snapshot!,
+            @"C:\Generated\frame.png",
             CancellationToken.None);
 
-        Assert.Equal(FrameResponseSimulationStatus.Published, result.Status);
         Assert.True(result.IsPublished);
-        var response = JObject.Parse(File.ReadAllText(responsePath));
-        Assert.Equal(301, response.Value<int>("index"));
-        Assert.Equal("return", response.Value<string>("command"));
-        Assert.Equal(imagePath, response.Value<string>("image_path"));
-        Assert.Equal(0d, response.Value<double>("stage_x"));
-        Assert.Equal(0d, response.Value<double>("stage_y"));
+        var responseBytes = File.ReadAllBytes(Path.Combine(directory.Path, options.ResponseFileName));
+        Assert.True(_codec.TryDeserializeResponse(responseBytes, request, out var response));
+        Assert.Equal(1, response!.FrameCount);
+        Assert.Equal(1E-3, response.Hfw);
+        Assert.Equal(@"C:\Generated\frame.png", response.ImagePath);
     }
 
     [Fact]
-    public async Task TryPublishFrameResponse_DoesNotOverwriteRealResponseForSameCorrelation()
+    public async Task ContinuousLiveSimulator_DoesNotOverwriteExistingResponseForSameCorrelation()
     {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
+        var request = LiveRequest(82);
         var requestPath = Path.Combine(directory.Path, options.RequestFileName);
         var responsePath = Path.Combine(directory.Path, options.ResponseFileName);
-        const string controllerPayload =
-            "{\"index\":302,\"command\":\"return\",\"stage_x\":0.2,\"stage_y\":0.3," +
-            "\"image_path\":\"C:\\\\controller\\\\frame.png\"}";
-        File.WriteAllText(requestPath, "{\"index\":302,\"command\":\"frame\"}");
-        File.WriteAllText(responsePath, controllerPayload);
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+        File.WriteAllBytes(requestPath, _codec.SerializeRequest(request));
+        var existing = _codec.SerializeResponse(new EquipmentResponseMessage(
+            82,
+            EquipmentActionNames.Live,
+            0,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 1E-3,
+                ["frame_count"] = 1,
+                ["image_path"] = @"C:\Existing\frame.png"
+            }));
+        File.WriteAllBytes(responsePath, existing);
+        var simulator = CreateSimulator(options);
 
         var result = await simulator.TryPublishFrameResponseAsync(
-            new EquipmentRequestSnapshot(302, "frame"),
-            Path.Combine(directory.Path, "simulated.png"),
+            new EquipmentRequestSnapshot(82, EquipmentActionNames.Live, request.Parameters),
+            @"C:\Generated\new.png",
             CancellationToken.None);
 
         Assert.Equal(FrameResponseSimulationStatus.ResponseAlreadyExists, result.Status);
-        Assert.Equal(controllerPayload, File.ReadAllText(responsePath));
-        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
+        Assert.Equal(existing, File.ReadAllBytes(responsePath));
     }
 
     [Fact]
-    public async Task TryPublishFrameResponse_DoesNotPublishAfterActiveRequestChanges()
+    public async Task ContinuousLiveSimulator_ReportsNonLiveActiveRequest()
     {
-        using var directory = new InfrastructureTestDirectory();
+        using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
-        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
-        File.WriteAllText(requestPath, "{\"index\":304,\"command\":\"frame\"}");
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+        File.WriteAllBytes(
+            Path.Combine(directory.Path, options.RequestFileName),
+            _codec.SerializeRequest(StageRequest(83)));
+        var simulator = CreateSimulator(options);
 
         var result = await simulator.TryPublishFrameResponseAsync(
-            new EquipmentRequestSnapshot(303, "frame"),
-            Path.Combine(directory.Path, "simulated.png"),
+            new EquipmentRequestSnapshot(
+                84,
+                EquipmentActionNames.Live,
+                LiveRequest(84).Parameters),
+            @"C:\Generated\frame.png",
             CancellationToken.None);
 
-        Assert.Equal(FrameResponseSimulationStatus.ActiveRequestChanged, result.Status);
-        Assert.Equal(304, result.ActiveRequest!.Index);
-        Assert.False(File.Exists(Path.Combine(directory.Path, options.ResponseFileName)));
+        Assert.Equal(FrameResponseSimulationStatus.ActiveRequestIsNotLive, result.Status);
+        Assert.Equal(83, result.ActiveRequest!.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, result.ActiveRequest.Action);
     }
 
-    [Fact]
-    public async Task TryPublishFrameResponse_ReplacesOnlyRetainedOlderCorrelationResponse()
+    private JsonEquipmentResponseSimulator CreateSimulator(EquipmentCommunicationOptions options)
     {
-        using var directory = new InfrastructureTestDirectory();
-        var options = CreateOptions(directory.Path);
-        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
-        var responsePath = Path.Combine(directory.Path, options.ResponseFileName);
-        File.WriteAllText(requestPath, "{\"index\":305,\"command\":\"frame\"}");
-        File.WriteAllText(
-            responsePath,
-            "{\"index\":299,\"command\":\"return\",\"stage_x\":0,\"stage_y\":0}");
-        var simulator = new JsonEquipmentResponseSimulator(Options.Create(options));
+        return new JsonEquipmentResponseSimulator(Options.Create(options), _codec);
+    }
 
-        var result = await simulator.TryPublishFrameResponseAsync(
-            new EquipmentRequestSnapshot(305, "frame"),
-            Path.Combine(directory.Path, "simulated.png"),
-            CancellationToken.None);
+    private static EquipmentRequestMessage StageRequest(int correlationId)
+    {
+        return new EquipmentRequestMessage(
+            correlationId,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 0d,
+                ["stage_y"] = 0d
+            });
+    }
 
-        Assert.Equal(FrameResponseSimulationStatus.Published, result.Status);
-        Assert.Equal(305, JObject.Parse(File.ReadAllText(responsePath)).Value<int>("index"));
+    private static EquipmentRequestMessage LiveRequest(int correlationId)
+    {
+        return new EquipmentRequestMessage(
+            correlationId,
+            EquipmentActionNames.Live,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 1E-3,
+                ["frame_count"] = 1,
+                ["image_path"] = @"C:\Requested\frame.png"
+            });
     }
 
     private static EquipmentCommunicationOptions CreateOptions(string directory)
@@ -368,8 +282,35 @@ public sealed class InfrastructureResponseSimulatorTests
         return new EquipmentCommunicationOptions
         {
             ExchangeDirectory = directory,
-            RequestFileName = "request.test.json",
-            ResponseFileName = "response.test.json"
+            RequestFileName = "request.test.xml",
+            ResponseFileName = "response.test.xml",
+            PollingInterval = TimeSpan.FromMilliseconds(5),
+            StableReadDelay = TimeSpan.FromMilliseconds(5),
+            ResponseTimeout = TimeSpan.FromSeconds(2)
         };
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "DrillFlow-SimulatorTests-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Path, true);
+            }
+            catch
+            {
+            }
+        }
     }
 }

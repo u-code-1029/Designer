@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<request>
+  <type>{{{type}}}</type>
+  <correlation_id>{{{correlation_id}}}</correlation_id>
+  <action>{{{action}}}</action>
+  <hfw>{{{hfw}}}</hfw>
+  <frame_count>{{{frame_count}}}</frame_count>
+  <image_path>{{{image_path}}}</image_path>
+</request>

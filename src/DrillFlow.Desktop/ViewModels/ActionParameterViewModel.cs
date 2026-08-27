@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using DrillFlow.Application.Communication;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Desktop.Services;
 using Newtonsoft.Json.Linq;
@@ -27,7 +28,12 @@ public sealed class ActionParameterViewModel : ObservableObject
         _binding = binding;
         _ownerKind = ownerKind;
         _localization = localization;
-        _localization.LanguageChanged += (_, _) => OnPropertyChanged(nameof(Label));
+        _localization.LanguageChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(Description));
+            OnPropertyChanged(nameof(Label));
+            Validate();
+        };
     }
 
     public string Name { get; }
@@ -103,17 +109,76 @@ public sealed class ActionParameterViewModel : ObservableObject
                         : Localized("relative 또는 absolute를 입력하세요.", "Enter relative or absolute.");
                 break;
 
-            case "move_x":
-            case "move_y":
-                ValidationMessage = TryDouble(raw, out var move) && Math.Abs(move) < 0.5
+            case "stage_x":
+            case "stage_y":
+            case "camera_x":
+            case "camera_y":
+                ValidationMessage = TryDouble(raw, out _)
                     ? string.Empty
-                    : Localized("-0.5m보다 크고 0.5m보다 작은 값을 입력하세요.", "Enter a value strictly between -0.5m and 0.5m.");
+                    : Localized(
+                        "유한한 숫자를 입력하세요. 양수와 음수를 모두 사용할 수 있습니다.",
+                        "Enter a finite number. Positive and negative values are allowed.");
                 break;
 
-            case "thickness":
-                ValidationMessage = TryDouble(raw, out var thickness) && thickness > 0 && thickness <= 0.0024
+            case "hfw":
+                ValidationMessage = TryDouble(raw, out var hfw) && hfw > 0 && hfw < 2.4E-3
                     ? string.Empty
-                    : Localized("0m보다 크고 2.4mm 이하인 값을 입력하세요.", "Enter a value greater than 0m and no more than 2.4mm.");
+                    : Localized(
+                        "0m보다 크고 2.4mm보다 작은 값을 입력하세요.",
+                        "Enter a value greater than 0m and less than 2.4mm.");
+                break;
+
+            case "range":
+                ValidationMessage = TryDouble(raw, out var range) && range > 0
+                    ? string.Empty
+                    : Localized("0m보다 큰 유한한 값을 입력하세요.", "Enter a finite value greater than 0m.");
+                break;
+
+            case "steps":
+                ValidationMessage = int.TryParse(
+                        raw,
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out var steps)
+                    && steps >= 4
+                        ? string.Empty
+                        : Localized(
+                            "4 이상 Int32 최대값 이하의 정수를 입력하세요.",
+                            "Enter an integer from 4 through Int32.MaxValue.");
+                break;
+
+            case "frame_count":
+                var hasIntegerFrameCount = int.TryParse(
+                    raw,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var frameCount);
+                if (_ownerKind == WorkflowNodeKind.Live)
+                {
+                    ValidationMessage = hasIntegerFrameCount && frameCount == 1
+                        ? string.Empty
+                        : Localized("Live frame_count는 1로 고정됩니다.", "Live frame_count must be exactly 1.");
+                }
+                else
+                {
+                    ValidationMessage = hasIntegerFrameCount
+                                        && frameCount >= 1
+                                        && frameCount <= 64
+                                        && (frameCount & (frameCount - 1)) == 0
+                        ? string.Empty
+                        : Localized(
+                            "1~64 범위의 2의 거듭제곱을 입력하세요.",
+                            "Enter a power of two from 1 through 64.");
+                }
+
+                break;
+
+            case "image_path":
+                ValidationMessage = EquipmentResponseMessage.IsSupportedAbsoluteImagePath(raw)
+                    ? string.Empty
+                    : Localized(
+                        "파일명을 포함한 절대 로컬 또는 UNC 경로를 입력하세요.",
+                        "Enter an absolute local or UNC path including the file name.");
                 break;
 
             case "milliseconds":
@@ -129,12 +194,6 @@ public sealed class ActionParameterViewModel : ObservableObject
                     && count > 0
                         ? string.Empty
                         : Localized("1 이상의 정수를 입력하세요.", "Enter an integer greater than or equal to 1.");
-                break;
-
-            case "drill_result_path":
-                ValidationMessage = string.IsNullOrWhiteSpace(raw)
-                    ? Localized("장비가 결과를 저장할 경로를 입력하세요.", "Enter the destination path used by the equipment.")
-                    : string.Empty;
                 break;
 
             case "method":

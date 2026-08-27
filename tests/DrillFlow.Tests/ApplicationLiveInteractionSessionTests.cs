@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,6 +8,7 @@ using DrillFlow.Application.Communication;
 using DrillFlow.Application.LiveInteraction;
 using DrillFlow.Core.Validation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace DrillFlow.Tests;
@@ -14,97 +16,77 @@ namespace DrillFlow.Tests;
 public sealed class ApplicationLiveInteractionSessionTests
 {
     [Fact]
-    public async Task Commands_UseCanonicalContractsAndUniqueCorrelations()
+    public async Task Commands_UseCanonicalActionsParametersAndUniqueCorrelations()
     {
+        using var directory = new LiveSessionTestDirectory();
         var transport = new RecordingTransport((request, _) =>
-            Task.FromResult(Response(
-                request,
-                request.Command == LiveInteractionProtocol.MoveCommand
-                    ? null
-                    : @"C:\camera\image.png")));
-        using var session = CreateSession(transport);
+            Task.FromResult(ResponseFor(request)));
+        using var session = CreateSession(transport, directory.Path);
 
-        var frame = await session.RequestFrameAsync(12.5E-3);
-        var move = await session.MoveRelativeAsync(2.5E-4, -3E-4);
-        var capture = await session.CaptureAsync();
+        var live = await session.RequestFrameAsync(1.2E-3);
+        var stage = await session.MoveStageAsync("relative", 2.5E-4, -3E-4);
+        var camera = await session.MoveCameraAsync("absolute", -4E-6, 8E-6);
+        var focus = await session.FocusAsync(1E-3, 50E-6, 13);
+        var integration = await session.IntegrateAsync(8E-4, 8);
 
-        Assert.Equal(new[] { 1, 2, 3 }, transport.Requests.Select(item => item.Index));
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, transport.Requests.Select(item => item.CorrelationId));
         Assert.Equal(
-            new[]
-            {
-                LiveInteractionProtocol.FrameCommand,
-                LiveInteractionProtocol.MoveCommand,
-                LiveInteractionProtocol.CaptureCommand
-            },
-            transport.Requests.Select(item => item.Command));
+            new[] { "live", "stage", "camera", "focus", "integration" },
+            transport.Requests.Select(item => item.Action));
 
+        var liveRequest = transport.Requests[0];
+        Assert.Equal(1.2E-3, liveRequest.Parameters["hfw"]);
+        Assert.Equal(1, liveRequest.Parameters["frame_count"]);
+        Assert.Equal(live.RequestedImagePath, liveRequest.Parameters["image_path"]);
         Assert.Equal(
-            12.5E-3,
-            transport.Requests[0].Parameters[
-                LiveInteractionProtocol.HorizontalFieldWidthParameter]);
-        Assert.Equal(
-            LiveInteractionProtocol.RelativeMoveMode,
-            transport.Requests[1].Parameters[LiveInteractionProtocol.MoveModeParameter]);
-        Assert.Equal(2.5E-4, transport.Requests[1].Parameters[LiveInteractionProtocol.MoveXParameter]);
-        Assert.Equal(-3E-4, transport.Requests[1].Parameters[LiveInteractionProtocol.MoveYParameter]);
-        Assert.Empty(transport.Requests[2].Parameters);
+            Path.Combine(directory.Path, ".drillflow-live", "live-1.bmp"),
+            live.RequestedImagePath);
 
-        Assert.Equal(@"C:\camera\image.png", frame.ImagePath);
-        Assert.Null(move.ImagePath);
-        Assert.Equal(@"C:\camera\image.png", capture.ImagePath);
+        Assert.Equal("relative", transport.Requests[1].Parameters["move_mode"]);
+        Assert.Equal(2.5E-4, transport.Requests[1].Parameters["stage_x"]);
+        Assert.Equal(-3E-4, transport.Requests[1].Parameters["stage_y"]);
+        Assert.Equal("absolute", transport.Requests[2].Parameters["move_mode"]);
+        Assert.Equal(-4E-6, transport.Requests[2].Parameters["camera_x"]);
+        Assert.Equal(8E-6, transport.Requests[2].Parameters["camera_y"]);
+        Assert.Equal(1E-3, transport.Requests[3].Parameters["hfw"]);
+        Assert.Equal(50E-6, transport.Requests[3].Parameters["range"]);
+        Assert.Equal(13, transport.Requests[3].Parameters["steps"]);
+        Assert.Equal(8E-4, transport.Requests[4].Parameters["hfw"]);
+        Assert.Equal(8, transport.Requests[4].Parameters["frame_count"]);
+        Assert.Equal(integration.RequestedImagePath, transport.Requests[4].Parameters["image_path"]);
+
+        Assert.Equal(2, stage.CorrelationId);
+        Assert.Equal(3, camera.CorrelationId);
+        Assert.Equal(4, focus.CorrelationId);
     }
 
-    [Theory]
-    [InlineData("frame")]
-    [InlineData("capture")]
-    public async Task ImageCommands_RequireImagePathInResponse(string command)
+    [Fact]
+    public async Task RequestFrame_NormalizesForwardSlashExchangeDirectoryForImagePath()
     {
+        using var directory = new LiveSessionTestDirectory();
         var transport = new RecordingTransport((request, _) =>
-            Task.FromResult(Response(request)));
-        using var session = CreateSession(transport);
+            Task.FromResult(ResponseFor(request)));
+        using var session = CreateSession(transport, directory.Path.Replace('\\', '/'));
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            command == "frame"
-                ? session.RequestFrameAsync(10E-3)
-                : session.CaptureAsync());
+        var exchange = await session.RequestFrameAsync(1E-3);
 
-        Assert.Contains("image_path", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData(double.NaN, 0d)]
-    [InlineData(double.PositiveInfinity, 0d)]
-    [InlineData(0d, double.NegativeInfinity)]
-    [InlineData(-0.5d, 0d)]
-    [InlineData(0.5d, 0d)]
-    [InlineData(0d, -0.5d)]
-    [InlineData(0d, 0.5d)]
-    public void MoveRelative_RejectsNonFiniteOrOutOfRangeOffsetsBeforeExchange(
-        double moveX,
-        double moveY)
-    {
-        var transport = new RecordingTransport((request, _) =>
-            Task.FromResult(Response(request)));
-        using var session = CreateSession(transport);
-
-        Assert.Throws<ParameterValidationException>(() =>
-        {
-            _ = session.MoveRelativeAsync(moveX, moveY);
-        });
-        Assert.Empty(transport.Requests);
+        Assert.DoesNotContain("/", exchange.RequestedImagePath, StringComparison.Ordinal);
+        Assert.True(EquipmentResponseMessage.IsSupportedAbsoluteImagePath(exchange.RequestedImagePath));
     }
 
     [Theory]
     [InlineData(0d)]
     [InlineData(-1E-3)]
+    [InlineData(2.4E-3)]
+    [InlineData(2.400001E-3)]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
-    [InlineData(double.NegativeInfinity)]
-    public void Frame_RejectsNonPositiveOrNonFiniteHfwBeforeExchange(double hfw)
+    public void Hfw_RejectsValuesOutsideStrictEquipmentRange(double hfw)
     {
+        using var directory = new LiveSessionTestDirectory();
         var transport = new RecordingTransport((request, _) =>
-            Task.FromResult(Response(request, @"C:\camera\frame.png")));
-        using var session = CreateSession(transport);
+            Task.FromResult(ResponseFor(request)));
+        using var session = CreateSession(transport, directory.Path);
 
         Assert.Throws<ParameterValidationException>(() =>
         {
@@ -113,134 +95,279 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.Empty(transport.Requests);
     }
 
-    [Fact]
-    public async Task ConcurrentCalls_AreSerializedForTheWholeRequestResponseExchange()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(65)]
+    [InlineData(128)]
+    public void Integration_RejectsNonPowerOfTwoOrOutOfRangeFrameCount(int frameCount)
     {
+        using var directory = new LiveSessionTestDirectory();
+        var transport = new RecordingTransport((request, _) =>
+            Task.FromResult(ResponseFor(request)));
+        using var session = CreateSession(transport, directory.Path);
+
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.IntegrateAsync(1E-3, frameCount);
+        });
+        Assert.Empty(transport.Requests);
+    }
+
+    [Fact]
+    public void MovesAndFocus_RejectMalformedValuesBeforeTransport()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        var transport = new RecordingTransport((request, _) =>
+            Task.FromResult(ResponseFor(request)));
+        using var session = CreateSession(transport, directory.Path);
+
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.MoveStageAsync("RELATIVE", 0d, 0d);
+        });
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.MoveCameraAsync("relative", double.NaN, 0d);
+        });
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.FocusAsync(1E-3, 0d, 13);
+        });
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.FocusAsync(1E-3, 50E-6, 3);
+        });
+        Assert.Empty(transport.Requests);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task ResponseMustMatchCorrelationActionAndSuccessResult(
+        bool wrongCorrelation,
+        bool wrongAction)
+    {
+        using var directory = new LiveSessionTestDirectory();
+        var transport = new RecordingTransport((request, _) => Task.FromResult(
+            new EquipmentResponseMessage(
+                wrongCorrelation ? request.CorrelationId + 1 : request.CorrelationId,
+                wrongAction ? "camera" : request.Action,
+                wrongCorrelation || wrongAction ? 0 : 1,
+                StageProperties(0d, 0d))));
+        using var session = CreateSession(transport, directory.Path);
+
+        var error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+            session.MoveStageAsync("relative", 0d, 0d));
+
+        Assert.True(
+            error.Message.Contains("correlation", StringComparison.OrdinalIgnoreCase)
+            || error.Message.Contains("action", StringComparison.OrdinalIgnoreCase)
+            || error.Message.Contains("failure", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task FailureResult_ThrowsExplicitEquipmentFailure()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        var transport = new RecordingTransport((request, _) => Task.FromResult(
+            new EquipmentResponseMessage(
+                request.CorrelationId,
+                request.Action,
+                1,
+                StageProperties(0d, 0d))));
+        using var session = CreateSession(transport, directory.Path);
+
+        var error = await Assert.ThrowsAsync<LiveEquipmentActionFailedException>(() =>
+            session.MoveStageAsync("relative", 0d, 0d));
+
+        Assert.Equal(1, error.CorrelationId);
+        Assert.Equal("stage", error.Action);
+        Assert.Equal(1, error.Result);
+    }
+
+    [Fact]
+    public async Task ImageExchangeCancellation_DeletesCorrelationOwnedRequestedPath()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        using var cancellation = new CancellationTokenSource();
+        var requestPublished = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new RecordingTransport(async (request, cancellationToken) =>
+        {
+            var requestedPath = Assert.IsType<string>(request.Parameters["image_path"]);
+            File.WriteAllBytes(requestedPath, new byte[] { 1, 2, 3 });
+            requestPublished.TrySetResult(requestedPath);
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("A canceled exchange unexpectedly completed.");
+        });
+        using var session = CreateSession(transport, directory.Path);
+
+        var exchange = session.RequestFrameAsync(1E-3, cancellation.Token);
+        var ownedPath = await requestPublished.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exchange);
+        Assert.False(File.Exists(ownedPath));
+    }
+
+    [Fact]
+    public async Task ImageFailure_DeletesRequestedPathButPreservesAlternateResponsePath()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        var alternatePath = Path.Combine(directory.Path, "controller-owned.bmp");
+        string? requestedPath = null;
+        var transport = new RecordingTransport((request, _) =>
+        {
+            requestedPath = Assert.IsType<string>(request.Parameters["image_path"]);
+            File.WriteAllBytes(requestedPath, new byte[] { 1 });
+            File.WriteAllBytes(alternatePath, new byte[] { 2 });
+            return Task.FromResult(new EquipmentResponseMessage(
+                request.CorrelationId,
+                request.Action,
+                1,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["hfw"] = request.Parameters["hfw"],
+                    ["frame_count"] = request.Parameters["frame_count"],
+                    ["image_path"] = alternatePath,
+                }));
+        });
+        using var session = CreateSession(transport, directory.Path);
+
+        await Assert.ThrowsAsync<LiveEquipmentActionFailedException>(() =>
+            session.RequestFrameAsync(1E-3));
+
+        Assert.NotNull(requestedPath);
+        Assert.False(File.Exists(requestedPath));
+        Assert.True(File.Exists(alternatePath));
+    }
+
+    [Fact]
+    public async Task InvalidImageResponse_DeletesCorrelationOwnedRequestedPath()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        string? requestedPath = null;
+        var transport = new RecordingTransport((request, _) =>
+        {
+            requestedPath = Assert.IsType<string>(request.Parameters["image_path"]);
+            File.WriteAllBytes(requestedPath, new byte[] { 1 });
+            return Task.FromResult(new EquipmentResponseMessage(
+                request.CorrelationId + 1,
+                request.Action,
+                0,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["hfw"] = request.Parameters["hfw"],
+                    ["frame_count"] = request.Parameters["frame_count"],
+                    ["image_path"] = requestedPath,
+                }));
+        });
+        using var session = CreateSession(transport, directory.Path);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            session.RequestFrameAsync(1E-3));
+
+        Assert.NotNull(requestedPath);
+        Assert.False(File.Exists(requestedPath));
+    }
+
+    [Fact]
+    public async Task ConcurrentCalls_AreSerializedForWholeExchange()
+    {
+        using var directory = new LiveSessionTestDirectory();
         var firstObserved = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var firstResponse = new TaskCompletionSource<EquipmentResponseMessage>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var transport = new RecordingTransport((request, _) =>
         {
-            if (request.Index == 1)
+            if (request.CorrelationId == 1)
             {
                 firstObserved.TrySetResult(true);
                 return firstResponse.Task;
             }
 
-            return Task.FromResult(Response(request, @"C:\camera\capture.png"));
+            return Task.FromResult(ResponseFor(request));
         });
-        using var session = CreateSession(transport);
+        using var session = CreateSession(transport, directory.Path);
         var busyStates = new List<bool>();
         session.BusyChanged += (_, _) => busyStates.Add(session.IsBusy);
 
-        var first = session.RequestFrameAsync(10E-3);
+        var first = session.RequestFrameAsync(1E-3);
         await firstObserved.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
-        Assert.True(session.IsBusy);
-        var second = session.CaptureAsync();
+        var second = session.MoveStageAsync("relative", 1E-3, 0d);
         await Task.Delay(50);
 
         Assert.Single(transport.Requests);
         Assert.False(second.IsCompleted);
-
-        firstResponse.SetResult(Response(transport.Requests[0], @"C:\camera\frame.png"));
+        firstResponse.SetResult(ResponseFor(transport.Requests[0]));
         await first;
         await second;
 
         Assert.Equal(2, transport.Requests.Count);
-        Assert.Equal(2, transport.Requests[1].Index);
         Assert.False(session.IsBusy);
         Assert.Equal(new[] { true, false, true, false }, busyStates);
     }
 
-    [Fact]
-    public async Task ResponseCorrelationMustMatchAllocatedRequest()
-    {
-        var transport = new RecordingTransport((request, _) => Task.FromResult(
-            new EquipmentResponseMessage(
-                request.Index + 1,
-                "return",
-                new Dictionary<string, object?>
-                {
-                    ["stage_x"] = 0d,
-                    ["stage_y"] = 0d,
-                    ["image_path"] = @"C:\camera\frame.png"
-                })));
-        using var session = CreateSession(transport);
-
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            session.RequestFrameAsync(10E-3));
-
-        Assert.Contains("does not match", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ThrowingBusyObserver_DoesNotBreakExchangeOrStrandSessionGate()
-    {
-        var transport = new RecordingTransport((request, _) => Task.FromResult(
-            Response(request, @"C:\camera\frame.png")));
-        using var session = CreateSession(transport);
-        var notifications = 0;
-        session.BusyChanged += (_, _) => throw new InvalidOperationException("Observer failed.");
-        session.BusyChanged += (_, _) => Interlocked.Increment(ref notifications);
-
-        await session.RequestFrameAsync(10E-3);
-        await session.CaptureAsync();
-
-        Assert.False(session.IsBusy);
-        Assert.Equal(4, notifications);
-        Assert.Equal(2, transport.Requests.Count);
-    }
-
-    [Fact]
-    public async Task DisposeDuringExchange_AllowsInflightFinallyToCompleteAndRejectsNewCalls()
-    {
-        var observed = new TaskCompletionSource<EquipmentRequestMessage>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var response = new TaskCompletionSource<EquipmentResponseMessage>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var transport = new RecordingTransport((request, _) =>
-        {
-            observed.TrySetResult(request);
-            return response.Task;
-        });
-        var session = CreateSession(transport);
-
-        var exchange = session.RequestFrameAsync(10E-3);
-        var request = await observed.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
-        session.Dispose();
-        response.SetResult(Response(request, @"C:\camera\frame.png"));
-
-        Assert.Equal(request.Index, (await exchange).Index);
-        Assert.False(session.IsBusy);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
-            session.RequestFrameAsync(10E-3));
-    }
-
-    private static LiveInteractionSession CreateSession(IEquipmentFileTransport transport)
+    private static LiveInteractionSession CreateSession(
+        IEquipmentFileTransport transport,
+        string exchangeDirectory)
     {
         return new LiveInteractionSession(
             transport,
             new IncrementingCorrelationProvider(),
+            Options.Create(new EquipmentCommunicationOptions
+            {
+                ExchangeDirectory = exchangeDirectory,
+                RequestFileName = "request.xml",
+                ResponseFileName = "response.xml",
+            }),
             NullLogger<LiveInteractionSession>.Instance);
     }
 
-    private static EquipmentResponseMessage Response(
-        EquipmentRequestMessage request,
-        string? imagePath = null)
+    private static EquipmentResponseMessage ResponseFor(EquipmentRequestMessage request)
     {
-        var properties = new Dictionary<string, object?>
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        switch (request.Action)
         {
-            ["stage_x"] = request.Index * 1E-3,
-            ["stage_y"] = request.Index * -1E-3
-        };
-        if (imagePath != null)
-        {
-            properties["image_path"] = imagePath;
+            case "stage":
+                properties["current_stage_x"] = request.Parameters["stage_x"];
+                properties["current_stage_y"] = request.Parameters["stage_y"];
+                break;
+            case "camera":
+                properties["current_camera_x"] = request.Parameters["camera_x"];
+                properties["current_camera_y"] = request.Parameters["camera_y"];
+                break;
+            case "focus":
+                properties["z_to_sharpness_2d"] = new object?[]
+                {
+                    new object?[] { 0.1d, 500d },
+                    new object?[] { 1.5d, 600d },
+                };
+                break;
+            case "live":
+            case "integration":
+                properties["hfw"] = request.Parameters["hfw"];
+                properties["frame_count"] = request.Parameters["frame_count"];
+                properties["image_path"] = request.Parameters["image_path"];
+                break;
         }
 
-        return new EquipmentResponseMessage(request.Index, "return", properties);
+        return new EquipmentResponseMessage(
+            request.CorrelationId,
+            request.Action,
+            0,
+            properties);
     }
+
+    private static Dictionary<string, object?> StageProperties(double x, double y) =>
+        new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["current_stage_x"] = x,
+            ["current_stage_y"] = y,
+        };
 
     private sealed class IncrementingCorrelationProvider : ICorrelationIdProvider
     {
@@ -264,8 +391,7 @@ public sealed class ApplicationLiveInteractionSessionTests
             _exchange = exchange;
         }
 
-        public List<EquipmentRequestMessage> Requests { get; } =
-            new List<EquipmentRequestMessage>();
+        public List<EquipmentRequestMessage> Requests { get; } = new();
 
         public Task<EquipmentResponseMessage> ExchangeAsync(
             EquipmentRequestMessage request,
@@ -278,6 +404,36 @@ public sealed class ApplicationLiveInteractionSessionTests
 
             cancellationToken.ThrowIfCancellationRequested();
             return _exchange(request, cancellationToken);
+        }
+    }
+
+    private sealed class LiveSessionTestDirectory : IDisposable
+    {
+        public LiveSessionTestDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "DrillFlow.LiveSessionTests",
+                Guid.NewGuid().ToString("N"));
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(Path))
+                {
+                    Directory.Delete(Path, recursive: true);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 }

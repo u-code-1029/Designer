@@ -27,7 +27,7 @@ namespace DrillFlow.Core.Workflows
         /// <summary>
         /// Creates independent copies of several workflow subtrees as one ordered batch.
         /// References between different selected roots are rewritten together so copying
-        /// actions such as "measure" followed by "drill = measure.result..." preserves
+        /// actions such as "focus" followed by "integration = focus.parameters..." preserves
         /// the relationship after both aliases are regenerated.
         /// </summary>
         public static IReadOnlyList<WorkflowNode> CloneManyForInsertion(
@@ -131,27 +131,48 @@ namespace DrillFlow.Core.Workflows
             WorkflowNode target;
             switch (source)
             {
-                case MoveNode move:
-                    target = new MoveNode
+                case StageNode stage:
+                    target = new StageNode
                     {
-                        MoveMode = CloneBinding(move.MoveMode),
-                        MoveX = CloneBinding(move.MoveX),
-                        MoveY = CloneBinding(move.MoveY)
+                        MoveMode = CloneBinding(stage.MoveMode),
+                        StageX = CloneBinding(stage.StageX),
+                        StageY = CloneBinding(stage.StageY)
                     };
                     break;
 
-                case MeasureNode measure:
-                    target = new MeasureNode
+                case CameraNode camera:
+                    target = new CameraNode
                     {
-                        Thickness = CloneBinding(measure.Thickness)
+                        MoveMode = CloneBinding(camera.MoveMode),
+                        CameraX = CloneBinding(camera.CameraX),
+                        CameraY = CloneBinding(camera.CameraY)
                     };
                     break;
 
-                case DrillNode drill:
-                    target = new DrillNode
+                case FocusNode focus:
+                    target = new FocusNode
                     {
-                        Thickness = CloneBinding(drill.Thickness),
-                        DrillResultPath = CloneBinding(drill.DrillResultPath)
+                        HorizontalFieldWidth = CloneBinding(focus.HorizontalFieldWidth),
+                        Range = CloneBinding(focus.Range),
+                        Steps = CloneBinding(focus.Steps)
+                    };
+                    break;
+
+                case IntegrationNode integration:
+                    target = new IntegrationNode
+                    {
+                        HorizontalFieldWidth = CloneBinding(integration.HorizontalFieldWidth),
+                        FrameCount = CloneBinding(integration.FrameCount),
+                        ImagePath = CloneBinding(integration.ImagePath)
+                    };
+                    break;
+
+                case LiveNode live:
+                    target = new LiveNode
+                    {
+                        HorizontalFieldWidth = CloneBinding(live.HorizontalFieldWidth),
+                        FrameCount = CloneBinding(live.FrameCount),
+                        ImagePath = CloneBinding(live.ImagePath)
                     };
                     break;
 

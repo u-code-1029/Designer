@@ -22,14 +22,14 @@ public interface IEquipmentResponseSimulator
     /// <summary>
     /// Reads the currently published equipment request, if it is complete enough to identify.
     /// This is used by the live commissioning controls so they create a test image only after a
-    /// real frame request has been observed.
+    /// real live-image request has been observed.
     /// </summary>
     Task<EquipmentRequestSnapshot?> GetActiveRequestAsync(
         CancellationToken cancellationToken);
 
     /// <summary>
     /// Publishes a generated response only while <paramref name="expectedRequest"/> is still the
-    /// active <c>frame</c> request. A response already written for that correlation ID wins and is
+    /// active <c>live</c> request. A response already written for that correlation ID wins and is
     /// never overwritten.
     /// </summary>
     Task<FrameResponseSimulationResult> TryPublishFrameResponseAsync(

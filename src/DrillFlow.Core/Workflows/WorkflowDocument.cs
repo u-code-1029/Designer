@@ -5,7 +5,7 @@ namespace DrillFlow.Core.Workflows
 {
     public sealed class WorkflowDocument
     {
-        public const int CurrentSchemaVersion = 1;
+        public const int CurrentSchemaVersion = 2;
 
         public WorkflowDocument()
         {

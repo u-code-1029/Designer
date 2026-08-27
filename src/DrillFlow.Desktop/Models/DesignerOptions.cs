@@ -43,9 +43,9 @@ public sealed class CommunicationSettings
         "DrillFlow",
         "Exchange");
 
-    public string RequestFileName { get; set; } = "request.json";
+    public string RequestFileName { get; set; } = "request.xml";
 
-    public string ResponseFileName { get; set; } = "response.json";
+    public string ResponseFileName { get; set; } = "response.xml";
 
     public string EquipmentRequestHandling { get; set; } = "RetainUntilOverwritten";
 

@@ -1,22 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Core.Validation;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace DrillFlow.Application.LiveInteraction;
 
-/// <summary>
-/// Builds strongly defined live commands on top of the same correlated file transport used by
-/// workflow execution. The session gate prevents two UI gestures (for example a frame poll and a
-/// double-click move) from competing before they reach the shared transport gate.
-/// </summary>
+/// <summary>Builds canonical live equipment actions on the correlated file transport.</summary>
 public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposable
 {
+    private const string OwnedImageDirectoryName = ".drillflow-live";
+
     private readonly IEquipmentFileTransport _transport;
     private readonly ICorrelationIdProvider _correlationIds;
+    private readonly EquipmentCommunicationOptions _communicationOptions;
     private readonly ILogger<LiveInteractionSession> _logger;
     private readonly SemaphoreSlim _operationGate = new SemaphoreSlim(1, 1);
     private readonly object _stateSync = new object();
@@ -26,10 +27,13 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
     public LiveInteractionSession(
         IEquipmentFileTransport transport,
         ICorrelationIdProvider correlationIds,
+        IOptions<EquipmentCommunicationOptions> communicationOptions,
         ILogger<LiveInteractionSession> logger)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _correlationIds = correlationIds ?? throw new ArgumentNullException(nameof(correlationIds));
+        _communicationOptions = communicationOptions?.Value
+            ?? throw new ArgumentNullException(nameof(communicationOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -46,62 +50,102 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
 
     public event EventHandler? BusyChanged;
 
-    public Task<EquipmentResponseMessage> RequestFrameAsync(
+    public Task<LiveImageExchangeResult> RequestFrameAsync(
         double horizontalFieldWidthMetres,
         CancellationToken cancellationToken = default)
     {
-        if (double.IsNaN(horizontalFieldWidthMetres)
-            || double.IsInfinity(horizontalFieldWidthMetres)
-            || horizontalFieldWidthMetres <= 0d)
-        {
-            throw new ParameterValidationException(
-                $"{LiveInteractionProtocol.HorizontalFieldWidthParameter} must be a finite "
-                + "number greater than zero metres.");
-        }
-
-        return ExchangeAsync(
-            LiveInteractionProtocol.FrameCommand,
-            new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                [LiveInteractionProtocol.HorizontalFieldWidthParameter] =
-                    horizontalFieldWidthMetres,
-            },
-            requireImagePath: true,
+        ValidateHorizontalFieldWidth(horizontalFieldWidthMetres);
+        return ExchangeImageAsync(
+            LiveInteractionProtocol.LiveAction,
+            horizontalFieldWidthMetres,
+            LiveInteractionProtocol.LiveFrameCount,
             cancellationToken);
     }
 
-    public Task<EquipmentResponseMessage> MoveRelativeAsync(
-        double moveXMetres,
-        double moveYMetres,
+    public Task<EquipmentResponseMessage> MoveStageAsync(
+        string moveMode,
+        double stageXMetres,
+        double stageYMetres,
         CancellationToken cancellationToken = default)
     {
-        var moveX = ParameterValueValidator.GetMoveCoordinate(
-            moveXMetres,
-            LiveInteractionProtocol.MoveXParameter);
-        var moveY = ParameterValueValidator.GetMoveCoordinate(
-            moveYMetres,
-            LiveInteractionProtocol.MoveYParameter);
-
+        ValidateMove(moveMode, stageXMetres, stageYMetres, "stage");
         return ExchangeAsync(
-            LiveInteractionProtocol.MoveCommand,
-            new Dictionary<string, object?>(StringComparer.Ordinal)
+            LiveInteractionProtocol.StageAction,
+            _ => new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                [LiveInteractionProtocol.MoveModeParameter] =
-                    LiveInteractionProtocol.RelativeMoveMode,
-                [LiveInteractionProtocol.MoveXParameter] = moveX,
-                [LiveInteractionProtocol.MoveYParameter] = moveY,
+                [LiveInteractionProtocol.MoveModeParameter] = moveMode,
+                [LiveInteractionProtocol.StageXParameter] = stageXMetres,
+                [LiveInteractionProtocol.StageYParameter] = stageYMetres,
             },
             requireImagePath: false,
             cancellationToken);
     }
 
-    public Task<EquipmentResponseMessage> CaptureAsync(
+    public Task<EquipmentResponseMessage> MoveCameraAsync(
+        string moveMode,
+        double cameraXMetres,
+        double cameraYMetres,
         CancellationToken cancellationToken = default)
     {
+        ValidateMove(moveMode, cameraXMetres, cameraYMetres, "camera");
         return ExchangeAsync(
-            LiveInteractionProtocol.CaptureCommand,
-            null,
-            requireImagePath: true,
+            LiveInteractionProtocol.CameraAction,
+            _ => new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [LiveInteractionProtocol.MoveModeParameter] = moveMode,
+                [LiveInteractionProtocol.CameraXParameter] = cameraXMetres,
+                [LiveInteractionProtocol.CameraYParameter] = cameraYMetres,
+            },
+            requireImagePath: false,
+            cancellationToken);
+    }
+
+    public Task<EquipmentResponseMessage> FocusAsync(
+        double horizontalFieldWidthMetres,
+        double rangeMetres,
+        int steps,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHorizontalFieldWidth(horizontalFieldWidthMetres);
+        if (!LiveInteractionProtocol.IsFinite(rangeMetres) || rangeMetres <= 0d)
+        {
+            throw new ParameterValidationException(
+                "range must be a finite number greater than zero metres.");
+        }
+
+        if (steps <= 3)
+        {
+            throw new ParameterValidationException("steps must be an integer greater than 3.");
+        }
+
+        return ExchangeAsync(
+            LiveInteractionProtocol.FocusAction,
+            _ => new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [LiveInteractionProtocol.HorizontalFieldWidthParameter] = horizontalFieldWidthMetres,
+                [LiveInteractionProtocol.FocusRangeParameter] = rangeMetres,
+                [LiveInteractionProtocol.FocusStepsParameter] = steps,
+            },
+            requireImagePath: false,
+            cancellationToken);
+    }
+
+    public Task<LiveImageExchangeResult> IntegrateAsync(
+        double horizontalFieldWidthMetres,
+        int frameCount,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHorizontalFieldWidth(horizontalFieldWidthMetres);
+        if (!LiveInteractionProtocol.IsValidIntegrationFrameCount(frameCount))
+        {
+            throw new ParameterValidationException(
+                "frame_count must be a power of two between 1 and 64.");
+        }
+
+        return ExchangeImageAsync(
+            LiveInteractionProtocol.IntegrationAction,
+            horizontalFieldWidthMetres,
+            frameCount,
             cancellationToken);
     }
 
@@ -117,16 +161,54 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
             _disposed = true;
         }
 
-        // Do not dispose the gate here. Host shutdown can race an in-flight file exchange, whose
-        // finally block must still release it. SemaphoreSlim does not allocate an OS handle unless
-        // AvailableWaitHandle is requested, which this class never does.
+        // Do not dispose the gate: host shutdown can race an in-flight exchange whose finally
+        // block still has to release it.
+    }
+
+    private async Task<LiveImageExchangeResult> ExchangeImageAsync(
+        string action,
+        double horizontalFieldWidthMetres,
+        int frameCount,
+        CancellationToken cancellationToken)
+    {
+        string? requestedImagePath = null;
+        try
+        {
+            var response = await ExchangeAsync(
+                    action,
+                    correlationId =>
+                    {
+                        requestedImagePath = CreateOwnedImagePath(action, correlationId);
+                        return new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            [LiveInteractionProtocol.HorizontalFieldWidthParameter] =
+                                horizontalFieldWidthMetres,
+                            [LiveInteractionProtocol.FrameCountParameter] = frameCount,
+                            [LiveInteractionProtocol.ImagePathParameter] = requestedImagePath,
+                        };
+                    },
+                    requireImagePath: true,
+                    cancellationToken,
+                    prepareOwnedImageDirectory: true)
+                .ConfigureAwait(false);
+
+            return new LiveImageExchangeResult(response, requestedImagePath!);
+        }
+        catch
+        {
+            // Only the correlation-specific path generated above belongs to this application.
+            // A controller-owned alternate response image is never considered for deletion here.
+            TryDeleteOwnedImagePath(requestedImagePath);
+            throw;
+        }
     }
 
     private async Task<EquipmentResponseMessage> ExchangeAsync(
-        string command,
-        IReadOnlyDictionary<string, object?>? parameters,
+        string action,
+        Func<int, IReadOnlyDictionary<string, object?>?> parameterFactory,
         bool requireImagePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool prepareOwnedImageDirectory = false)
     {
         ThrowIfDisposed();
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -134,51 +216,73 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         {
             ThrowIfDisposed();
             SetBusy(true);
-            var index = await _correlationIds.NextAsync(cancellationToken).ConfigureAwait(false);
-            var request = new EquipmentRequestMessage(index, command, parameters);
+            var correlationId = await _correlationIds.NextAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (prepareOwnedImageDirectory)
+            {
+                await EnsureOwnedImageDirectoryAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-            if (string.Equals(command, LiveInteractionProtocol.FrameCommand, StringComparison.Ordinal))
+            var request = new EquipmentRequestMessage(
+                correlationId,
+                action,
+                parameterFactory(correlationId));
+
+            if (string.Equals(action, LiveInteractionProtocol.LiveAction, StringComparison.Ordinal))
             {
                 _logger.LogTrace(
-                    "Starting live frame with correlation ID {CorrelationId}.",
-                    index);
+                    "Starting live image request with correlation ID {CorrelationId}.",
+                    correlationId);
             }
             else
             {
                 _logger.LogDebug(
-                    "Starting live equipment command {Command} with correlation ID {CorrelationId}.",
-                    command,
-                    index);
+                    "Starting live equipment action {Action} with correlation ID {CorrelationId}.",
+                    action,
+                    correlationId);
             }
 
             var response = await _transport.ExchangeAsync(request, cancellationToken)
                 .ConfigureAwait(false);
-            if (response.Index != index)
+            if (response.CorrelationId != correlationId)
             {
                 throw new InvalidOperationException(
-                    $"The live equipment response index {response.Index} does not match request "
-                    + $"index {index}.");
+                    $"The response correlation ID {response.CorrelationId} does not match "
+                    + $"request correlation ID {correlationId}.");
+            }
+
+            if (!string.Equals(response.Action, action, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"The response action '{response.Action}' does not match request action "
+                    + $"'{action}'.");
+            }
+
+            if (response.Result != 0)
+            {
+                throw new LiveEquipmentActionFailedException(response);
             }
 
             if (requireImagePath && response.ImagePath is null)
             {
                 throw new InvalidOperationException(
-                    $"The '{command}' response must contain an absolute 'image_path'.");
+                    $"The '{action}' response must contain an absolute 'image_path'.");
             }
 
-            if (string.Equals(command, LiveInteractionProtocol.FrameCommand, StringComparison.Ordinal))
+            if (string.Equals(action, LiveInteractionProtocol.LiveAction, StringComparison.Ordinal))
             {
                 _logger.LogTrace(
-                    "Completed live frame with correlation ID {CorrelationId}.",
-                    index);
+                    "Completed live image request with correlation ID {CorrelationId}.",
+                    correlationId);
             }
             else
             {
                 _logger.LogDebug(
-                    "Completed live equipment command {Command} with correlation ID {CorrelationId}.",
-                    command,
-                    index);
+                    "Completed live equipment action {Action} with correlation ID {CorrelationId}.",
+                    action,
+                    correlationId);
             }
+
             return response;
         }
         finally
@@ -191,6 +295,86 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
             {
                 _operationGate.Release();
             }
+        }
+    }
+
+    private string CreateOwnedImagePath(string action, int correlationId)
+    {
+        var directory = Path.Combine(
+            _communicationOptions.ExchangeDirectory,
+            OwnedImageDirectoryName);
+        return Path.Combine(directory, action + "-" + correlationId + ".bmp");
+    }
+
+    private void TryDeleteOwnedImagePath(string? requestedImagePath)
+    {
+        if (string.IsNullOrWhiteSpace(requestedImagePath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(requestedImagePath!);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            || exception is UnauthorizedAccessException
+            || exception is NotSupportedException
+            || exception is ArgumentException
+            || exception is System.Security.SecurityException)
+        {
+            try
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Could not remove the app-owned image path {ImagePath} after a failed "
+                    + "Live Interaction exchange.",
+                    requestedImagePath);
+            }
+            catch (Exception)
+            {
+                // Logging providers can already be disposed while cancellation cleanup runs.
+            }
+        }
+    }
+
+    private Task EnsureOwnedImageDirectoryAsync(CancellationToken cancellationToken)
+    {
+        var directory = Path.Combine(
+            _communicationOptions.ExchangeDirectory,
+            OwnedImageDirectoryName);
+        return Task.Run(
+            () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Directory.CreateDirectory(directory);
+                cancellationToken.ThrowIfCancellationRequested();
+            },
+            CancellationToken.None);
+    }
+
+    private static void ValidateHorizontalFieldWidth(double value)
+    {
+        if (!LiveInteractionProtocol.IsValidHorizontalFieldWidth(value))
+        {
+            throw new ParameterValidationException(
+                "hfw must be finite, greater than zero, and less than 2.4E-3 metres.");
+        }
+    }
+
+    private static void ValidateMove(string moveMode, double x, double y, string action)
+    {
+        if (!LiveInteractionProtocol.IsMoveMode(moveMode))
+        {
+            throw new ParameterValidationException(
+                "move_mode must be exactly 'relative' or 'absolute'.");
+        }
+
+        if (!LiveInteractionProtocol.IsFinite(x) || !LiveInteractionProtocol.IsFinite(y))
+        {
+            throw new ParameterValidationException(
+                action + " coordinates must be finite numbers in metres.");
         }
     }
 
@@ -220,13 +404,9 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
             }
             catch (Exception exception)
             {
-                // UI observers must never be able to strand the equipment gate or turn a valid
-                // controller response into a failed exchange.
                 try
                 {
-                    _logger.LogWarning(
-                        exception,
-                        "A live interaction BusyChanged observer failed.");
+                    _logger.LogWarning(exception, "A live BusyChanged observer failed.");
                 }
                 catch (Exception)
                 {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Persistence;
@@ -73,7 +74,14 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
         }
 
         var version = schemaVersion.Value<int>();
-        if (version != WorkflowDocument.CurrentSchemaVersion)
+        var migratedFromVersion1 = false;
+        if (version == 1)
+        {
+            root = MigrateVersion1(root);
+            version = WorkflowDocument.CurrentSchemaVersion;
+            migratedFromVersion1 = true;
+        }
+        else if (version != WorkflowDocument.CurrentSchemaVersion)
         {
             throw new InvalidDataException(
                 $"Workflow schema version {version} is not supported; "
@@ -98,6 +106,11 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
             foreach (var token in nodeArray)
             {
                 document.Nodes.Add(ReadNode(token, serializer));
+            }
+
+            if (migratedFromVersion1)
+            {
+                RewriteVersion1MoveReferences(document);
             }
 
             return document;
@@ -243,12 +256,16 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
 
         switch (typeName)
         {
-            case "move":
-                return DeserializeNode<MoveNode>(scalarNode, serializer);
-            case "measure":
-                return DeserializeNode<MeasureNode>(scalarNode, serializer);
-            case "drill":
-                return DeserializeNode<DrillNode>(scalarNode, serializer);
+            case "stage":
+                return DeserializeNode<StageNode>(scalarNode, serializer);
+            case "camera":
+                return DeserializeNode<CameraNode>(scalarNode, serializer);
+            case "focus":
+                return DeserializeNode<FocusNode>(scalarNode, serializer);
+            case "integration":
+                return DeserializeNode<IntegrationNode>(scalarNode, serializer);
+            case "live":
+                return DeserializeNode<LiveNode>(scalarNode, serializer);
             case "abort":
                 return DeserializeNode<AbortNode>(scalarNode, serializer);
             case "http":
@@ -330,12 +347,16 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
     {
         switch (node)
         {
-            case MoveNode _:
-                return "move";
-            case MeasureNode _:
-                return "measure";
-            case DrillNode _:
-                return "drill";
+            case StageNode _:
+                return "stage";
+            case CameraNode _:
+                return "camera";
+            case FocusNode _:
+                return "focus";
+            case IntegrationNode _:
+                return "integration";
+            case LiveNode _:
+                return "live";
             case AbortNode _:
                 return "abort";
             case HttpActionNode _:
@@ -350,6 +371,209 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
                 throw new InvalidDataException(
                     $"Workflow node CLR type '{node.GetType().FullName}' is not supported.");
         }
+    }
+
+    private static JObject MigrateVersion1(JObject source)
+    {
+        var migrated = (JObject)source.DeepClone();
+        if (migrated["nodes"] is not JArray nodes)
+        {
+            throw new InvalidDataException("The workflow document must contain a nodes array.");
+        }
+
+        foreach (var node in nodes)
+        {
+            MigrateVersion1Node(node);
+        }
+
+        migrated["schemaVersion"] = WorkflowDocument.CurrentSchemaVersion;
+        return migrated;
+    }
+
+    private static void MigrateVersion1Node(JToken token)
+    {
+        if (token is not JObject node)
+        {
+            throw new InvalidDataException("Every workflow node must be a JSON object.");
+        }
+
+        var typeName = node["type"]?.Value<string>();
+        switch (typeName)
+        {
+            case "move":
+                node["type"] = "stage";
+                RenameProperty(node, "moveX", "stageX");
+                RenameProperty(node, "moveY", "stageY");
+                break;
+            case "measure":
+            case "drill":
+                throw new InvalidDataException(
+                    $"Workflow schema version 1 action '{typeName}' cannot be migrated to the "
+                    + "version 2 equipment contract. Recreate this action with a supported node type.");
+            case "repeat":
+                if (node["body"] is JArray repeatBody)
+                {
+                    foreach (var child in repeatBody)
+                    {
+                        MigrateVersion1Node(child);
+                    }
+                }
+
+                break;
+            case "conditional":
+                if (node["branches"] is JArray branches)
+                {
+                    foreach (var branchToken in branches)
+                    {
+                        if (branchToken is not JObject branch || branch["body"] is not JArray branchBody)
+                        {
+                            continue;
+                        }
+
+                        foreach (var child in branchBody)
+                        {
+                            MigrateVersion1Node(child);
+                        }
+                    }
+                }
+
+                break;
+        }
+    }
+
+    private static void RenameProperty(JObject node, string sourceName, string destinationName)
+    {
+        var source = node.Property(sourceName, StringComparison.Ordinal);
+        if (source == null)
+        {
+            return;
+        }
+
+        if (node.Property(destinationName, StringComparison.Ordinal) != null)
+        {
+            throw new InvalidDataException(
+                $"A version 1 move node contains both '{sourceName}' and '{destinationName}'.");
+        }
+
+        source.Replace(new JProperty(destinationName, source.Value.DeepClone()));
+    }
+
+    private static void RewriteVersion1MoveReferences(WorkflowDocument document)
+    {
+        foreach (var node in document.EnumerateNodesDepthFirst())
+        {
+            foreach (var binding in node.GetParameterBindings().Values)
+            {
+                RewriteVersion1MoveParameterReference(binding);
+            }
+
+            if (node is ConditionalNode conditional)
+            {
+                foreach (var branch in conditional.Branches ?? new List<ConditionalBranch>())
+                {
+                    RewriteVersion1MoveParameterReference(branch?.Condition);
+                }
+            }
+        }
+    }
+
+    private static void RewriteVersion1MoveParameterReference(ParameterBinding? binding)
+    {
+        if (binding == null || !binding.IsExpression)
+        {
+            return;
+        }
+
+        var source = binding.RawText ?? string.Empty;
+        var rewritten = new StringBuilder(source.Length);
+        var segmentStart = 0;
+        var quote = '\0';
+        for (var index = 0; index < source.Length; index++)
+        {
+            var current = source[index];
+            if (quote == '\0')
+            {
+                if (current != '\'' && current != '"')
+                {
+                    continue;
+                }
+
+                AppendMigratedExpressionSegment(rewritten, source, segmentStart, index - segmentStart);
+                quote = current;
+                segmentStart = index;
+                continue;
+            }
+
+            if (current == '\\' && index + 1 < source.Length)
+            {
+                index++;
+            }
+            else if (current == quote)
+            {
+                rewritten.Append(source, segmentStart, index - segmentStart + 1);
+                quote = '\0';
+                segmentStart = index + 1;
+            }
+        }
+
+        if (segmentStart < source.Length)
+        {
+            if (quote == '\0')
+            {
+                AppendMigratedExpressionSegment(
+                    rewritten,
+                    source,
+                    segmentStart,
+                    source.Length - segmentStart);
+            }
+            else
+            {
+                rewritten.Append(source, segmentStart, source.Length - segmentStart);
+            }
+        }
+
+        binding.RawText = rewritten.ToString();
+    }
+
+    private static void AppendMigratedExpressionSegment(
+        StringBuilder destination,
+        string source,
+        int start,
+        int length)
+    {
+        var segment = source.Substring(start, length);
+        segment = Regex.Replace(
+            segment,
+            @"(?<prefix>\.\s*parameters\s*\.\s*)move_x\b",
+            "${prefix}stage_x",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        segment = Regex.Replace(
+            segment,
+            @"(?<prefix>\.\s*parameters\s*\.\s*)move_y\b",
+            "${prefix}stage_y",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        segment = RewriteVersion1ResultMember(segment, "stage_x", "current_stage_x");
+        segment = RewriteVersion1ResultMember(segment, "stage_y", "current_stage_y");
+        segment = RewriteVersion1ResultMember(segment, "index", "correlation_id");
+        segment = RewriteVersion1ResultMember(segment, "command", "type");
+        destination.Append(segment);
+    }
+
+    private static string RewriteVersion1ResultMember(
+        string segment,
+        string oldMember,
+        string newMember)
+    {
+        // v1 exposed the latest response through result/last and retained Repeat responses through
+        // results[n]. Rewrite only those result containers; quoted text is excluded by the caller.
+        var pattern = @"(?<prefix>\.\s*(?:(?:result|last)|results\s*\[\s*\d+\s*\])\s*\.\s*)"
+                      + Regex.Escape(oldMember)
+                      + @"\b";
+        return Regex.Replace(
+            segment,
+            pattern,
+            "${prefix}" + newMember,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static JsonSerializer CreatePlainSerializer()

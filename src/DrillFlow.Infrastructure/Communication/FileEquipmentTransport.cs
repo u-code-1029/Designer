@@ -1,17 +1,13 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Infrastructure.IO;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace DrillFlow.Infrastructure.Communication;
 
@@ -27,6 +23,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private static readonly TimeSpan CanceledRequestCleanupTimeout = TimeSpan.FromSeconds(2);
 
     private readonly EquipmentCommunicationOptions _options;
+    private readonly IEquipmentMessageCodec _codec;
     private readonly ILogger<FileEquipmentTransport> _logger;
     private readonly Func<DateTime> _utcNow;
     private readonly SemaphoreSlim _exchangeGate = new(1, 1);
@@ -41,13 +38,30 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     public FileEquipmentTransport(
         IOptions<EquipmentCommunicationOptions> options,
         ILogger<FileEquipmentTransport> logger)
-        : this(options, logger, () => DateTime.UtcNow)
+        : this(options, logger, new XmlTemplateEquipmentMessageCodec(), () => DateTime.UtcNow)
+    {
+    }
+
+    public FileEquipmentTransport(
+        IOptions<EquipmentCommunicationOptions> options,
+        ILogger<FileEquipmentTransport> logger,
+        IEquipmentMessageCodec codec)
+        : this(options, logger, codec, () => DateTime.UtcNow)
     {
     }
 
     internal FileEquipmentTransport(
         IOptions<EquipmentCommunicationOptions> options,
         ILogger<FileEquipmentTransport> logger,
+        Func<DateTime> utcNow)
+        : this(options, logger, new XmlTemplateEquipmentMessageCodec(), utcNow)
+    {
+    }
+
+    internal FileEquipmentTransport(
+        IOptions<EquipmentCommunicationOptions> options,
+        ILogger<FileEquipmentTransport> logger,
+        IEquipmentMessageCodec codec,
         Func<DateTime> utcNow)
     {
         if (options is null)
@@ -56,6 +70,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
 
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _codec = codec ?? throw new ArgumentNullException(nameof(codec));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
         _options = options.Value;
 
@@ -95,7 +110,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         await _exchangeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         FileStream? exchangeLock = null;
         string? publishedRequestPath = null;
-        string? publishedRequestPayload = null;
+        byte[]? publishedRequestPayload = null;
         var requestWasPublished = false;
         var exchangeGateOwnershipTransferred = false;
         try
@@ -117,7 +132,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
             var requestPath = Path.Combine(_options.ExchangeDirectory, _options.RequestFileName);
             var responsePath = Path.Combine(_options.ExchangeDirectory, _options.ResponseFileName);
-            var serializedRequest = SerializeRequest(request);
+            var serializedRequest = _codec.SerializeRequest(request);
+            if (serializedRequest.Length > EquipmentMessageLimits.MaximumWirePayloadBytes)
+            {
+                throw new InvalidDataException(
+                    $"The equipment request exceeds the {EquipmentMessageLimits.MaximumWirePayloadBytes} byte limit.");
+            }
             publishedRequestPath = requestPath;
             publishedRequestPayload = serializedRequest;
 
@@ -132,7 +152,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
             // A pre-existing retained response is only a baseline. Even if state was manually
             // rolled back, unchanged bytes are never accepted as the response to this exchange.
-            var baselineResponse = await TryReadStableTextAsync(responsePath, cancellationToken)
+            var baselineResponse = await TryReadStableBytesAsync(responsePath, cancellationToken)
                 .ConfigureAwait(false);
 
             var retryCount = _options.RetryEnabled ? _options.MaximumRetryCount : 0;
@@ -156,7 +176,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
                     var responseBeforeRetry = await TryReadMatchingResponseOnceAsync(
                             responsePath,
-                            request.Index,
+                            request,
                             baselineResponse,
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -166,8 +186,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                                 requestPath,
                                 responsePath,
                                 responseBeforeRetry,
-                                request.Index,
-                                request.Command,
+                                request,
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -178,11 +197,11 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 await PublishRequestAsync(requestPath, serializedRequest, cancellationToken)
                     .ConfigureAwait(false);
                 requestWasPublished = true;
-                if (string.Equals(request.Command, "frame", StringComparison.Ordinal))
+                if (string.Equals(request.Action, EquipmentActionNames.Live, StringComparison.Ordinal))
                 {
                     _logger.LogTrace(
                         "Published live frame request {CorrelationId} (attempt {Attempt}).",
-                        request.Index,
+                        request.CorrelationId,
                         attempt);
                 }
                 else
@@ -190,14 +209,14 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     _logger.LogInformation(
                         "Published equipment command {Command} with correlation ID {CorrelationId} "
                         + "(attempt {Attempt}).",
-                        request.Command,
-                        request.Index,
+                        request.Action,
+                        request.CorrelationId,
                         attempt);
                 }
 
                 var response = await WaitForMatchingResponseAsync(
                         responsePath,
-                        request.Index,
+                        request,
                         baselineResponse,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -208,8 +227,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             requestPath,
                             responsePath,
                             response,
-                            request.Index,
-                            request.Command,
+                            request,
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -225,7 +243,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
                 var lateResponse = await TryReadMatchingResponseOnceAsync(
                         responsePath,
-                        request.Index,
+                        request,
                         baselineResponse,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -235,8 +253,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             requestPath,
                             responsePath,
                             lateResponse,
-                            request.Index,
-                            request.Command,
+                            request,
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -244,7 +261,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 if (attempt > retryCount)
                 {
                     throw new EquipmentResponseTimeoutException(
-                        request.Index,
+                        request.CorrelationId,
                         attempt,
                         _options.ResponseTimeout);
                 }
@@ -252,7 +269,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 _logger.LogWarning(
                     "Equipment response timed out for correlation ID {CorrelationId}; "
                     + "the identical request will be sent again ({Attempt}/{TotalAttempts}).",
-                    request.Index,
+                    request.CorrelationId,
                     attempt + 1,
                     retryCount + 1);
             }
@@ -271,8 +288,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     cleanupLock,
                     publishedRequestPath,
                     publishedRequestPayload,
-                    request.Index,
-                    request.Command);
+                    request.CorrelationId,
+                    request.Action);
             }
 
             if (exception is OperationCanceledException)
@@ -280,7 +297,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 throw;
             }
 
-            TryLogCanceledExchangeFailure(exception, request.Index, request.Command);
+            TryLogCanceledExchangeFailure(exception, request.CorrelationId, request.Action);
             throw new OperationCanceledException(
                 "The equipment exchange was canceled.",
                 exception,
@@ -328,7 +345,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private void ScheduleCanceledRequestCleanup(
         FileStream exchangeLock,
         string requestPath,
-        string expectedPayload,
+        byte[] expectedPayload,
         int correlationId,
         string command)
     {
@@ -485,7 +502,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task CleanupCanceledRequestAsync(
         FileStream exchangeLock,
         string requestPath,
-        string expectedPayload,
+        byte[] expectedPayload,
         int correlationId,
         string command,
         DateTime deadline)
@@ -514,13 +531,13 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                         // Keep both the in-process gate and cross-process sidecar while verifying
                         // and deleting. A following run on this instance waits for cleanup instead
                         // of timing out against its own sidecar with a short ResponseTimeout.
-                        string? currentPayload;
+                        byte[]? currentPayload;
                         using (var readBudget = new CancellationTokenSource())
                         {
                             readBudget.CancelAfter(remainingBudget);
                             try
                             {
-                                currentPayload = await TryReadStableTextAsync(
+                                currentPayload = await TryReadStableBytesAsync(
                                         requestPath,
                                         readBudget.Token)
                                     .ConfigureAwait(false);
@@ -554,10 +571,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
                         if (currentPayload is not null)
                         {
-                            if (!string.Equals(
-                                    currentPayload,
-                                    expectedPayload,
-                                    StringComparison.Ordinal))
+                            if (!ByteArraysEqual(currentPayload, expectedPayload))
                             {
                                 TryLogPreservedMismatchedCanceledRequest(
                                     requestPath,
@@ -777,43 +791,14 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         return nativeError == 32 || nativeError == 33;
     }
 
-    private static string SerializeRequest(EquipmentRequestMessage request)
-    {
-        var json = new JObject
-        {
-            ["index"] = request.Index,
-            ["command"] = request.Command,
-        };
-
-        foreach (var parameter in request.Parameters)
-        {
-            json.Add(
-                parameter.Key,
-                parameter.Value is null ? JValue.CreateNull() : JToken.FromObject(parameter.Value));
-        }
-
-        var output = new StringBuilder();
-        using (var stringWriter = new StringWriter(output, System.Globalization.CultureInfo.InvariantCulture))
-        using (var jsonWriter = new ScientificNotationJsonTextWriter(stringWriter)
-        {
-            Formatting = Formatting.Indented,
-        })
-        {
-            json.WriteTo(jsonWriter);
-        }
-
-        return output.ToString();
-    }
-
     private async Task PublishRequestAsync(
         string requestPath,
-        string serializedRequest,
+        byte[] serializedRequest,
         CancellationToken cancellationToken)
     {
         var tempPath = requestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            var bytes = new UTF8Encoding(false).GetBytes(serializedRequest);
             using (var stream = new FileStream(
                        tempPath,
                        FileMode.CreateNew,
@@ -822,7 +807,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                        4096,
                        FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
-                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(
+                        serializedRequest,
+                        0,
+                        serializedRequest.Length,
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 stream.Flush(true);
             }
@@ -855,9 +845,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task<EquipmentResponseMessage> CompleteResponseAsync(
         string requestPath,
         string responsePath,
-        string responseSnapshot,
-        int correlationId,
-        string requestCommand,
+        byte[] responseSnapshot,
+        EquipmentRequestMessage request,
         CancellationToken cancellationToken)
     {
         await EnsureRequestFileAbsentAsync(
@@ -873,12 +862,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         // response was detected. Cleanup remains deliberately best-effort; a share lock,
         // permission change, or equipment-side race must not discard a valid response or stop a
         // live-frame loop.
-        TryDeleteCompletedRequest(requestPath, correlationId, requestCommand);
+        TryDeleteCompletedRequest(requestPath, request.CorrelationId, request.Action);
 
         // Validation and materialization are deterministic for the immutable snapshot. Keeping
         // the second parse at this boundary makes the lifecycle explicit: detect a valid matching
         // response, acknowledge it by cleaning the request, then expose its values to callers.
-        if (!TryParseMatchingResponse(responseSnapshot, correlationId, out var response)
+        if (!_codec.TryDeserializeResponse(responseSnapshot, request, out var response)
             || response is null)
         {
             throw new InvalidDataException(
@@ -891,23 +880,23 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         {
             await DeleteResponseAsync(
                     responsePath,
-                    response.Index,
-                    requestCommand,
+                    response.CorrelationId,
+                    request.Action,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        if (string.Equals(requestCommand, "frame", StringComparison.Ordinal))
+        if (string.Equals(request.Action, EquipmentActionNames.Live, StringComparison.Ordinal))
         {
             _logger.LogTrace(
                 "Received live frame response {CorrelationId}.",
-                response.Index);
+                response.CorrelationId);
         }
         else
         {
             _logger.LogInformation(
                 "Received equipment response for correlation ID {CorrelationId}.",
-                response.Index);
+                response.CorrelationId);
         }
         return response;
     }
@@ -1013,39 +1002,39 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
     }
 
-    private async Task<string?> TryReadMatchingResponseOnceAsync(
+    private async Task<byte[]?> TryReadMatchingResponseOnceAsync(
         string responsePath,
-        int expectedIndex,
-        string? baselineResponse,
+        EquipmentRequestMessage expectedRequest,
+        byte[]? baselineResponse,
         CancellationToken cancellationToken)
     {
-        var json = await TryReadStableTextAsync(responsePath, cancellationToken)
+        var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
             .ConfigureAwait(false);
-        return json is not null
-               && !string.Equals(json, baselineResponse, StringComparison.Ordinal)
-               && TryParseMatchingResponse(json, expectedIndex, out _)
-            ? json
+        return payload is not null
+               && !ByteArraysEqual(payload, baselineResponse)
+               && _codec.TryDeserializeResponse(payload, expectedRequest, out _)
+            ? payload
             : null;
     }
 
-    private async Task<string?> WaitForMatchingResponseAsync(
+    private async Task<byte[]?> WaitForMatchingResponseAsync(
         string responsePath,
-        int expectedIndex,
-        string? baselineResponse,
+        EquipmentRequestMessage expectedRequest,
+        byte[]? baselineResponse,
         CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + _options.ResponseTimeout;
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var json = await TryReadStableTextAsync(responsePath, cancellationToken)
+            var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (json is not null
-                && !string.Equals(json, baselineResponse, StringComparison.Ordinal)
-                && TryParseMatchingResponse(json, expectedIndex, out _))
+            if (payload is not null
+                && !ByteArraysEqual(payload, baselineResponse)
+                && _codec.TryDeserializeResponse(payload, expectedRequest, out _))
             {
-                return json;
+                return payload;
             }
 
             var remaining = deadline - DateTime.UtcNow;
@@ -1063,7 +1052,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         return null;
     }
 
-    private async Task<string?> TryReadStableTextAsync(
+    private async Task<byte[]?> TryReadStableBytesAsync(
         string filePath,
         CancellationToken cancellationToken)
     {
@@ -1071,7 +1060,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         try
         {
             before = FileSnapshot.Capture(filePath);
-            if (!before.Exists)
+            if (!before.Exists
+                || before.Length > EquipmentMessageLimits.MaximumWirePayloadBytes)
             {
                 return null;
             }
@@ -1090,7 +1080,9 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         try
         {
             var after = FileSnapshot.Capture(filePath);
-            if (!after.Exists || !before.Equals(after))
+            if (!after.Exists
+                || !before.Equals(after)
+                || after.Length > EquipmentMessageLimits.MaximumWirePayloadBytes)
             {
                 return null;
             }
@@ -1102,12 +1094,28 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                        FileShare.ReadWrite | FileShare.Delete,
                        4096,
                        FileOptions.Asynchronous))
-            using (var reader = new StreamReader(stream, Encoding.UTF8, true, 4096, false))
             {
-                var text = await reader.ReadToEndAsync().ConfigureAwait(false);
+                var bytes = new byte[(int)after.Length];
+                var offset = 0;
+                while (offset < bytes.Length)
+                {
+                    var read = await stream.ReadAsync(
+                            bytes,
+                            offset,
+                            bytes.Length - offset,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        return null;
+                    }
+
+                    offset += read;
+                }
+
                 cancellationToken.ThrowIfCancellationRequested();
                 var final = FileSnapshot.Capture(filePath);
-                return after.Equals(final) ? text : null;
+                return after.Equals(final) ? bytes : null;
             }
         }
         catch (IOException)
@@ -1120,234 +1128,27 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
     }
 
-    private static bool TryParseMatchingResponse(
-        string json,
-        int expectedIndex,
-        out EquipmentResponseMessage? response)
+    private static bool ByteArraysEqual(byte[]? left, byte[]? right)
     {
-        response = null;
-        JObject document;
-        try
+        if (ReferenceEquals(left, right))
         {
-            document = JObject.Parse(
-                json,
-                new JsonLoadSettings
-                {
-                    DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error
-                });
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-
-        if (!HasValidResponsePropertyNames(document))
-        {
-            return false;
-        }
-
-        var indexToken = document["index"];
-        var commandToken = document["command"];
-        if (!TryReadPositiveIndex(indexToken, out var responseIndex)
-            || responseIndex != expectedIndex
-            || commandToken?.Type != JTokenType.String
-            || !string.Equals(commandToken.Value<string>(), "return", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (!TryReadFiniteNumber(document["stage_x"], out var stageX)
-            || !TryReadFiniteNumber(document["stage_y"], out var stageY))
-        {
-            return false;
-        }
-
-        var imagePathToken = document["image_path"];
-        if (imagePathToken != null
-            && (imagePathToken.Type != JTokenType.String
-                || !EquipmentResponseMessage.IsSupportedAbsoluteImagePath(
-                    imagePathToken.Value<string>())))
-        {
-            return false;
-        }
-
-        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
-        foreach (var property in document.Properties())
-        {
-            if (string.Equals(property.Name, "index", StringComparison.Ordinal)
-                || string.Equals(property.Name, "command", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (string.Equals(property.Name, "stage_x", StringComparison.Ordinal))
-            {
-                properties[property.Name] = stageX;
-            }
-            else if (string.Equals(property.Name, "stage_y", StringComparison.Ordinal))
-            {
-                properties[property.Name] = stageY;
-            }
-            else
-            {
-                properties[property.Name] = ConvertToken(property.Value);
-            }
-        }
-
-        try
-        {
-            response = new EquipmentResponseMessage(expectedIndex, "return", properties);
             return true;
         }
-        catch (ArgumentException)
+
+        if (left is null || right is null || left.Length != right.Length)
         {
-            response = null;
             return false;
         }
-        catch (InvalidOperationException)
+
+        for (var index = 0; index < left.Length; index++)
         {
-            response = null;
-            return false;
-        }
-    }
-
-    private static bool TryReadPositiveIndex(JToken? token, out int index)
-    {
-        index = 0;
-        return token?.Type == JTokenType.Integer
-               && int.TryParse(
-                   token.ToString(Formatting.None),
-                   System.Globalization.NumberStyles.Integer,
-                   System.Globalization.CultureInfo.InvariantCulture,
-                   out index)
-               && index > 0;
-    }
-
-    private static bool HasValidResponsePropertyNames(JObject document)
-    {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in document.Properties())
-        {
-            if (string.IsNullOrWhiteSpace(property.Name) || !names.Add(property.Name))
-            {
-                return false;
-            }
-
-            if (string.Equals(property.Name, "iteration_path", StringComparison.OrdinalIgnoreCase)
-                || IsNonCanonicalProperty(property.Name, "index")
-                || IsNonCanonicalProperty(property.Name, "command")
-                || IsNonCanonicalProperty(property.Name, "stage_x")
-                || IsNonCanonicalProperty(property.Name, "stage_y")
-                || IsNonCanonicalProperty(property.Name, "image_path"))
+            if (left[index] != right[index])
             {
                 return false;
             }
         }
 
         return true;
-    }
-
-    private static bool IsNonCanonicalProperty(string propertyName, string canonicalName)
-    {
-        return string.Equals(propertyName, canonicalName, StringComparison.OrdinalIgnoreCase)
-               && !string.Equals(propertyName, canonicalName, StringComparison.Ordinal);
-    }
-
-    private static bool TryReadFiniteNumber(JToken? token, out double value)
-    {
-        value = 0d;
-        if (token?.Type != JTokenType.Integer && token?.Type != JTokenType.Float)
-        {
-            return false;
-        }
-
-        try
-        {
-            value = token.Value<double>();
-            return !double.IsNaN(value) && !double.IsInfinity(value);
-        }
-        catch (InvalidCastException)
-        {
-            return false;
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-        catch (OverflowException)
-        {
-            return false;
-        }
-    }
-
-    private static object? ConvertToken(JToken token)
-    {
-        switch (token.Type)
-        {
-            case JTokenType.Null:
-            case JTokenType.Undefined:
-                return null;
-            case JTokenType.Boolean:
-                return token.Value<bool>();
-            case JTokenType.Integer:
-                {
-                    var text = token.ToString(Formatting.None);
-                    if (int.TryParse(
-                            text,
-                            System.Globalization.NumberStyles.Integer,
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            out var intValue))
-                    {
-                        return intValue;
-                    }
-
-                    if (long.TryParse(
-                            text,
-                            System.Globalization.NumberStyles.Integer,
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            out var longValue))
-                    {
-                        return longValue;
-                    }
-
-                    // Json.NET represents larger integer tokens with BigInteger. The expression
-                    // value system intentionally has no arbitrary-precision numeric type, so keep
-                    // the exact invariant digits as text rather than overflowing or rounding.
-                    return text;
-                }
-            case JTokenType.Float:
-                return token.Value<double>();
-            case JTokenType.String:
-                return token.Value<string>();
-            case JTokenType.Date:
-                return token.Value<DateTime>();
-            case JTokenType.Guid:
-                return token.Value<Guid>();
-            case JTokenType.TimeSpan:
-                return token.Value<TimeSpan>();
-            case JTokenType.Array:
-                {
-                    var values = new List<object?>();
-                    foreach (var child in token.Children())
-                    {
-                        values.Add(ConvertToken(child));
-                    }
-
-                    return new ReadOnlyCollection<object?>(values);
-                }
-            case JTokenType.Object:
-                {
-                    var values = new Dictionary<string, object?>(StringComparer.Ordinal);
-                    foreach (var property in ((JObject)token).Properties())
-                    {
-                        values[property.Name] = ConvertToken(property.Value);
-                    }
-
-                    return new ReadOnlyDictionary<string, object?>(values);
-                }
-            default:
-                return token.ToString(Formatting.None, Array.Empty<JsonConverter>());
-        }
     }
 
     private async Task DeleteResponseAsync(
@@ -1378,7 +1179,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             // Live preview throughput is more important than retrying cleanup after the matching
             // frame has already been secured. A later exchange will still use the retained
             // response as its stale baseline, so one best-effort delete attempt is sufficient.
-            if (string.Equals(requestCommand, "frame", StringComparison.Ordinal))
+            if (string.Equals(requestCommand, EquipmentActionNames.Live, StringComparison.Ordinal))
             {
                 LogCleanupFailure(
                     lastException!,
@@ -1428,7 +1229,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         int correlationId,
         string requestCommand)
     {
-        if (string.Equals(requestCommand, "frame", StringComparison.Ordinal))
+        if (string.Equals(requestCommand, EquipmentActionNames.Live, StringComparison.Ordinal))
         {
             if (!ShouldLogFrameCleanupWarning(
                     cleanupFileKind,
@@ -1565,7 +1366,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
         public bool Exists { get; }
 
-        private long Length { get; }
+        public long Length { get; }
 
         private DateTime LastWriteTimeUtc { get; }
 
@@ -1633,57 +1434,4 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         public DateTime Deadline { get; }
     }
 
-    private sealed class ScientificNotationJsonTextWriter : JsonTextWriter
-    {
-        public ScientificNotationJsonTextWriter(TextWriter textWriter)
-            : base(textWriter)
-        {
-        }
-
-        public override void WriteValue(double value)
-        {
-            if (double.IsNaN(value) || double.IsInfinity(value))
-            {
-                throw new JsonWriterException("NaN and infinity are not valid equipment request numbers.");
-            }
-
-            WriteRawValue(FormatScientific(value, "0.#################E+0"));
-        }
-
-        public override void WriteValue(float value)
-        {
-            if (float.IsNaN(value) || float.IsInfinity(value))
-            {
-                throw new JsonWriterException("NaN and infinity are not valid equipment request numbers.");
-            }
-
-            WriteRawValue(FormatScientific(value, "0.########E+0"));
-        }
-
-        public override void WriteValue(decimal value)
-        {
-            WriteRawValue(FormatScientific(value, "0.############################E+0"));
-        }
-
-        private static string FormatScientific<T>(T value, string format)
-            where T : IFormattable
-        {
-            var text = value.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
-            var exponentMarker = text.IndexOf('E');
-            if (exponentMarker < 0)
-            {
-                return text;
-            }
-
-            var mantissa = text.Substring(0, exponentMarker);
-            var exponent = int.Parse(
-                text.Substring(exponentMarker + 1),
-                System.Globalization.NumberStyles.AllowLeadingSign,
-                System.Globalization.CultureInfo.InvariantCulture);
-            var exponentText = exponent > 0
-                ? "+" + exponent.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : exponent.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return mantissa + "E" + exponentText;
-        }
-    }
 }

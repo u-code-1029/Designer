@@ -13,4 +13,7 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
     <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Communication\Templates\**\*.xml" />
+  </ItemGroup>
 </Project>

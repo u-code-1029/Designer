@@ -4,54 +4,121 @@ using System.Collections.ObjectModel;
 
 namespace DrillFlow.Application.Communication;
 
+/// <summary>
+/// Format-independent logical equipment request. The XML template codec owns the wire
+/// representation; this object deliberately mirrors the JSON shape used by the designer.
+/// </summary>
 public sealed class EquipmentRequestMessage
 {
     public EquipmentRequestMessage(
-        int index,
-        string command,
+        int correlationId,
+        string action,
         IReadOnlyDictionary<string, object?>? parameters = null)
     {
-        if (index <= 0)
+        if (correlationId <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(index), "A correlation index must be positive.");
+            throw new ArgumentOutOfRangeException(
+                nameof(correlationId),
+                "A correlation ID must be positive.");
         }
 
-        if (string.IsNullOrWhiteSpace(command))
-        {
-            throw new ArgumentException("A command is required.", nameof(command));
-        }
-
-        var copy = new Dictionary<string, object?>(StringComparer.Ordinal);
-        if (parameters is not null)
-        {
-            foreach (var pair in parameters)
-            {
-                if (string.IsNullOrWhiteSpace(pair.Key))
-                {
-                    throw new ArgumentException("Parameter names cannot be empty.", nameof(parameters));
-                }
-
-                if (string.Equals(pair.Key, "index", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(pair.Key, "command", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new ArgumentException(
-                        $"'{pair.Key}' is a reserved request property.",
-                        nameof(parameters));
-                }
-
-                copy.Add(pair.Key, pair.Value);
-            }
-        }
-
-        Index = index;
-        Command = command;
-        Parameters = new ReadOnlyDictionary<string, object?>(copy);
+        Action = EquipmentActionNames.Normalize(action);
+        CorrelationId = correlationId;
+        Parameters = new ReadOnlyDictionary<string, object?>(
+            CopyProperties(parameters, nameof(parameters)));
     }
 
-    public int Index { get; }
+    public string Type => "request";
 
-    public string Command { get; }
+    public int CorrelationId { get; }
+
+    public string Action { get; }
 
     public IReadOnlyDictionary<string, object?> Parameters { get; }
+
+    private static Dictionary<string, object?> CopyProperties(
+        IReadOnlyDictionary<string, object?>? properties,
+        string argumentName)
+    {
+        var copy = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (properties is null)
+        {
+            return copy;
+        }
+
+        foreach (var pair in properties)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key))
+            {
+                throw new ArgumentException("Parameter names cannot be empty.", argumentName);
+            }
+
+            if (!names.Add(pair.Key))
+            {
+                throw new ArgumentException(
+                    $"Request parameter '{pair.Key}' is duplicated when casing is ignored.",
+                    argumentName);
+            }
+
+            if (IsReservedProperty(pair.Key))
+            {
+                throw new ArgumentException(
+                    $"'{pair.Key}' is a reserved request property.",
+                    argumentName);
+            }
+
+            copy.Add(pair.Key, pair.Value);
+        }
+
+        return copy;
+    }
+
+    private static bool IsReservedProperty(string propertyName)
+    {
+        return string.Equals(propertyName, "type", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(propertyName, "correlation_id", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(propertyName, "action", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
+public static class EquipmentActionNames
+{
+    public const string Stage = "stage";
+    public const string Camera = "camera";
+    public const string Focus = "focus";
+    public const string Integration = "integration";
+    public const string Live = "live";
+    public const string Abort = "abort";
+
+    public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(
+        new[] { Stage, Camera, Focus, Integration, Live, Abort });
+
+    public static bool IsKnown(string? action)
+    {
+        return string.Equals(action, Stage, StringComparison.Ordinal)
+               || string.Equals(action, Camera, StringComparison.Ordinal)
+               || string.Equals(action, Focus, StringComparison.Ordinal)
+               || string.Equals(action, Integration, StringComparison.Ordinal)
+               || string.Equals(action, Live, StringComparison.Ordinal)
+               || string.Equals(action, Abort, StringComparison.Ordinal);
+    }
+
+    public static string Normalize(string? action)
+    {
+        if (string.IsNullOrWhiteSpace(action))
+        {
+            throw new ArgumentException("An equipment action is required.", nameof(action));
+        }
+
+        var normalized = action!.Trim().ToLowerInvariant();
+        if (!IsKnown(normalized))
+        {
+            throw new ArgumentException(
+                $"Unsupported equipment action '{action}'.",
+                nameof(action));
+        }
+
+        return normalized;
+    }
+}

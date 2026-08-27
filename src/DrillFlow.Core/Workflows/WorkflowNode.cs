@@ -5,9 +5,11 @@ namespace DrillFlow.Core.Workflows
 {
     public enum WorkflowNodeKind
     {
-        Move,
-        Measure,
-        Drill,
+        Stage,
+        Camera,
+        Focus,
+        Integration,
+        Live,
         Abort,
         Http,
         Delay,

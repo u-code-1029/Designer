@@ -13,6 +13,9 @@
     <SolidColorBrush x:Key="DrillSuccessBrush" Color="{DynamicResource SystemFillColorSuccess}" />
     <SolidColorBrush x:Key="DrillWarningBrush" Color="{DynamicResource SystemFillColorCaution}" />
     <SolidColorBrush x:Key="DrillDangerBrush" Color="{DynamicResource SystemFillColorCritical}" />
+    <SolidColorBrush x:Key="DrillDangerSoftBrush"
+                     Color="{DynamicResource SystemFillColorCritical}"
+                     Opacity="0.12" />
 
     <Style x:Key="PanelBorderStyle" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource DrillSurfaceBrush}" />
@@ -81,6 +84,11 @@
             <DataTrigger Binding="{Binding IsCurrent}" Value="True">
                 <Setter Property="BorderBrush" Value="{DynamicResource DrillSuccessBrush}" />
                 <Setter Property="BorderThickness" Value="2" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding HasValidationError}" Value="True">
+                <Setter Property="BorderBrush" Value="{DynamicResource DrillDangerBrush}" />
+                <Setter Property="BorderThickness" Value="2" />
+                <Setter Property="Background" Value="{DynamicResource DrillDangerSoftBrush}" />
             </DataTrigger>
         </Style.Triggers>
     </Style>

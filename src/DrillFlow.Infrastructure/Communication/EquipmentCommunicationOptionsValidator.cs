@@ -22,7 +22,7 @@ public sealed class EquipmentCommunicationOptionsValidator
         {
             failures.Add("An equipment exchange directory is required.");
         }
-        else if (!Path.IsPathRooted(options.ExchangeDirectory))
+        else if (!IsAbsoluteWindowsDirectory(options.ExchangeDirectory))
         {
             failures.Add("The equipment exchange directory must be an absolute local or UNC path.");
         }
@@ -120,6 +120,71 @@ public sealed class EquipmentCommunicationOptionsValidator
             failures.Add($"The {role} file name must include an extension.");
         }
     }
+
+    private static bool IsAbsoluteWindowsDirectory(string value)
+    {
+        var path = value.Trim();
+        for (var index = 0; index < path.Length; index++)
+        {
+            var character = path[index];
+            if (character < ' '
+                || character == '"'
+                || character == '<'
+                || character == '>'
+                || character == '|'
+                || character == '?'
+                || character == '*'
+                || character == ':' && index != 1)
+            {
+                return false;
+            }
+        }
+
+        var isDriveAbsolute = path.Length >= 3
+                              && IsAsciiLetter(path[0])
+                              && path[1] == ':'
+                              && IsDirectorySeparator(path[2]);
+        if (isDriveAbsolute)
+        {
+            return true;
+        }
+
+        if (path.Length < 5
+            || !IsDirectorySeparator(path[0])
+            || !IsDirectorySeparator(path[1])
+            || IsDirectorySeparator(path[2]))
+        {
+            return false;
+        }
+
+        var serverEnd = IndexOfDirectorySeparator(path, 2);
+        if (serverEnd <= 2 || serverEnd == path.Length - 1)
+        {
+            return false;
+        }
+
+        var shareStart = serverEnd + 1;
+        var shareEnd = IndexOfDirectorySeparator(path, shareStart);
+        return (shareEnd < 0 ? path.Length : shareEnd) > shareStart;
+    }
+
+    private static int IndexOfDirectorySeparator(string value, int startIndex)
+    {
+        for (var index = startIndex; index < value.Length; index++)
+        {
+            if (IsDirectorySeparator(value[index]))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsDirectorySeparator(char value) => value == '\\' || value == '/';
+
+    private static bool IsAsciiLetter(char value) =>
+        value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z';
 
     private static void ValidatePositiveDelay(
         TimeSpan value,

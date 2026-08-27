@@ -7,6 +7,8 @@ namespace DrillFlow.Application.Communication;
 /// </summary>
 public sealed class EquipmentCommunicationOptions
 {
+    private string _exchangeDirectory = string.Empty;
+
     public const string SectionName = "EquipmentCommunication";
 
     /// <summary>
@@ -16,11 +18,24 @@ public sealed class EquipmentCommunicationOptions
     /// </summary>
     public const string ExchangeLockFileName = ".drillflow.exchange.lock";
 
-    public string ExchangeDirectory { get; set; } = string.Empty;
+    public string ExchangeDirectory
+    {
+        get => _exchangeDirectory;
+        set => _exchangeDirectory = NormalizeExchangeDirectory(value);
+    }
 
-    public string RequestFileName { get; set; } = "request.json";
+    /// <summary>
+    /// Canonicalizes a local/UNC directory for Windows equipment messages. Windows file APIs
+    /// accept forward slashes, but image_path is a strict backslash-based wire field.
+    /// </summary>
+    public static string NormalizeExchangeDirectory(string? value)
+    {
+        return (value ?? string.Empty).Trim().Replace('/', '\\');
+    }
 
-    public string ResponseFileName { get; set; } = "response.json";
+    public string RequestFileName { get; set; } = "request.xml";
+
+    public string ResponseFileName { get; set; } = "response.xml";
 
     public EquipmentRequestFileLifecycle EquipmentRequestLifecycle { get; set; }
         = EquipmentRequestFileLifecycle.RetainUntilOverwritten;

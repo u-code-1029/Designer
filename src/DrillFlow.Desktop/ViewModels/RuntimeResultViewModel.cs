@@ -35,18 +35,13 @@ public sealed class RuntimeResultViewModel : ObservableObject
                 pair.Value,
                 localization))
             .ToArray();
-        SummaryFields = Fields
-            .Where(field => !IsInternalRawField(field.Name))
-            .ToArray();
-
-        RequestJson = ReadSpecialValue(result, "request_json");
-        ResponseJson = ReadSpecialValue(result, "response_json");
+        SummaryFields = Fields;
         ImagePath = ReadSpecialValue(result, ImagePathField);
     }
 
     public int CorrelationId { get; }
 
-    public string IndexExpressionPath => _actionAlias + ".result.index";
+    public string CorrelationIdExpressionPath => _actionAlias + ".result.correlation_id";
 
     public string IterationPathExpressionPath => _actionAlias + ".result.iteration_path";
 
@@ -62,10 +57,6 @@ public sealed class RuntimeResultViewModel : ObservableObject
 
     public bool HasSummaryFields => SummaryFields.Count > 0;
 
-    public string RequestJson { get; }
-
-    public string ResponseJson { get; }
-
     public string ImagePath { get; }
 
     public void UpdateActionAlias(string actionAlias)
@@ -77,7 +68,7 @@ public sealed class RuntimeResultViewModel : ObservableObject
         }
 
         _actionAlias = normalized;
-        OnPropertyChanged(nameof(IndexExpressionPath));
+        OnPropertyChanged(nameof(CorrelationIdExpressionPath));
         OnPropertyChanged(nameof(IterationPathExpressionPath));
         foreach (var field in Fields)
         {
@@ -97,10 +88,6 @@ public sealed class RuntimeResultViewModel : ObservableObject
     {
         return result.Values.TryGetValue(key, out var value) ? Convert.ToString(value) ?? string.Empty : string.Empty;
     }
-
-    private static bool IsInternalRawField(string name) =>
-        string.Equals(name, "request_json", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(name, "response_json", StringComparison.OrdinalIgnoreCase);
 
     internal async Task<ImageSource?> LoadImageAsync(
         ILiveImageDecoder imageDecoder,

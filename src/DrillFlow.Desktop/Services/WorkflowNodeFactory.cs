@@ -11,11 +11,16 @@ public static class WorkflowNodeFactory
     {
         WorkflowNode node = kind switch
         {
-            WorkflowNodeKind.Move => new MoveNode(),
-            WorkflowNodeKind.Measure => new MeasureNode(),
-            WorkflowNodeKind.Drill => new DrillNode
+            WorkflowNodeKind.Stage => new StageNode(),
+            WorkflowNodeKind.Camera => new CameraNode(),
+            WorkflowNodeKind.Focus => new FocusNode(),
+            WorkflowNodeKind.Integration => new IntegrationNode
             {
-                DrillResultPath = ParameterBinding.Literal(@"C:\DrillFlow\Results\result.csv")
+                ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\integration.bmp")
+            },
+            WorkflowNodeKind.Live => new LiveNode
+            {
+                ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\live.bmp")
             },
             WorkflowNodeKind.Abort => new AbortNode(),
             WorkflowNodeKind.Http => new HttpActionNode(),

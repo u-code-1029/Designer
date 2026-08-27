@@ -46,6 +46,7 @@ public sealed class UserSettingsStore : IUserSettingsStore
             }
 
             persisted.Communication ??= fallback.Communication;
+            MigrateLegacyDefaultFileNames(persisted.Communication);
             persisted.Theme = ThemeSelection.Normalize(persisted.Theme);
             return persisted;
         }
@@ -75,6 +76,18 @@ public sealed class UserSettingsStore : IUserSettingsStore
         else
         {
             File.Move(temporaryPath, _settingsPath);
+        }
+    }
+
+    private static void MigrateLegacyDefaultFileNames(CommunicationSettings communication)
+    {
+        // Version 1 used this exact pair as its built-in defaults. Preserve every custom name,
+        // while ensuring existing installations adopt the new XML wire contract automatically.
+        if (string.Equals(communication.RequestFileName, "request.json", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(communication.ResponseFileName, "response.json", StringComparison.OrdinalIgnoreCase))
+        {
+            communication.RequestFileName = "request.xml";
+            communication.ResponseFileName = "response.xml";
         }
     }
 }

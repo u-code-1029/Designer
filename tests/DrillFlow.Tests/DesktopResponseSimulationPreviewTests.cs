@@ -82,16 +82,17 @@ public sealed class DesktopResponseSimulationPreviewTests
         var secondImage = CreateTestBitmap(40, 50, 60);
         const string firstPath = @"C:\temp\first.png";
         const string secondPath = @"C:\temp\second.png";
-        const string editedPayload = "{\"index\":7,\"command\":\"return\",\"stage_x\":0.125,"
-                                     + "\"stage_y\":-0.25,\"custom\":\"keep\","
+        const string editedPayload = "{\"type\":\"response\",\"correlation_id\":7,"
+                                     + "\"action\":\"integration\",\"result\":0,\"hfw\":1E-3,"
+                                     + "\"frame_count\":8,\"custom\":\"keep\","
                                      + "\"image_path\":\"C:\\\\temp\\\\first.png\"}";
         string? payloadReceivedByRegenerator = null;
 
         var viewModel = new ResponseSimulationDialogViewModel(
-            "Move1 (Move)",
+            "Integration1 (Integration)",
             "JSON",
-            @"C:\exchange\response.json",
-            "Index 7, command: move",
+            @"C:\exchange\response.xml",
+            "Correlation 7, action: integration",
             editedPayload,
             new ResponseSimulationPreview(firstImage, firstPath, editedPayload),
             payload =>
@@ -111,8 +112,8 @@ public sealed class DesktopResponseSimulationPreviewTests
         Assert.Same(secondImage, viewModel.PreviewImage);
         Assert.Equal(secondPath, viewModel.GeneratedImagePath);
         var regeneratedPayload = JObject.Parse(viewModel.Payload);
-        Assert.Equal(0.125d, regeneratedPayload.Value<double>("stage_x"));
-        Assert.Equal(-0.25d, regeneratedPayload.Value<double>("stage_y"));
+        Assert.Equal(1E-3d, regeneratedPayload.Value<double>("hfw"));
+        Assert.Equal(8, regeneratedPayload.Value<int>("frame_count"));
         Assert.Equal("keep", regeneratedPayload.Value<string>("custom"));
         Assert.Equal(secondPath, regeneratedPayload.Value<string>("image_path"));
         Assert.False(viewModel.HasValidationError);
@@ -125,10 +126,10 @@ public sealed class DesktopResponseSimulationPreviewTests
         const string firstPath = @"C:\temp\first.png";
         const string invalidPayload = "{ invalid json";
         var viewModel = new ResponseSimulationDialogViewModel(
-            "Move1 (Move)",
+            "Integration1 (Integration)",
             "JSON",
-            @"C:\exchange\response.json",
-            "Index 7, command: move",
+            @"C:\exchange\response.xml",
+            "Correlation 7, action: integration",
             invalidPayload,
             new ResponseSimulationPreview(firstImage, firstPath, invalidPayload),
             payload => Task.FromResult<ResponseSimulationPreview?>(

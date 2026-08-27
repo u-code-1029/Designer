@@ -25,34 +25,33 @@ public sealed class ApplicationWorkflowRunnerTests
         var transport = new FakeTransport(request => Task.FromResult(
             Response(request, new Dictionary<string, object?>
             {
-                ["stage_x"] = request.Command == "measure" ? 1.2E-3 : 2.4E-3,
-                ["stage_y"] = 0d
+                ["current_stage_x"] = request.Action == EquipmentActionNames.Stage ? 1.2E-3 : 2.4E-3,
+                ["current_stage_y"] = 0d
             })));
         var runner = CreateRunner(transport);
-        var measure = new MeasureNode
+        var stage = new StageNode
         {
-            Key = "measure_1",
-            Thickness = ParameterBinding.Literal("1E-3")
+            Key = "stage_1"
         };
-        var drill = new DrillNode
+        var integration = new IntegrationNode
         {
-            Key = "drill_1",
-            Thickness = ParameterBinding.Expression("measure_1.result.stage_x"),
-            DrillResultPath = ParameterBinding.Literal(@"C:\results\hole.csv")
+            Key = "integration_1",
+            HorizontalFieldWidth = ParameterBinding.Expression("stage_1.result.current_stage_x"),
+            ImagePath = ParameterBinding.Literal(@"C:\results\integrated.png")
         };
-        var document = Document(measure, drill);
+        var document = Document(stage, integration);
 
-        await runner.RunSelectedAsync(document, measure.Id);
+        await runner.RunSelectedAsync(document, stage.Id);
         var sessionId = runner.CurrentRunId;
-        var measureResult = Assert.Single(runner.Results.GetAll(measure.Id));
+        var stageResult = Assert.Single(runner.Results.GetAll(stage.Id));
 
-        await runner.RunSelectedAsync(document, drill.Id);
+        await runner.RunSelectedAsync(document, integration.Id);
 
         Assert.Equal(sessionId, runner.CurrentRunId);
-        Assert.Same(measureResult, Assert.Single(runner.Results.GetAll(measure.Id)));
-        Assert.Single(runner.Results.GetAll(drill.Id));
-        Assert.Equal(new[] { "measure", "drill" }, transport.Requests.Select(request => request.Command));
-        Assert.Equal(1.2E-3, (double)transport.Requests[1].Parameters["thickness"]!, 12);
+        Assert.Same(stageResult, Assert.Single(runner.Results.GetAll(stage.Id)));
+        Assert.Single(runner.Results.GetAll(integration.Id));
+        Assert.Equal(new[] { "stage", "integration" }, transport.Requests.Select(request => request.Action));
+        Assert.Equal(1.2E-3, (double)transport.Requests[1].Parameters["hfw"]!, 12);
     }
 
     [Fact]
@@ -60,13 +59,13 @@ public sealed class ApplicationWorkflowRunnerTests
     {
         var transport = new FakeTransport(request => Task.FromResult(Response(request)));
         var runner = CreateRunner(transport);
-        var first = new MoveNode { Key = "first" };
+        var first = new StageNode { Key = "first" };
 
         await runner.RunSelectedAsync(Document(first), first.Id);
         var selectedSessionId = runner.CurrentRunId;
         Assert.Single(runner.Results.GetAll(first.Id));
 
-        var second = new MoveNode { Key = "second" };
+        var second = new StageNode { Key = "second" };
         await runner.RunAsync(Document(second));
 
         Assert.NotEqual(selectedSessionId, runner.CurrentRunId);
@@ -81,11 +80,19 @@ public sealed class ApplicationWorkflowRunnerTests
         {
             var properties = new Dictionary<string, object?>
             {
-                ["stage_x"] = request.Command == "measure" ? 1.2E-3 : request.Index * 0.1d,
-                ["stage_y"] = request.Index * -0.2d,
                 ["controller_value"] = "preserved"
             };
-            if (request.Command == "drill")
+            if (request.Action == EquipmentActionNames.Stage)
+            {
+                properties["current_stage_x"] = request.CorrelationId * 0.1d;
+                properties["current_stage_y"] = request.CorrelationId * -0.2d;
+            }
+            else if (request.Action == EquipmentActionNames.Camera)
+            {
+                properties["current_camera_x"] = 1.2E-3;
+                properties["current_camera_y"] = request.CorrelationId * -0.2d;
+            }
+            else if (request.Action == EquipmentActionNames.Integration)
             {
                 properties["image_path"] = @"C:\results\hole.png";
             }
@@ -93,34 +100,34 @@ public sealed class ApplicationWorkflowRunnerTests
             return Task.FromResult(Response(request, properties));
         });
         var runner = CreateRunner(transport);
-        var move = new MoveNode
+        var stage = new StageNode
         {
-            Key = "move_1",
+            Key = "stage_1",
             MoveMode = ParameterBinding.Literal("absolute"),
-            MoveX = ParameterBinding.Literal("-2.5E-1"),
-            MoveY = ParameterBinding.Literal("2.5E-1")
+            StageX = ParameterBinding.Literal("-2.5E-1"),
+            StageY = ParameterBinding.Literal("2.5E-1")
         };
-        var measure = new MeasureNode { Key = "measure_1", Thickness = ParameterBinding.Literal("1E-3") };
-        var drill = new DrillNode
+        var camera = new CameraNode { Key = "camera_1" };
+        var integration = new IntegrationNode
         {
-            Key = "drill_1",
-            Thickness = ParameterBinding.Expression("measure_1.result.stage_x"),
-            DrillResultPath = ParameterBinding.Literal(@"C:\results\hole.csv")
+            Key = "integration_1",
+            HorizontalFieldWidth = ParameterBinding.Expression("camera_1.result.current_camera_x"),
+            ImagePath = ParameterBinding.Literal(@"C:\results\hole.png")
         };
-        var document = Document(move, measure, drill);
+        var document = Document(stage, camera, integration);
 
         await runner.RunAsync(document);
 
         Assert.Equal(WorkflowRunState.Completed, runner.State);
-        Assert.Equal(new[] { "move", "measure", "drill" }, transport.Requests.Select(x => x.Command));
-        Assert.Equal(new[] { 1, 2, 3 }, transport.Requests.Select(x => x.Index));
-        Assert.Equal(-0.25d, transport.Requests[0].Parameters["move_x"]);
-        Assert.Equal(1.2E-3d, transport.Requests[2].Parameters["thickness"]);
-        var drillResult = runner.Results.GetLatest(drill.Id)!;
-        Assert.Equal(0.3d, (double)drillResult.Values["stage_x"]!, 12);
-        Assert.Equal(-0.6d, (double)drillResult.Values["stage_y"]!, 12);
-        Assert.Equal(@"C:\results\hole.png", drillResult.Values["image_path"]);
-        Assert.Equal("preserved", drillResult.Values["controller_value"]);
+        Assert.Equal(new[] { "stage", "camera", "integration" }, transport.Requests.Select(x => x.Action));
+        Assert.Equal(new[] { 1, 2, 3 }, transport.Requests.Select(x => x.CorrelationId));
+        Assert.Equal(-0.25d, transport.Requests[0].Parameters["stage_x"]);
+        Assert.Equal(1.2E-3d, transport.Requests[2].Parameters["hfw"]);
+        var integrationResult = runner.Results.GetLatest(integration.Id)!;
+        Assert.Equal(@"C:\results\hole.png", integrationResult.Values["image_path"]);
+        Assert.Equal("preserved", integrationResult.Values["controller_value"]);
+        Assert.Equal("integration", integrationResult.Values["action"]);
+        Assert.Equal(0, integrationResult.Values["result"]);
     }
 
     [Fact]
@@ -129,51 +136,90 @@ public sealed class ApplicationWorkflowRunnerTests
         var transport = new FakeTransport(request => Task.FromResult(
             Response(request, new Dictionary<string, object?>
             {
-                ["stage_x"] = request.Index * 1E-4,
-                ["stage_y"] = request.Index * -2E-4
+                ["current_stage_x"] = request.CorrelationId * 1E-4,
+                ["current_stage_y"] = request.CorrelationId * -2E-4
             })));
         var runner = CreateRunner(transport);
-        var measure = new MeasureNode { Key = "measure_loop", Thickness = ParameterBinding.Literal("1E-3") };
+        var stage = new StageNode { Key = "stage_loop" };
         var repeat = new RepeatNode
         {
             Key = "repeat_1",
             Count = ParameterBinding.Literal("3"),
-            Body = new List<WorkflowNode> { measure }
+            Body = new List<WorkflowNode> { stage }
         };
 
         await runner.RunAsync(Document(repeat));
 
-        var results = runner.Results.GetAll(measure.Id);
+        var results = runner.Results.GetAll(stage.Id);
         Assert.Equal(3, results.Count);
         Assert.Equal(new[] { 1, 2, 3 }, results.Select(x => x.CorrelationId));
         Assert.Equal(new[] { 0, 1, 2 }, results.Select(x => x.IterationPath.Single()));
-        Assert.Equal(1E-4, (double)results[0].Values["stage_x"]!, 12);
-        Assert.Equal(2E-4, (double)results[1].Values["stage_x"]!, 12);
-        Assert.Equal(3E-4, (double)results[2].Values["stage_x"]!, 12);
+        Assert.Equal(1E-4, (double)results[0].Values["current_stage_x"]!, 12);
+        Assert.Equal(2E-4, (double)results[1].Values["current_stage_x"]!, 12);
+        Assert.Equal(3E-4, (double)results[2].Values["current_stage_x"]!, 12);
         Assert.Equal(3, transport.Requests.Count);
     }
 
     [Fact]
-    public async Task RunAsync_RejectsTransportResponseWithDifferentCorrelationIndex()
+    public async Task RunAsync_RejectsTransportResponseWithDifferentCorrelationId()
     {
         var transport = new FakeTransport(request => Task.FromResult(
             new EquipmentResponseMessage(
-                request.Index + 1,
-                "return",
+                request.CorrelationId + 1,
+                request.Action,
+                0,
                 new Dictionary<string, object?>
                 {
-                    ["stage_x"] = 0d,
-                    ["stage_y"] = 0d
+                    ["current_stage_x"] = 0d,
+                    ["current_stage_y"] = 0d
                 })));
         var runner = CreateRunner(transport);
-        var move = new MoveNode { Key = "move_1" };
+        var stage = new StageNode { Key = "stage_1" };
 
         var exception = await Assert.ThrowsAsync<WorkflowExecutionException>(() =>
-            runner.RunAsync(Document(move)));
+            runner.RunAsync(Document(stage)));
 
         Assert.Contains("does not match", exception.Message, StringComparison.Ordinal);
         Assert.Equal(WorkflowRunState.Faulted, runner.State);
-        Assert.Null(runner.Results.GetLatest(move.Id));
+        Assert.Null(runner.Results.GetLatest(stage.Id));
+    }
+
+    [Fact]
+    public async Task RunAsync_ResultOneFaultsActionStopsWorkflowAndPreservesFailureResult()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(
+            new EquipmentResponseMessage(
+                request.CorrelationId,
+                request.Action,
+                1,
+                new Dictionary<string, object?>
+                {
+                    ["current_stage_x"] = 1.25E-3,
+                    ["current_stage_y"] = -2.5E-3
+                })));
+        var runner = CreateRunner(transport);
+        var failed = new StageNode { Key = "stage_failed" };
+        var neverStarted = new StageNode { Key = "stage_after_failure" };
+        WorkflowNodeStateChangedEventArgs? faultedEvent = null;
+        runner.NodeStateChanged += (_, args) =>
+        {
+            if (args.Node.Id == failed.Id && args.State == WorkflowNodeExecutionState.Faulted)
+            {
+                faultedEvent = args;
+            }
+        };
+
+        var exception = await Assert.ThrowsAnyAsync<WorkflowExecutionException>(() =>
+            runner.RunAsync(Document(failed, neverStarted)));
+
+        Assert.Contains("result 1", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(WorkflowRunState.Faulted, runner.State);
+        Assert.Single(transport.Requests);
+        var result = Assert.Single(runner.Results.GetAll(failed.Id));
+        Assert.Equal(1, result.Values["result"]);
+        Assert.Equal("stage", result.Values["action"]);
+        Assert.Same(result, faultedEvent?.Result);
+        Assert.Null(runner.Results.GetLatest(neverStarted.Id));
     }
 
     [Fact]
@@ -189,8 +235,8 @@ public sealed class ApplicationWorkflowRunnerTests
             return responseGate.Task;
         });
         var runner = CreateRunner(transport);
-        var first = new MoveNode { Key = "move_1" };
-        var second = new MoveNode { Key = "move_2" };
+        var first = new StageNode { Key = "stage_1" };
+        var second = new StageNode { Key = "stage_2" };
 
         var runTask = runner.RunAsync(Document(first, second));
         var request = await firstRequestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
@@ -200,7 +246,7 @@ public sealed class ApplicationWorkflowRunnerTests
 
         Assert.Equal(WorkflowRunState.Stopped, runner.State);
         Assert.Single(transport.Requests);
-        Assert.DoesNotContain(transport.Requests, item => item.Command == "abort");
+        Assert.DoesNotContain(transport.Requests, item => item.Action == EquipmentActionNames.Abort);
         Assert.Null(runner.Results.GetLatest(first.Id));
         Assert.Null(runner.Results.GetLatest(second.Id));
 
@@ -221,7 +267,7 @@ public sealed class ApplicationWorkflowRunnerTests
             return responseGate.Task;
         });
         var runner = CreateRunner(transport);
-        var move = new MoveNode { Key = "move_waiting" };
+        var move = new StageNode { Key = "stage_waiting" };
 
         var runTask = runner.RunAsync(Document(move));
         var request = await firstRequestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
@@ -247,7 +293,7 @@ public sealed class ApplicationWorkflowRunnerTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var transport = new CancellationAwareTransport(requestSeen, cancellationSeen);
         var runner = CreateRunner(transport);
-        var move = new MoveNode { Key = "move_1" };
+        var move = new StageNode { Key = "stage_1" };
 
         var runTask = runner.RunAsync(Document(move));
         await requestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
@@ -258,7 +304,7 @@ public sealed class ApplicationWorkflowRunnerTests
 
         Assert.Equal(WorkflowRunState.Stopped, runner.State);
         Assert.Single(transport.Requests);
-        Assert.DoesNotContain(transport.Requests, item => item.Command == "abort");
+        Assert.DoesNotContain(transport.Requests, item => item.Action == EquipmentActionNames.Abort);
         Assert.Null(runner.Results.GetLatest(move.Id));
     }
 
@@ -268,7 +314,7 @@ public sealed class ApplicationWorkflowRunnerTests
         var transport = new FakeTransport(request => Task.FromResult(Response(request)));
         var runner = CreateRunner(transport);
 
-        await runner.RunAsync(Document(new MoveNode { Key = "move_1" }));
+        await runner.RunAsync(Document(new StageNode { Key = "stage_1" }));
         Assert.Equal(WorkflowRunState.Completed, runner.State);
 
         runner.ForceStop();
@@ -289,7 +335,7 @@ public sealed class ApplicationWorkflowRunnerTests
                 paused.TrySetResult(true);
             }
         };
-        var move = new MoveNode { Key = "move_1", HasBreakpoint = true };
+        var move = new StageNode { Key = "stage_1", HasBreakpoint = true };
 
         var runTask = runner.RunAsync(Document(move));
         await paused.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
@@ -307,7 +353,7 @@ public sealed class ApplicationWorkflowRunnerTests
     {
         var transport = new FakeTransport(request => Task.FromResult(Response(request)));
         var runner = CreateRunner(transport);
-        var move = new MoveNode { Key = "move_paused", HasBreakpoint = true };
+        var move = new StageNode { Key = "stage_paused", HasBreakpoint = true };
         var paused = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         runner.NodeStateChanged += (_, args) =>
@@ -474,7 +520,7 @@ public sealed class ApplicationWorkflowRunnerTests
 
         var conditional = new ConditionalNode { Key = "choice", HasBreakpoint = true };
         conditional.Branches[0].Condition = ParameterBinding.Literal("false");
-        var move = new MoveNode { Key = "move_1" };
+        var move = new StageNode { Key = "stage_1" };
 
         var runTask = runner.RunAsync(Document(conditional, move));
         await firstPause.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
@@ -730,11 +776,28 @@ public sealed class ApplicationWorkflowRunnerTests
         EquipmentRequestMessage request,
         IReadOnlyDictionary<string, object?>? properties = null)
     {
-        var responseProperties = new Dictionary<string, object?>
+        var responseProperties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        switch (request.Action)
         {
-            ["stage_x"] = 0d,
-            ["stage_y"] = 0d
-        };
+            case EquipmentActionNames.Stage:
+                responseProperties["current_stage_x"] = 0d;
+                responseProperties["current_stage_y"] = 0d;
+                break;
+            case EquipmentActionNames.Camera:
+                responseProperties["current_camera_x"] = 0d;
+                responseProperties["current_camera_y"] = 0d;
+                break;
+            case EquipmentActionNames.Focus:
+                responseProperties["z_to_sharpness_2d"] = null;
+                break;
+            case EquipmentActionNames.Integration:
+            case EquipmentActionNames.Live:
+                responseProperties["hfw"] = request.Parameters["hfw"];
+                responseProperties["frame_count"] = request.Parameters["frame_count"];
+                responseProperties["image_path"] = request.Parameters["image_path"];
+                break;
+        }
+
         if (properties != null)
         {
             foreach (var property in properties)
@@ -743,7 +806,11 @@ public sealed class ApplicationWorkflowRunnerTests
             }
         }
 
-        return new EquipmentResponseMessage(request.Index, "return", responseProperties);
+        return new EquipmentResponseMessage(
+            request.CorrelationId,
+            request.Action,
+            0,
+            responseProperties);
     }
 
     private sealed class IncrementingCorrelationProvider : ICorrelationIdProvider
