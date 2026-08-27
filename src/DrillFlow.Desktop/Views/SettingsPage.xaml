@@ -156,11 +156,24 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
                             <TextBlock Text="{DynamicResource ResponseTimeout}" Style="{StaticResource FieldLabelStyle}" />
-                            <TextBox Text="{Binding ResponseTimeoutMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBox Text="{Binding ResponseTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" />
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <TextBlock Text="{DynamicResource PollingInterval}" Style="{StaticResource FieldLabelStyle}" />
-                            <TextBox Text="{Binding PollingIntervalMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBox Text="{Binding PollingIntervalSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource RequestPublishDelay}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RequestPublishDelaySeconds, UpdateSourceTrigger=PropertyChanged}" />
                         </StackPanel>
                     </Grid>
 

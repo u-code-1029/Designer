@@ -150,6 +150,18 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            // Hold both the in-process gate and the cross-process sidecar during this quiet
+            // interval. This guarantees that every controller using the exchange directory sees
+            // a gap between the preceding completed exchange and this request. The delay belongs
+            // only to the first publication; retries already have their own RetryDelay. Capture
+            // the retained response baseline afterwards so a late previous response written
+            // during the interval can never be mistaken for this request's response.
+            if (_options.RequestPublishDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(_options.RequestPublishDelay, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             // A pre-existing retained response is only a baseline. Even if state was manually
             // rolled back, unchanged bytes are never accepted as the response to this exchange.
             var baselineResponse = await TryReadStableBytesAsync(responsePath, cancellationToken)

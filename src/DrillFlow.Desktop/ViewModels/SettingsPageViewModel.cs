@@ -33,11 +33,12 @@ public sealed class SettingsPageViewModel : ObservableObject
     private string _equipmentRequestHandling = "RetainUntilOverwritten";
     private string _appRequestHandling = "DeleteAfterResponse";
     private string _appResponseHandling = "DeleteAfterRead";
-    private string _responseTimeoutMilliseconds = "30000";
+    private string _responseTimeoutSeconds = "30";
     private bool _retryEnabled;
     private string _maximumRetryCount = "1";
     private string _retryIntervalMilliseconds = "1000";
-    private string _pollingIntervalMilliseconds = "50";
+    private string _pollingIntervalSeconds = "0.05";
+    private string _requestPublishDelaySeconds = "0.1";
     private bool _isExecutionBusy;
     private string _validationMessage = string.Empty;
     private string _statusMessage = string.Empty;
@@ -190,10 +191,10 @@ public sealed class SettingsPageViewModel : ObservableObject
         set => SetProperty(ref _appRequestHandling, value ?? string.Empty);
     }
 
-    public string ResponseTimeoutMilliseconds
+    public string ResponseTimeoutSeconds
     {
-        get => _responseTimeoutMilliseconds;
-        set => SetProperty(ref _responseTimeoutMilliseconds, value);
+        get => _responseTimeoutSeconds;
+        set => SetProperty(ref _responseTimeoutSeconds, value ?? string.Empty);
     }
 
     public bool RetryEnabled
@@ -214,10 +215,16 @@ public sealed class SettingsPageViewModel : ObservableObject
         set => SetProperty(ref _retryIntervalMilliseconds, value);
     }
 
-    public string PollingIntervalMilliseconds
+    public string PollingIntervalSeconds
     {
-        get => _pollingIntervalMilliseconds;
-        set => SetProperty(ref _pollingIntervalMilliseconds, value);
+        get => _pollingIntervalSeconds;
+        set => SetProperty(ref _pollingIntervalSeconds, value ?? string.Empty);
+    }
+
+    public string RequestPublishDelaySeconds
+    {
+        get => _requestPublishDelaySeconds;
+        set => SetProperty(ref _requestPublishDelaySeconds, value ?? string.Empty);
     }
 
     public string ValidationMessage
@@ -304,11 +311,13 @@ public sealed class SettingsPageViewModel : ObservableObject
         EquipmentRequestHandling = communication.EquipmentRequestHandling;
         AppRequestHandling = communication.AppRequestHandling;
         AppResponseHandling = communication.AppResponseHandling;
-        ResponseTimeoutMilliseconds = communication.ResponseTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture);
+        ResponseTimeoutSeconds = FormatMillisecondsAsSeconds(communication.ResponseTimeoutMilliseconds);
         RetryEnabled = communication.RetryEnabled;
         MaximumRetryCount = communication.MaximumRetryCount.ToString(CultureInfo.InvariantCulture);
         RetryIntervalMilliseconds = communication.RetryIntervalMilliseconds.ToString(CultureInfo.InvariantCulture);
-        PollingIntervalMilliseconds = communication.PollingIntervalMilliseconds.ToString(CultureInfo.InvariantCulture);
+        PollingIntervalSeconds = FormatMillisecondsAsSeconds(communication.PollingIntervalMilliseconds);
+        RequestPublishDelaySeconds = FormatMillisecondsAsSeconds(
+            communication.RequestPublishDelayMilliseconds);
     }
 
     private void Save()
@@ -337,6 +346,14 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             _settingsStore.Save(preferences);
             ApplyToLiveOptions(communication);
+            // Display the millisecond-resolution value that was actually persisted/applied when
+            // an operator entered more than three fractional second digits.
+            ResponseTimeoutSeconds = FormatMillisecondsAsSeconds(
+                communication.ResponseTimeoutMilliseconds);
+            PollingIntervalSeconds = FormatMillisecondsAsSeconds(
+                communication.PollingIntervalMilliseconds);
+            RequestPublishDelaySeconds = FormatMillisecondsAsSeconds(
+                communication.RequestPublishDelayMilliseconds);
             _localization.ApplyLanguage(Language, false);
             StatusMessage = _localization["SettingsSaved"];
             StatusIsError = false;
@@ -429,12 +446,20 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             failure = _localization["LifecycleRequired"];
         }
-        else if (!int.TryParse(ResponseTimeoutMilliseconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var timeout)
-                 || !int.TryParse(PollingIntervalMilliseconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var polling)
+        else if (!TryConvertSecondsToMilliseconds(
+                     ResponseTimeoutSeconds,
+                     allowZero: false,
+                     out _)
+                 || !TryConvertSecondsToMilliseconds(
+                     PollingIntervalSeconds,
+                     allowZero: false,
+                     out _)
+                 || !TryConvertSecondsToMilliseconds(
+                     RequestPublishDelaySeconds,
+                     allowZero: true,
+                     out _)
                  || !int.TryParse(RetryIntervalMilliseconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var retryInterval)
                  || !int.TryParse(MaximumRetryCount, NumberStyles.Integer, CultureInfo.InvariantCulture, out var retries)
-                 || timeout <= 0
-                 || polling <= 0
                  || retryInterval < 0
                  || retries < 0
                  || (RetryEnabled && retries == 0))
@@ -454,11 +479,18 @@ public sealed class SettingsPageViewModel : ObservableObject
         EquipmentRequestHandling = EquipmentRequestHandling,
         AppRequestHandling = AppRequestHandling,
         AppResponseHandling = AppResponseHandling,
-        ResponseTimeoutMilliseconds = int.Parse(ResponseTimeoutMilliseconds, CultureInfo.InvariantCulture),
+        ResponseTimeoutMilliseconds = ConvertSecondsToMilliseconds(
+            ResponseTimeoutSeconds,
+            allowZero: false),
         RetryEnabled = RetryEnabled,
         MaximumRetryCount = int.Parse(MaximumRetryCount, CultureInfo.InvariantCulture),
         RetryIntervalMilliseconds = int.Parse(RetryIntervalMilliseconds, CultureInfo.InvariantCulture),
-        PollingIntervalMilliseconds = int.Parse(PollingIntervalMilliseconds, CultureInfo.InvariantCulture)
+        PollingIntervalMilliseconds = ConvertSecondsToMilliseconds(
+            PollingIntervalSeconds,
+            allowZero: false),
+        RequestPublishDelayMilliseconds = ConvertSecondsToMilliseconds(
+            RequestPublishDelaySeconds,
+            allowZero: true)
     };
 
     private void BrowseFolder()
@@ -490,29 +522,59 @@ public sealed class SettingsPageViewModel : ObservableObject
 
     private void ApplyToLiveOptions(CommunicationSettings settings)
     {
-        _liveOptions.ExchangeDirectory = settings.ExchangeFolder;
-        _liveOptions.RequestFileName = settings.RequestFileName;
-        _liveOptions.ResponseFileName = settings.ResponseFileName;
-        _liveOptions.EquipmentRequestLifecycle = Enum.TryParse<EquipmentRequestFileLifecycle>(
-            settings.EquipmentRequestHandling,
-            out var requestLifecycle)
-            ? requestLifecycle
-            : EquipmentRequestFileLifecycle.RetainUntilOverwritten;
-        _liveOptions.ApplicationRequestLifecycle = Enum.TryParse<ApplicationRequestFileLifecycle>(
-            settings.AppRequestHandling,
-            out var applicationRequestLifecycle)
-            ? applicationRequestLifecycle
-            : ApplicationRequestFileLifecycle.DeleteAfterResponse;
-        _liveOptions.ApplicationResponseLifecycle = Enum.TryParse<ApplicationResponseFileLifecycle>(
-            settings.AppResponseHandling,
-            out var responseLifecycle)
-            ? responseLifecycle
-            : ApplicationResponseFileLifecycle.DeleteAfterRead;
-        _liveOptions.ResponseTimeout = TimeSpan.FromMilliseconds(settings.ResponseTimeoutMilliseconds);
-        _liveOptions.RetryEnabled = settings.RetryEnabled;
-        _liveOptions.MaximumRetryCount = settings.MaximumRetryCount;
-        _liveOptions.RetryDelay = TimeSpan.FromMilliseconds(settings.RetryIntervalMilliseconds);
-        _liveOptions.PollingInterval = TimeSpan.FromMilliseconds(settings.PollingIntervalMilliseconds);
+        settings.ApplyTo(_liveOptions);
+    }
+
+    internal static string FormatMillisecondsAsSeconds(int milliseconds) =>
+        (milliseconds / 1000m).ToString(CultureInfo.InvariantCulture);
+
+    private static int ConvertSecondsToMilliseconds(string value, bool allowZero)
+    {
+        if (!TryConvertSecondsToMilliseconds(value, allowZero, out var milliseconds))
+        {
+            throw new InvalidOperationException("The communication timing value is invalid.");
+        }
+
+        return milliseconds;
+    }
+
+    internal static bool TryConvertSecondsToMilliseconds(
+        string value,
+        bool allowZero,
+        out int milliseconds)
+    {
+        milliseconds = 0;
+        if (!double.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var seconds)
+            || double.IsNaN(seconds)
+            || double.IsInfinity(seconds)
+            || seconds < 0d
+            || !allowZero && seconds <= 0d)
+        {
+            return false;
+        }
+
+        var unroundedMilliseconds = seconds * 1000d;
+        if (double.IsInfinity(unroundedMilliseconds)
+            || unroundedMilliseconds > int.MaxValue)
+        {
+            return false;
+        }
+
+        var roundedMilliseconds = Math.Round(
+            unroundedMilliseconds,
+            MidpointRounding.AwayFromZero);
+        if (roundedMilliseconds > int.MaxValue
+            || roundedMilliseconds < 1d && (seconds > 0d || !allowZero))
+        {
+            return false;
+        }
+
+        milliseconds = checked((int)roundedMilliseconds);
+        return true;
     }
 
     private static bool IsLeafFileName(string value)

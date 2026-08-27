@@ -48,7 +48,8 @@ Action 앞의 붉은 점은 브레이크포인트다. 시작 pill 아래부터 �
 - 장비가 request를 삭제하는 방식 또는 유지·덮어쓰기 방식
 - matching response 이후 앱이 request를 삭제하는 방식(기본값) 또는 유지·덮어쓰기 방식
 - 앱이 response를 읽고 삭제하는 방식 또는 유지·덮어쓰기 방식
-- response timeout, retry 사용 여부·횟수·간격, polling 간격
+- 초 단위 소수로 입력하는 response timeout·polling 간격, request 첫 게시 전 대기(기본 0.1초)
+- retry 사용 여부·횟수·간격
 - 한국어/영어/시스템 언어
 - 시스템/라이트/다크 앱 테마
 
@@ -58,7 +59,7 @@ Action 앞의 붉은 점은 브레이크포인트다. 시작 pill 아래부터 �
 
 ### Live Interaction 페이지
 
-페이지에 들어가면 `action: "live"` request를 한 번에 하나씩 보내고, 같은 `correlation_id`와 `action`을 가진 성공 response의 `image_path` 파일을 완전히 메모리에 읽은 다음 화면을 갱신한다. 각 request에는 `hfw`, 고정 `frame_count: 1`, correlation별 앱 소유 이미지 경로가 들어가며, decode가 끝난 뒤에만 다음 Live request를 만든다. response가 요청 경로와 다른 경로를 돌려주면 장비 소유 파일로 간주해 보존한다. 하나의 장비·통신 폴더에는 active controller 하나만 허용하고, 일반 Workflow Action의 결과 이미지는 현재 결과 세션에서 표시하는 동안 불변이어야 한다. 신규 설치의 polling 기본값은 50ms이며 설정에서 조절할 수 있다. WIC 메타데이터 확인과 미리보기 decode는 UI Dispatcher가 아니라 앱 전용 background STA queue에서 수행하고 결과를 Freeze해 전달한다. Action 카드와 Inspector의 실행 결과 이미지도 같은 stable read/STA decode 경로를 사용하며 표시 실패가 workflow 성공을 바꾸지는 않는다. 취소된 대기 작업은 decode하지 않으며, 64MiB 파일·축당 16,384 pixel·총 6,400만 pixel을 넘는 비정상 입력은 명확한 오류로 차단한다. response 이후 이미지 I/O에는 현재 response timeout(최소 1초)을 별도 예산으로 적용한다. 기본 사후 정리 정책은 matching response마다 완료된 Live request를 삭제해 고빈도 요청 파일이 남지 않게 한다. 라이브 정지나 페이지 이동은 현재 response 대기를 즉시 취소하고 Designer 잠금을 해제한다. transport는 게시 byte가 그대로인 request만 background에서 제한 시간 내 best-effort로 지우며 timeout까지 UI를 붙잡지 않는다. 앱 종료 시에는 이미 예약된 정리 task만 기존 2초 deadline의 남은 시간 동안 drain해 정상 로컬 request가 프로세스와 함께 남지 않게 하되, 중단 불가능한 UNC 호출 때문에 deadline을 넘기지는 않는다. 일시적 실패나 image timeout 시 마지막 정상 화면을 유지하면서 500ms~5초 범위의 backoff로 재시도한다.
+페이지에 들어가면 `action: "live"` request를 한 번에 하나씩 보내고, 같은 `correlation_id`와 `action`을 가진 성공 response의 `image_path` 파일을 완전히 메모리에 읽은 다음 화면을 갱신한다. 각 request에는 `hfw`, 고정 `frame_count: 1`, correlation별 앱 소유 이미지 경로가 들어가며, decode가 끝난 뒤에만 다음 Live request를 만든다. response가 요청 경로와 다른 경로를 돌려주면 장비 소유 파일로 간주해 보존한다. 하나의 장비·통신 폴더에는 active controller 하나만 허용하고, 일반 Workflow Action의 결과 이미지는 현재 결과 세션에서 표시하는 동안 불변이어야 한다. 신규 설치의 polling 기본값은 0.05초, 새 Exchange의 request 게시 전 대기는 0.1초이며 설정에서 소수 초 단위로 조절할 수 있다. 이 공통 게시 전 대기는 Live frame마다 적용되므로 0.1초일 때 장비·파일 처리 시간을 제외해도 최대 갱신률은 약 10fps다. WIC 메타데이터 확인과 미리보기 decode는 UI Dispatcher가 아니라 앱 전용 background STA queue에서 수행하고 결과를 Freeze해 전달한다. Action 카드와 Inspector의 실행 결과 이미지도 같은 stable read/STA decode 경로를 사용하며 표시 실패가 workflow 성공을 바꾸지는 않는다. 취소된 대기 작업은 decode하지 않으며, 64MiB 파일·축당 16,384 pixel·총 6,400만 pixel을 넘는 비정상 입력은 명확한 오류로 차단한다. response 이후 이미지 I/O에는 현재 response timeout(최소 1초)을 별도 예산으로 적용한다. 기본 사후 정리 정책은 matching response마다 완료된 Live request를 삭제해 고빈도 요청 파일이 남지 않게 한다. 라이브 정지나 페이지 이동은 현재 response 대기를 즉시 취소하고 Designer 잠금을 해제한다. transport는 게시 byte가 그대로인 request만 background에서 제한 시간 내 best-effort로 지우며 timeout까지 UI를 붙잡지 않는다. 앱 종료 시에는 이미 예약된 정리 task만 기존 2초 deadline의 남은 시간 동안 drain해 정상 로컬 request가 프로세스와 함께 남지 않게 하되, 중단 불가능한 UNC 호출 때문에 deadline을 넘기지는 않는다. 일시적 실패나 image timeout 시 마지막 정상 화면을 유지하면서 500ms~5초 범위의 backoff로 재시도한다.
 
 모든 `live` request에는 metre 기준의 필수 `hfw`가 포함된다. UI 기본값은 편집 가능한 `1 mm`이며 `0 < hfw < 2.4E-3 m`인 유한값만 허용한다. 이미지 위 마우스 휠 또는 입력 컨트롤 밖의 `+`/`-` 키와 버튼으로 범위 안에서 HFW를 절반(확대)/2배(축소) 조절한다. 유효한 Pixel Pitch는 같은 비율로 함께 보정된다. 유효 HFW가 바뀌면 이전 값으로 게시된 Live request를 즉시 취소·회수하고 새 값으로 재요청한다. 텍스트 편집은 300ms debounce하고 휠/키/버튼은 즉시 적용한다. 새 HFW 응답 이미지를 decode하기 전에는 이전 이미지를 보정 대기로 표시하고 이미지 지점 이동을 잠가 stale 이미지·새 Pixel Pitch 조합의 오이동을 막는다.
 
@@ -173,11 +174,11 @@ Breakpoint, Stop, 활성화 여부와 실행 상태는 runner 이벤트로 카�
 
 request와 response는 같은 통신 폴더의 서로 다른 설정 파일명을 사용하며 기본값은 `request.xml`, `response.xml`이다. 워크플로·Dialog·runner는 JSON과 같은 논리 message 객체를 다루지만 중간 JSON 파일은 만들지 않는다. 실제 wire payload는 UTF-8(BOM 없음) XML이며, Stage/Camera/Focus/Integration/Live/Abort 각각의 request/response 템플릿 12개에서 `{{{field_name}}}` placeholder를 치환하거나 추출한다. `type: "response"`, 현재 request와 동일한 `correlation_id`와 `action`, `0|1`인 `result`, Action별 필수 필드가 모두 유효한 response만 받아들인다.
 
-파일 게시에는 같은 디렉터리의 temp 파일과 atomic replace/move를 사용한다. `.drillflow.exchange.lock`을 `FileShare.None`으로 열어 로컬 프로세스와 SMB 클라이언트의 전체 exchange를 직렬화한다. polling은 파일 크기와 수정 시간이 안정된 뒤 읽고 일시적인 share violation을 재시도한다.
+파일 게시에는 같은 디렉터리의 temp 파일과 atomic replace/move를 사용한다. `.drillflow.exchange.lock`을 `FileShare.None`으로 열어 로컬 프로세스와 SMB 클라이언트의 전체 exchange를 직렬화한다. 설정한 request lifecycle의 게시 전 조건(장비 삭제 방식이면 기존 request 소멸)이 충족된 뒤 quiet interval만큼 기다리고 response baseline을 새로 확보한 다음 첫 request를 게시한다. 이 대기는 취소 가능하며 취소되면 request/temp 파일을 만들지 않고, matching response 대기는 실제 게시 뒤에 온전한 timeout 예산으로 새로 시작한다. polling은 파일 크기와 수정 시간이 안정된 뒤 읽고 일시적인 share violation을 재시도한다.
 
 request에는 서로 독립적인 두 lifecycle이 있다. 장비 lifecycle은 장비가 읽은 파일을 즉시 삭제하는지 유지하는지를 나타내고, 앱 lifecycle은 matching response를 받은 뒤 남은 request를 정리할지를 나타낸다. 앱의 기본값은 `DeleteAfterResponse`다. 기본 handshake는 stable XML response snapshot 파싱과 correlation/action 검증, 완료 request 삭제 시도, 메모리에 확보한 결과 materialize, response 삭제 시도 순서다. request 정리는 response 파일 정리와 결과 반환보다 항상 먼저 시도한다. 파일이 이미 없으면 정리된 것으로 보며, 권한·공유 문제 등으로 삭제하지 못해도 warning만 기록하고 정상 response와 다음 실행을 계속한다. `RetainUntilOverwritten`을 선택하면 앱은 request를 남기고 이후 요청이 원자적으로 교체한다. response도 `DeleteAfterRead`가 기본이며 설정에서 `RetainUntilOverwritten`으로 바꿀 수 있다.
 
-timeout retry는 기본으로 꺼져 있다. 켜면 같은 XML payload와 `correlation_id`를 다시 게시하므로 장비가 correlation ID를 내구성 있는 idempotency key로 처리하지 않는 한 물리 동작은 at-least-once다.
+timeout retry는 기본으로 꺼져 있다. 켜면 같은 XML payload와 `correlation_id`를 다시 게시하므로 장비가 correlation ID를 내구성 있는 idempotency key로 처리하지 않는 한 물리 동작은 at-least-once다. 게시 전 quiet interval은 새 Exchange의 최초 게시에 한 번만 적용하며 retry는 별도의 retry interval을 사용한다.
 
 Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI ContentDialog를 열 때마다 최신 설정의 `ExchangeDirectory + ResponseFileName`을 기본 경로로 표시하고, 감지한 request의 `correlation_id`/`action`과 Action별 기본 response 필드를 편집 가능한 논리 JSON 초안으로 제안한다. 이 초안은 UI 표현일 뿐 게시 시 해당 Action의 XML response 템플릿으로 렌더링된다. Stage/Camera/Focus/Abort에는 이미지 생성 UI가 없고, Integration/Live에서만 768×512 모자이크 PNG를 LocalAppData의 앱 전용 임시 폴더에 자동 생성하고 frozen bitmap을 메모리에 유지해 Dialog에서 바로 미리 본다. `다른 이미지`는 사용자가 편집한 필드를 보존한 채 이미지와 `image_path`만 함께 교체한다. 생성 중에는 게시를 막아 화면의 이미지와 실제 response 경로가 어긋나지 않게 한다. 생성한 파일은 앱 종료 시 삭제하고 비정상 종료 잔여물도 다음 시작 때 정리한다. 게시 시 Action별 스키마를 검증하고 원자적으로 XML response를 생성한다. 읽기 전용 경로·결과 TextBox는 명시적인 OneWay binding을 사용해 WPF가 getter-only 속성에 값을 되쓰지 않는다.
 

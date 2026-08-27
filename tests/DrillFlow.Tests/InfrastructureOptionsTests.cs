@@ -69,6 +69,44 @@ public sealed class InfrastructureOptionsTests
         Assert.Contains(result.Failures, failure => failure.Contains("at least one", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void EquipmentOptions_AllowZeroRequestPublishDelay()
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = Path.GetFullPath(Path.GetTempPath()),
+            RequestPublishDelay = TimeSpan.Zero,
+        };
+
+        var result = new EquipmentCommunicationOptionsValidator().Validate(null, options);
+
+        Assert.True(
+            result.Succeeded,
+            string.Join(Environment.NewLine, result.Failures ?? Array.Empty<string>()));
+    }
+
+    [Theory]
+    [InlineData(-1d)]
+    [InlineData(2147483648d)]
+    public void EquipmentOptions_RejectRequestPublishDelayOutsideSupportedRange(
+        double milliseconds)
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = Path.GetFullPath(Path.GetTempPath()),
+            RequestPublishDelay = TimeSpan.FromMilliseconds(milliseconds),
+        };
+
+        var result = new EquipmentCommunicationOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures,
+            failure => failure.Contains(
+                nameof(EquipmentCommunicationOptions.RequestPublishDelay),
+                StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(@"C:Exchange")]
     [InlineData(@"\Exchange")]

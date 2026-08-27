@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using DrillFlow.Application.LiveInteraction;
 using DrillFlow.Desktop.ViewModels;
 
 namespace DrillFlow.Desktop.Views;
@@ -144,7 +145,10 @@ public partial class LiveInteractionPage : Page
     {
         target = null;
         return ViewModel.HasImage
+               && TryGetSourceNaturalSize(out var sourceWidthDip, out var sourceHeightDip)
                && ViewModel.TryCreateMoveTarget(
+                   sourceWidthDip,
+                   sourceHeightDip,
                    LiveImage.ActualWidth,
                    LiveImage.ActualHeight,
                    point.X,
@@ -178,26 +182,23 @@ public partial class LiveInteractionPage : Page
         if (!ViewModel.IsTargetMarkerVisible
             || ViewModel.ImagePixelWidth <= 0
             || ViewModel.ImagePixelHeight <= 0
-            || ViewModel.ImageDpiX <= 0
-            || ViewModel.ImageDpiY <= 0
             || LiveImage.ActualWidth <= 0
-            || LiveImage.ActualHeight <= 0)
+            || LiveImage.ActualHeight <= 0
+            || !TryGetSourceNaturalSize(out var sourceWidthDip, out var sourceHeightDip))
         {
             SetTargetVisibility(Visibility.Collapsed);
             return;
         }
 
-        var naturalWidthDip = ViewModel.ImagePixelWidth * 96d / ViewModel.ImageDpiX;
-        var naturalHeightDip = ViewModel.ImagePixelHeight * 96d / ViewModel.ImageDpiY;
-        var scale = Math.Min(
-            LiveImage.ActualWidth / naturalWidthDip,
-            LiveImage.ActualHeight / naturalHeightDip);
-        var renderedWidth = naturalWidthDip * scale;
-        var renderedHeight = naturalHeightDip * scale;
-        var offsetX = (LiveImage.ActualWidth - renderedWidth) / 2d;
-        var offsetY = (LiveImage.ActualHeight - renderedHeight) / 2d;
-        var x = offsetX + ViewModel.TargetPixelX * 96d / ViewModel.ImageDpiX * scale;
-        var y = offsetY + ViewModel.TargetPixelY * 96d / ViewModel.ImageDpiY * scale;
+        var bounds = LiveImageCoordinateMapper.GetUniformRenderedBounds(
+            sourceWidthDip,
+            sourceHeightDip,
+            LiveImage.ActualWidth,
+            LiveImage.ActualHeight);
+        var x = bounds.Left
+                + ViewModel.TargetPixelX / ViewModel.ImagePixelWidth * bounds.Width;
+        var y = bounds.Top
+                + ViewModel.TargetPixelY / ViewModel.ImagePixelHeight * bounds.Height;
 
         Canvas.SetLeft(TargetCircle, x - TargetCircle.Width / 2d);
         Canvas.SetTop(TargetCircle, y - TargetCircle.Height / 2d);
@@ -211,6 +212,28 @@ public partial class LiveInteractionPage : Page
         TargetVertical.Y2 = y + 18d;
         SetTargetVisibility(Visibility.Visible);
     }
+
+    private bool TryGetSourceNaturalSize(out double widthDip, out double heightDip)
+    {
+        var source = LiveImage.Source;
+        widthDip = source?.Width ?? 0d;
+        heightDip = source?.Height ?? 0d;
+        if (IsPositiveFinite(widthDip) && IsPositiveFinite(heightDip))
+        {
+            return true;
+        }
+
+        widthDip = ViewModel.ImageDpiX > 0d
+            ? ViewModel.ImagePixelWidth * 96d / ViewModel.ImageDpiX
+            : 0d;
+        heightDip = ViewModel.ImageDpiY > 0d
+            ? ViewModel.ImagePixelHeight * 96d / ViewModel.ImageDpiY
+            : 0d;
+        return IsPositiveFinite(widthDip) && IsPositiveFinite(heightDip);
+    }
+
+    private static bool IsPositiveFinite(double value) =>
+        value > 0d && !double.IsNaN(value) && !double.IsInfinity(value);
 
     private void SetTargetVisibility(Visibility visibility)
     {

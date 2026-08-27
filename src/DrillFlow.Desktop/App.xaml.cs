@@ -314,31 +314,6 @@ public partial class App : System.Windows.Application
         EquipmentCommunicationOptions options,
         CommunicationSettings communication)
     {
-        options.ExchangeDirectory = communication.ExchangeFolder;
-        options.RequestFileName = communication.RequestFileName;
-        options.ResponseFileName = communication.ResponseFileName;
-        options.EquipmentRequestLifecycle = Enum.TryParse<EquipmentRequestFileLifecycle>(
-            communication.EquipmentRequestHandling,
-            true,
-            out var requestLifecycle)
-            ? requestLifecycle
-            : (EquipmentRequestFileLifecycle)(-1);
-        options.ApplicationRequestLifecycle = Enum.TryParse<ApplicationRequestFileLifecycle>(
-            communication.AppRequestHandling,
-            true,
-            out var applicationRequestLifecycle)
-            ? applicationRequestLifecycle
-            : (ApplicationRequestFileLifecycle)(-1);
-        options.ApplicationResponseLifecycle = Enum.TryParse<ApplicationResponseFileLifecycle>(
-            communication.AppResponseHandling,
-            true,
-            out var responseLifecycle)
-            ? responseLifecycle
-            : (ApplicationResponseFileLifecycle)(-1);
-        options.ResponseTimeout = TimeSpan.FromMilliseconds(communication.ResponseTimeoutMilliseconds);
-        options.RetryEnabled = communication.RetryEnabled;
-        options.MaximumRetryCount = communication.MaximumRetryCount;
-        options.RetryDelay = TimeSpan.FromMilliseconds(communication.RetryIntervalMilliseconds);
-        options.PollingInterval = TimeSpan.FromMilliseconds(communication.PollingIntervalMilliseconds);
+        communication.ApplyTo(options);
     }
 }

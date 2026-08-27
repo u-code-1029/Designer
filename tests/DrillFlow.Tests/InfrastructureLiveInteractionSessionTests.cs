@@ -158,6 +158,55 @@ public sealed class InfrastructureLiveInteractionSessionTests
         Assert.Equal(-2E-3, response.CurrentStageY!.Value);
     }
 
+    [Fact]
+    public async Task CanceledInteractiveStageMove_IsReclaimedBeforeLiveFramePublishes()
+    {
+        using var directory = new LiveTransportTestDirectory();
+        var options = CreateOptions(directory.Path);
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options),
+            NullLogger<FileEquipmentTransport>.Instance);
+        using var live = CreateLiveSession(
+            transport,
+            new IncrementingCorrelationProvider(800),
+            options);
+        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
+        var responsePath = Path.Combine(directory.Path, options.ResponseFileName);
+        using var moveCancellation = new CancellationTokenSource();
+        var move = live.MoveStageAsync(
+            "relative",
+            1E-3,
+            -2E-3,
+            moveCancellation.Token);
+        await WaitForTextContainingAsync(requestPath, "<correlation_id>801</correlation_id>");
+
+        moveCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => move);
+        var frame = live.RequestFrameAsync(1E-3);
+        var framePayload = await WaitForTextContainingAsync(
+            requestPath,
+            "<correlation_id>802</correlation_id>");
+
+        Assert.Contains("<action>live</action>", framePayload);
+        Assert.DoesNotContain("<correlation_id>801</correlation_id>", framePayload);
+        await WriteResponseAsync(
+            responsePath,
+            new EquipmentResponseMessage(
+                802,
+                "live",
+                0,
+                new Dictionary<string, object?>
+                {
+                    ["hfw"] = 1E-3,
+                    ["frame_count"] = 1,
+                    ["image_path"] = @"C:\camera\frame.png",
+                }));
+        var response = await frame.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(802, response.Response.CorrelationId);
+        Assert.Equal(@"C:\camera\frame.png", response.Response.ImagePath);
+    }
+
     private static EquipmentCommunicationOptions CreateOptions(string directory) => new()
     {
         ExchangeDirectory = directory,

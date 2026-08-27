@@ -29,6 +29,7 @@ certificate and timestamp before release.
 - Deploy the build containing Action-specific Stage/Camera/Focus/Integration/Live/Abort XML templates that match the actual equipment schema. Equipment wire files are UTF-8 without BOM and no larger than 4 MiB, strings are XML-escaped, and metre values use invariant scientific notation; the JSON-like message shown in diagnostics and test dialogs is only an in-memory logical representation. Saving a template with BOM/U+FEFF fails fast at startup, and an oversized response is ignored until the configured response timeout.
 - Keep equipment-returned `image_path` files immutable while the current result session displays them. Live/Integration request correlation-specific paths; the app deletes an image only when the response returns that exact app-owned requested path.
 - Leave automatic retries disabled unless the controller durably de-duplicates the same `correlation_id` and `action`.
+- Commission the decimal-second response timeout, polling interval, and pre-publication quiet interval against the real controller. The default quiet interval is 0.1 seconds and may be set to zero; increasing it also lowers Live frame cadence.
 - Do not reserve `.drillflow.exchange.lock` as the request or response filename.
 
 ## Win7 release gate
@@ -55,6 +56,7 @@ x64 virtual machines and verify:
 - post-response and canceled-request cleanup with an already-missing file and with denied/share-locked deletion; both must preserve mismatched/newer request content and allow later work to continue;
 - canceled cleanup with stable-read delay longer than its two-second budget, plus an immediate next exchange whose response timeout is shorter than that cleanup budget;
 - response timeout, retry warning, sharing violations, and controller lock contention;
+- cancellation during the configured pre-publication delay (no request or temp file may appear), and an immediate next exchange that respects the recovery interval without charging it to response timeout;
 - a cancellation-cooperative and cancellation-ignoring HTTP executor; both must reach `Stopped` on the first Stop, and late diagnostics must not contain URL credentials/query/fragment or exception text.
 
 The current development-machine smoke test does not replace this release gate.

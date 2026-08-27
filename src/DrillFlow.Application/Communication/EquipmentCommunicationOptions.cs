@@ -62,6 +62,13 @@ public sealed class EquipmentCommunicationOptions
 
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Delays the first publication of each logical equipment request. The quiet interval gives
+    /// the controller time to transition from completing the previous response to watching for
+    /// the next request. Retries use <see cref="RetryDelay"/> and do not apply this delay again.
+    /// </summary>
+    public TimeSpan RequestPublishDelay { get; set; } = TimeSpan.FromMilliseconds(100);
+
     public TimeSpan PollingInterval { get; set; } = TimeSpan.FromMilliseconds(50);
 
     public TimeSpan StableReadDelay { get; set; } = TimeSpan.FromMilliseconds(50);

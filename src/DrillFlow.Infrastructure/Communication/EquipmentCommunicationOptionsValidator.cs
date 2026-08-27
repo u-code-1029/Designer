@@ -58,6 +58,10 @@ public sealed class EquipmentCommunicationOptionsValidator
         ValidatePositiveDelay(options.PollingInterval, nameof(options.PollingInterval), failures);
         ValidatePositiveDelay(options.StableReadDelay, nameof(options.StableReadDelay), failures);
         ValidateNonNegativeDelay(options.RetryDelay, nameof(options.RetryDelay), failures);
+        ValidateNonNegativeDelay(
+            options.RequestPublishDelay,
+            nameof(options.RequestPublishDelay),
+            failures);
 
         if (options.MaximumRetryCount < 0)
         {

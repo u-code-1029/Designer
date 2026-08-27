@@ -25,6 +25,7 @@ public sealed class ApplicationRequestLifecycleOptionsTests
             ApplicationRequestFileLifecycle.DeleteAfterResponse,
             options.ApplicationRequestLifecycle);
         Assert.Equal(TimeSpan.FromMilliseconds(50), options.PollingInterval);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), options.RequestPublishDelay);
     }
 
     [Fact]

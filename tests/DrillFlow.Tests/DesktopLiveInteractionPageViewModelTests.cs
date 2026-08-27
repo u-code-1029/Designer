@@ -103,6 +103,54 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     }
 
     [Fact]
+    public async Task PixelPitchLink_IsEnabledByDefaultAndCanKeepCalibrationFixed()
+    {
+        var viewModel = CreateViewModel(
+            new PendingFrameSession(),
+            new BlockingResponseSimulator());
+        viewModel.PixelPitchUnit = "um";
+        viewModel.PixelPitchText = "2";
+
+        Assert.True(viewModel.IsPixelPitchLinkedToHorizontalFieldWidth);
+        viewModel.IsPixelPitchLinkedToHorizontalFieldWidth = false;
+        viewModel.HorizontalFieldWidthText = "0.5";
+
+        Assert.Equal(2E-6, viewModel.PixelPitchMetres, 12);
+        Assert.Equal("2", viewModel.PixelPitchText);
+
+        viewModel.IsPixelPitchLinkedToHorizontalFieldWidth = true;
+        viewModel.HorizontalFieldWidthText = "0.25";
+
+        Assert.Equal(1E-6, viewModel.PixelPitchMetres, 12);
+        Assert.Equal("1", viewModel.PixelPitchText);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task ImageTargetWithoutPixelPitch_ShowsVisibleCalibrationWarning()
+    {
+        var viewModel = CreateViewModel(
+            new PendingFrameSession(),
+            new BlockingResponseSimulator());
+        ApplyDecodedFrame(viewModel, 1E-3);
+
+        var created = viewModel.TryCreateMoveTarget(
+            100d,
+            100d,
+            100d,
+            100d,
+            50d,
+            50d,
+            out var target);
+
+        Assert.False(created);
+        Assert.Null(target);
+        Assert.True(viewModel.StatusIsWarning);
+        Assert.Equal("LiveStatusPixelPitchRequired", viewModel.StatusMessage);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
     public async Task ManualActionEditors_ExposeCanonicalDefaultsAndImmediateValidation()
     {
         var session = new PendingFrameSession();
@@ -135,6 +183,63 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         viewModel.StopCommand.Execute(null);
         await WaitUntilAsync(() => !viewModel.IsInteractionActive);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task CameraResponse_UpdatesLatestAbsoluteCameraPosition()
+    {
+        var session = new InteractiveMoveSession
+        {
+            CameraResponseXMetres = -4.25E-6,
+            CameraResponseYMetres = 8.75E-6
+        };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.ExecuteCameraMoveCommand.ExecuteAsync(null);
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.HasCameraPosition);
+        Assert.Contains("-4.25", viewModel.CameraXText);
+        Assert.Contains("8.75", viewModel.CameraYText);
+        Assert.Equal(702, viewModel.LastCorrelationId);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task FocusResponse_PreservesEverySampleForAutoScaledScatterChart()
+    {
+        var session = new InteractiveMoveSession
+        {
+            FocusResponseSamples = new IReadOnlyList<double>[]
+            {
+                new[] { 0.25E-6, 450d },
+                new[] { 1.5E-6, 900d },
+                new[] { 3.75E-6, 1800d }
+            }
+        };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.ExecuteFocusCommand.ExecuteAsync(null);
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.HasFocusSamples);
+        Assert.Equal(3, viewModel.FocusSamples.Count);
+        Assert.Equal(0.25E-6, viewModel.FocusSamples[0].ZMetres, 15);
+        Assert.Equal(450d, viewModel.FocusSamples[0].Sharpness, 15);
+        Assert.Equal(3.75E-6, viewModel.FocusSamples[2].ZMetres, 15);
+        Assert.Equal(1800d, viewModel.FocusSamples[2].Sharpness, 15);
+        Assert.Equal(703, viewModel.LastCorrelationId);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         await viewModel.ShutdownAsync();
     }
 
@@ -276,6 +381,81 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     }
 
     [Fact]
+    public async Task CancelNonLiveStageRequest_CancelsMoveAndAutomaticallyResumesLiveFrames()
+    {
+        var session = new InteractiveMoveSession { BlockMove = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(viewModel.CancelNonLiveRequestCommand.CanExecute(null));
+        var move = viewModel.ExecuteStageMoveCommand.ExecuteAsync(null);
+        await session.MoveStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.IsNonLiveRequestPending);
+        Assert.True(viewModel.CancelNonLiveRequestCommand.CanExecute(null));
+        viewModel.CancelNonLiveRequestCommand.Execute(null);
+
+        Assert.False(viewModel.IsNonLiveRequestPending);
+        Assert.False(viewModel.CancelNonLiveRequestCommand.CanExecute(null));
+        await session.MoveCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await move.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, session.MaximumConcurrentEquipmentCalls);
+        Assert.True(viewModel.IsStreamingRequested);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task ImageTargetMove_UsesExactRenderedPointAndCancelClearsOnlyItsMarker()
+    {
+        var session = new InteractiveMoveSession { BlockMove = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        ApplyDecodedFrame(viewModel, 1E-3);
+        viewModel.PixelPitchUnit = "um";
+        viewModel.PixelPitchText = "1";
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        // A 100x100 source with a 50x100 natural DIP preview renders at x=50..150 in this
+        // 200x200 viewport. The click is therefore exactly source pixel (75, 25).
+        Assert.True(viewModel.TryCreateMoveTarget(
+            50d,
+            100d,
+            200d,
+            200d,
+            125d,
+            50d,
+            out var target));
+        Assert.NotNull(target);
+        Assert.Equal(75d, target!.PixelX, 12);
+        Assert.Equal(25d, target.PixelY, 12);
+
+        var move = viewModel.MoveToTargetCommand.ExecuteAsync(target);
+        await session.MoveStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.IsTargetMarkerVisible);
+        Assert.Equal(25E-6, session.LastStageMoveXMetres, 12);
+        Assert.Equal(-25E-6, session.LastStageMoveYMetres, 12);
+        viewModel.CancelNonLiveRequestCommand.Execute(null);
+
+        Assert.False(viewModel.IsTargetMarkerVisible);
+        await session.MoveCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await move.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.True(viewModel.HasTarget);
+        Assert.Equal(75d, viewModel.TargetPixelX, 12);
+        Assert.Equal(25d, viewModel.TargetPixelY, 12);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
     public async Task Deactivate_CancelsOwnedMoveAndDoesNotResumeFrameLoop()
     {
         var session = new InteractiveMoveSession { BlockMove = true };
@@ -299,6 +479,26 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     }
 
     [Fact]
+    public async Task Shutdown_CancelsPendingNonLiveRequestWithoutRestartingLiveFrames()
+    {
+        var session = new InteractiveMoveSession { BlockMove = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        var move = viewModel.ExecuteStageMoveCommand.ExecuteAsync(null);
+        await session.MoveStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.ShutdownAsync().WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await move.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(session.MoveCanceled.Task.IsCompleted);
+        Assert.Equal(1, session.FrameCallCount);
+        Assert.False(viewModel.IsStreamingRequested);
+        Assert.False(viewModel.IsNonLiveRequestPending);
+        Assert.False(viewModel.CancelNonLiveRequestCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task SuccessfulMove_FromStoppedPreviewAlwaysResumesFrameLoop()
     {
         var session = new InteractiveMoveSession();
@@ -316,6 +516,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(viewModel.IsStreamingRequested);
+        Assert.False(viewModel.IsTargetMarkerVisible);
+        Assert.True(viewModel.HasTarget);
         Assert.Equal(1, session.MoveCallCount);
         viewModel.StopCommand.Execute(null);
         await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
@@ -340,6 +542,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         Assert.False(viewModel.IsStreamingRequested);
         Assert.False(viewModel.IsInteractionActive);
         Assert.True(viewModel.StatusIsError);
+        Assert.False(viewModel.IsTargetMarkerVisible);
+        Assert.True(viewModel.HasTarget);
         await viewModel.ShutdownAsync();
     }
 
@@ -361,6 +565,33 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         Assert.Equal(1, session.FrameCallCount);
         Assert.False(viewModel.IsInteractionActive);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task CancelNonLiveIntegrationRequest_CancelsCaptureAndAutomaticallyResumesLiveFrames()
+    {
+        var session = new InteractiveMoveSession { BlockCapture = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        var capture = viewModel.CaptureCommand.ExecuteAsync(null);
+        await session.CaptureStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.IsNonLiveRequestPending);
+        Assert.True(viewModel.CancelNonLiveRequestCommand.CanExecute(null));
+        viewModel.CancelNonLiveRequestCommand.Execute(null);
+
+        Assert.False(viewModel.CancelNonLiveRequestCommand.CanExecute(null));
+        await session.CaptureCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await capture.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, session.MaximumConcurrentEquipmentCalls);
+        Assert.True(viewModel.IsStreamingRequested);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         await viewModel.ShutdownAsync();
     }
 
@@ -670,6 +901,22 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         public int MoveCallCount { get; private set; }
 
+        public double LastStageMoveXMetres { get; private set; }
+
+        public double LastStageMoveYMetres { get; private set; }
+
+        public double CameraResponseXMetres { get; set; } = -3.2E-9;
+
+        public double CameraResponseYMetres { get; set; } = 7.62E-6;
+
+        public IReadOnlyList<IReadOnlyList<double>> FocusResponseSamples { get; set; } =
+            new IReadOnlyList<double>[]
+            {
+                new[] { 0.1E-6, 500d },
+                new[] { 1.5E-6, 600d },
+                new[] { 2.1E-6, 1200d }
+            };
+
         public bool MoveStartedAfterFrameCancellation { get; private set; }
 
         public bool CaptureStartedAfterFrameCancellation { get; private set; }
@@ -722,6 +969,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             try
             {
                 MoveCallCount++;
+                LastStageMoveXMetres = stageXMetres;
+                LastStageMoveYMetres = stageYMetres;
                 MoveStartedAfterFrameCancellation = FirstFrameCanceled.Task.IsCompleted;
                 MoveStarted.TrySetResult(true);
                 if (FailMove)
@@ -766,7 +1015,25 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             double cameraYMetres,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            cancellationToken.ThrowIfCancellationRequested();
+            EnterCall();
+            try
+            {
+                return Task.FromResult(
+                    new EquipmentResponseMessage(
+                        702,
+                        "camera",
+                        0,
+                        new Dictionary<string, object?>
+                        {
+                            ["current_camera_x"] = CameraResponseXMetres,
+                            ["current_camera_y"] = CameraResponseYMetres
+                        }));
+            }
+            finally
+            {
+                ExitCall();
+            }
         }
 
         public Task<EquipmentResponseMessage> FocusAsync(
@@ -775,7 +1042,24 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             int steps,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            cancellationToken.ThrowIfCancellationRequested();
+            EnterCall();
+            try
+            {
+                return Task.FromResult(
+                    new EquipmentResponseMessage(
+                        703,
+                        "focus",
+                        0,
+                        new Dictionary<string, object?>
+                        {
+                            ["z_to_sharpness_2d"] = FocusResponseSamples
+                        }));
+            }
+            finally
+            {
+                ExitCall();
+            }
         }
 
         public async Task<LiveImageExchangeResult> IntegrateAsync(

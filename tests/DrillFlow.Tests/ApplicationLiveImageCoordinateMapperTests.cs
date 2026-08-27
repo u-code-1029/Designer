@@ -146,6 +146,116 @@ public sealed class ApplicationLiveImageCoordinateMapperTests
         Assert.Equal(0d, target.MoveYMetres, 12);
     }
 
+    [Fact]
+    public void SourceNaturalSize_MapsRenderedPreviewBackToOriginalPixelCoordinates()
+    {
+        // The UI renders the decoded preview as a square even though physical-coordinate
+        // reporting keeps the original 2:1 pixel dimensions. Hit testing must follow the
+        // preview WPF actually rendered, then normalize back into the original pixel space.
+        var hit = LiveImageCoordinateMapper.TryMapToRelativeMoveFromSourceNaturalSize(
+            4000,
+            2000,
+            480d,
+            480d,
+            900d,
+            600d,
+            600d,
+            150d,
+            1E-6,
+            1,
+            -1,
+            out var target);
+
+        Assert.True(hit);
+        Assert.Equal(3000d, target.SourceX, 12);
+        Assert.Equal(500d, target.SourceY, 12);
+        Assert.Equal(1E-3, target.MoveXMetres, 12);
+        Assert.Equal(0.5E-3, target.MoveYMetres, 12);
+    }
+
+    [Theory]
+    [InlineData(1d)]
+    [InlineData(1.25d)]
+    [InlineData(1.5d)]
+    [InlineData(2d)]
+    public void SourceNaturalSize_IsInvariantWhenAllRenderedGeometryUsesMonitorDpiScale(
+        double monitorDpiScale)
+    {
+        const int sourceWidth = 4096;
+        const int sourceHeight = 2160;
+        const double naturalWidth = 960d;
+        const double naturalHeight = 540d;
+        const double viewportWidth = 1100d;
+        const double viewportHeight = 800d;
+        const double expectedSourceX = 3072d;
+        const double expectedSourceY = 540d;
+        var bounds = LiveImageCoordinateMapper.GetUniformRenderedBounds(
+            naturalWidth,
+            naturalHeight,
+            viewportWidth,
+            viewportHeight);
+        var clickX = bounds.Left + expectedSourceX / sourceWidth * bounds.Width;
+        var clickY = bounds.Top + expectedSourceY / sourceHeight * bounds.Height;
+
+        var hit = LiveImageCoordinateMapper.TryMapToRelativeMoveFromSourceNaturalSize(
+            sourceWidth,
+            sourceHeight,
+            naturalWidth * monitorDpiScale,
+            naturalHeight * monitorDpiScale,
+            viewportWidth * monitorDpiScale,
+            viewportHeight * monitorDpiScale,
+            clickX * monitorDpiScale,
+            clickY * monitorDpiScale,
+            2E-6,
+            1,
+            1,
+            out var target);
+
+        Assert.True(hit);
+        Assert.Equal(expectedSourceX, target.SourceX, 10);
+        Assert.Equal(expectedSourceY, target.SourceY, 10);
+        Assert.Equal(0.002048d, target.MoveXMetres, 12);
+        Assert.Equal(-0.00108d, target.MoveYMetres, 12);
+    }
+
+    [Fact]
+    public void UniformRenderedBounds_SourcePointRoundTripsThroughLetterboxedViewport()
+    {
+        const int sourceWidth = 4096;
+        const int sourceHeight = 2160;
+        const double sourcePixelX = 1571.25d;
+        const double sourcePixelY = 777.75d;
+        var bounds = LiveImageCoordinateMapper.GetUniformRenderedBounds(
+            640d,
+            480d,
+            1000d,
+            500d);
+        var viewportX = bounds.Left + sourcePixelX / sourceWidth * bounds.Width;
+        var viewportY = bounds.Top + sourcePixelY / sourceHeight * bounds.Height;
+
+        var hit = LiveImageCoordinateMapper.TryMapToRelativeMoveFromSourceNaturalSize(
+            sourceWidth,
+            sourceHeight,
+            640d,
+            480d,
+            1000d,
+            500d,
+            viewportX,
+            viewportY,
+            1E-6,
+            1,
+            1,
+            out var target);
+
+        Assert.Equal(166.66666666666666d, bounds.Left, 10);
+        Assert.Equal(0d, bounds.Top, 12);
+        Assert.Equal(666.6666666666666d, bounds.Width, 10);
+        Assert.Equal(500d, bounds.Height, 12);
+        Assert.True(hit);
+        Assert.Equal(sourcePixelX, target.SourceX, 10);
+        Assert.Equal(sourcePixelY, target.SourceY, 10);
+    }
+
     [Theory]
     [InlineData(0d, 1, 1)]
     [InlineData(double.NaN, 1, 1)]

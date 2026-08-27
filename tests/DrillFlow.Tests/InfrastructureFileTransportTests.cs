@@ -43,6 +43,104 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_WaitsConfiguredDelayBeforeInitialRequestPublication()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.RequestPublishDelay = TimeSpan.FromMilliseconds(250);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(116);
+        var elapsed = Stopwatch.StartNew();
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await Task.Delay(75);
+        Assert.False(File.Exists(RequestPath(options)));
+
+        await WaitForRequestAsync(options, request);
+        elapsed.Stop();
+        Assert.True(
+            elapsed.Elapsed >= TimeSpan.FromMilliseconds(200),
+            $"Request was published after only {elapsed.Elapsed.TotalMilliseconds:F0} ms.");
+
+        PublishResponse(options, StageResponse(116, 0, 0));
+        await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Exchange_CanceledDuringInitialDelayLeavesNoRequestOrTemporaryFile()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.RequestPublishDelay = TimeSpan.FromSeconds(2);
+        using var transport = CreateTransport(options);
+        using var cancellation = new CancellationTokenSource();
+        var request = StageRequest(117);
+
+        var exchange = transport.ExchangeAsync(request, cancellation.Token);
+        var lockPath = Path.Combine(
+            options.ExchangeDirectory,
+            EquipmentCommunicationOptions.ExchangeLockFileName);
+        await WaitForFileExistsAsync(lockPath);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3)));
+        Assert.False(File.Exists(RequestPath(options)));
+        Assert.Empty(Directory.GetFiles(
+            options.ExchangeDirectory,
+            options.RequestFileName + ".*.tmp"));
+    }
+
+    [Fact]
+    public async Task Exchange_InitialDelayDoesNotConsumeResponseTimeout()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.RequestPublishDelay = TimeSpan.FromMilliseconds(250);
+        options.ResponseTimeout = TimeSpan.FromMilliseconds(180);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(120);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        PublishResponse(options, StageResponse(120, 0, 0));
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(120, response.CorrelationId);
+    }
+
+    [Fact]
+    public async Task ExchangeGate_AppliesQuietDelayBetweenCompletedAndNextRequest()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.RequestPublishDelay = TimeSpan.FromMilliseconds(250);
+        using var transport = CreateTransport(options);
+        var firstRequest = StageRequest(118);
+        var secondRequest = StageRequest(119);
+
+        var first = transport.ExchangeAsync(firstRequest, CancellationToken.None);
+        await WaitForRequestAsync(options, firstRequest);
+        PublishResponse(options, StageResponse(118, 0, 0));
+        await first.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+        Assert.False(File.Exists(RequestPath(options)));
+
+        var elapsed = Stopwatch.StartNew();
+        var second = transport.ExchangeAsync(secondRequest, CancellationToken.None);
+        await Task.Delay(75);
+        Assert.False(File.Exists(RequestPath(options)));
+
+        await WaitForRequestAsync(options, secondRequest);
+        elapsed.Stop();
+        Assert.True(
+            elapsed.Elapsed >= TimeSpan.FromMilliseconds(200),
+            $"Next request was published after only {elapsed.Elapsed.TotalMilliseconds:F0} ms.");
+
+        PublishResponse(options, StageResponse(119, 0, 0));
+        await second.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Exchange_RequiresBothMatchingCorrelationAndAction()
     {
         using var directory = new TempDirectory();
@@ -151,7 +249,7 @@ public sealed class InfrastructureFileTransportTests
     {
         using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
-        options.ResponseTimeout = TimeSpan.FromMilliseconds(120);
+        options.ResponseTimeout = TimeSpan.FromSeconds(1);
         options.RetryEnabled = true;
         options.MaximumRetryCount = 1;
         options.RetryDelay = TimeSpan.Zero;
@@ -160,12 +258,15 @@ public sealed class InfrastructureFileTransportTests
 
         var exchange = transport.ExchangeAsync(request, CancellationToken.None);
         var first = await WaitForRequestAsync(options, request);
-        await Task.Delay(150);
-        var second = await WaitForRequestAsync(options, request);
+        var firstWriteTimeUtc = File.GetLastWriteTimeUtc(RequestPath(options));
+        var second = await WaitForRepublishedRequestAsync(
+            options,
+            request,
+            firstWriteTimeUtc);
         Assert.Equal(first, second);
 
         PublishResponse(options, StageResponse(107, 0, 0));
-        Assert.Equal(107, (await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3))).CorrelationId);
+        Assert.Equal(107, (await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(5))).CorrelationId);
     }
 
     [Fact]
@@ -370,6 +471,58 @@ public sealed class InfrastructureFileTransportTests
         throw new TimeoutException("The canceled request was not cleaned up.");
     }
 
+    private static async Task WaitForFileExistsAsync(string path)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(path))
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("The expected file was not created.");
+    }
+
+    private async Task<byte[]> WaitForRepublishedRequestAsync(
+        EquipmentCommunicationOptions options,
+        EquipmentRequestMessage expected,
+        DateTime firstWriteTimeUtc)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(4);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var path = RequestPath(options);
+                if (File.Exists(path)
+                    && File.GetLastWriteTimeUtc(path) != firstWriteTimeUtc)
+                {
+                    var bytes = File.ReadAllBytes(path);
+                    if (_codec.TryDeserializeRequest(bytes, out var parsed)
+                        && parsed!.CorrelationId == expected.CorrelationId
+                        && string.Equals(
+                            parsed.Action,
+                            expected.Action,
+                            StringComparison.Ordinal))
+                    {
+                        return bytes;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("The equipment request was not republished.");
+    }
+
     private void PublishResponse(
         EquipmentCommunicationOptions options,
         EquipmentResponseMessage response)
@@ -467,6 +620,7 @@ public sealed class InfrastructureFileTransportTests
             RequestFileName = "equipment.request.xml",
             ResponseFileName = "equipment.response.xml",
             ResponseTimeout = TimeSpan.FromSeconds(2),
+            RequestPublishDelay = TimeSpan.Zero,
             PollingInterval = TimeSpan.FromMilliseconds(10),
             StableReadDelay = TimeSpan.FromMilliseconds(10),
             RetryDelay = TimeSpan.FromMilliseconds(10)
