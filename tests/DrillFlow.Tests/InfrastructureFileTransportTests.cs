@@ -31,8 +31,8 @@ public sealed class InfrastructureFileTransportTests
         var requestXml = Encoding.UTF8.GetString(requestBytes);
         Assert.Contains("<type>request</type>", requestXml, StringComparison.Ordinal);
         Assert.Contains("<correlation_id>101</correlation_id>", requestXml, StringComparison.Ordinal);
-        Assert.Contains("<stage_x>1E-3</stage_x>", requestXml, StringComparison.Ordinal);
-        Assert.Contains("<stage_y>-2.56E-4</stage_y>", requestXml, StringComparison.Ordinal);
+        Assert.Contains("<stage_x>1E-03</stage_x>", requestXml, StringComparison.Ordinal);
+        Assert.Contains("<stage_y>-2.56E-04</stage_y>", requestXml, StringComparison.Ordinal);
 
         PublishResponse(options, StageResponse(101, 0.125, -0.25));
         var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
@@ -41,6 +41,35 @@ public sealed class InfrastructureFileTransportTests
         Assert.Equal(EquipmentActionNames.Stage, response.Action);
         Assert.Equal(0.125, response.CurrentStageX);
         Assert.Equal(-0.25, response.CurrentStageY);
+    }
+
+    [Fact]
+    public async Task Exchange_DetectsCompactStageResponseWithPaddedScientificExponents()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(121, 1E-6, -2.56E-3);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        PublishRawResponse(
+            options,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+            + "<response><type>response</type>"
+            + "<correlation_id>121</correlation_id>"
+            + "<action>stage</action><result>0</result>"
+            + "<current_stage_x>-3.2E-06</current_stage_x>"
+            + "<current_stage_y>4.12E-04</current_stage_y>"
+            + "</response>");
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(121, response.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, response.Action);
+        Assert.Equal(0, response.Result);
+        Assert.Equal(-3.2E-6, response.CurrentStageX);
+        Assert.Equal(4.12E-4, response.CurrentStageY);
     }
 
     [Fact]
@@ -537,6 +566,23 @@ public sealed class InfrastructureFileTransportTests
         var path = ResponsePath(options);
         var temp = path + ".tmp";
         File.WriteAllBytes(temp, _codec.SerializeResponse(response));
+        if (File.Exists(path))
+        {
+            File.Replace(temp, path, null);
+        }
+        else
+        {
+            File.Move(temp, path);
+        }
+    }
+
+    private static void PublishRawResponse(
+        EquipmentCommunicationOptions options,
+        string xml)
+    {
+        var path = ResponsePath(options);
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, xml, new UTF8Encoding(false));
         if (File.Exists(path))
         {
             File.Replace(temp, path, null);

@@ -1000,17 +1000,56 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             throw new InvalidDataException("Equipment numbers must be finite.");
         }
 
-        var text = value.ToString("0.#################E+0", CultureInfo.InvariantCulture);
-        var marker = text.IndexOf('E');
-        var exponent = int.Parse(
-            text.Substring(marker + 1),
-            NumberStyles.AllowLeadingSign,
-            CultureInfo.InvariantCulture);
-        return text.Substring(0, marker)
-               + "E"
-               + (exponent > 0 ? "+" : string.Empty)
-               + exponent.ToString(CultureInfo.InvariantCulture);
+        // The equipment contract uses an explicit sign and at least two exponent digits
+        // (for example 1E-06). NumberStyles.Float remains deliberately permissive on input,
+        // so both the padded equipment spelling and previously authored 1E-6 values parse.
+        return value.ToString("0.#################E+00", CultureInfo.InvariantCulture);
     }
+
+    private static string NormalizeResponseFormatting(string text)
+    {
+        // Equipment responses may be emitted as one line even when the answer-sheet template
+        // is indented. Ignore only formatting whitespace between XML elements (and around the
+        // document); never remove whitespace from an actual non-empty field value.
+        var builder = new StringBuilder(text.Length);
+        var index = 0;
+        var leadingEnd = 0;
+        while (leadingEnd < text.Length && IsXmlFormattingWhitespace(text[leadingEnd]))
+        {
+            leadingEnd++;
+        }
+
+        if (leadingEnd < text.Length && text[leadingEnd] == '<')
+        {
+            index = leadingEnd;
+        }
+
+        while (index < text.Length)
+        {
+            var current = text[index++];
+            builder.Append(current);
+            if (current != '>')
+            {
+                continue;
+            }
+
+            var whitespaceStart = index;
+            while (index < text.Length && IsXmlFormattingWhitespace(text[index]))
+            {
+                index++;
+            }
+
+            if (index < text.Length && text[index] != '<')
+            {
+                builder.Append(text, whitespaceStart, index - whitespaceStart);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsXmlFormattingWhitespace(char value) =>
+        value == ' ' || value == '\t' || value == '\r' || value == '\n';
 
     private static bool TryDecode(byte[]? payload, out string text)
     {
@@ -1167,19 +1206,25 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         private readonly string _action;
         private readonly string _direction;
         private readonly IReadOnlyList<string> _placeholders;
-        private readonly IReadOnlyList<string> _literals;
+        private readonly IReadOnlyList<string> _renderLiterals;
+        private readonly IReadOnlyList<string> _extractionLiterals;
+        private readonly bool _normalizeResponseFormatting;
         private readonly IReadOnlyList<int> _materializationOrder;
 
         private TemplateDefinition(
             string action,
             string direction,
             IReadOnlyList<string> placeholders,
-            IReadOnlyList<string> literals)
+            IReadOnlyList<string> renderLiterals,
+            IReadOnlyList<string> extractionLiterals,
+            bool normalizeResponseFormatting)
         {
             _action = action;
             _direction = direction;
             _placeholders = placeholders;
-            _literals = literals;
+            _renderLiterals = renderLiterals;
+            _extractionLiterals = extractionLiterals;
+            _normalizeResponseFormatting = normalizeResponseFormatting;
             _materializationOrder = Enumerable.Range(0, placeholders.Count)
                 .OrderBy(index => GetMaterializationPriority(placeholders[index]))
                 .ThenBy(index => index)
@@ -1279,11 +1324,55 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 }
             }
 
+            var normalizeResponseFormatting = string.Equals(
+                direction,
+                "response",
+                StringComparison.Ordinal);
+            IReadOnlyList<string> extractionLiterals = literals.AsReadOnly();
+            if (normalizeResponseFormatting)
+            {
+                var normalizedTemplate = NormalizeResponseFormatting(template);
+                var normalizedMatches = PlaceholderPattern.Matches(normalizedTemplate);
+                var normalizedPlaceholders = normalizedMatches
+                    .Cast<Match>()
+                    .Select(match => match.Groups[1].Value)
+                    .ToArray();
+                if (!normalizedPlaceholders.SequenceEqual(placeholders, StringComparer.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"The {action} {direction} template could not be normalized safely.");
+                }
+
+                var normalizedLiterals = new List<string>();
+                cursor = 0;
+                foreach (Match match in normalizedMatches)
+                {
+                    normalizedLiterals.Add(
+                        normalizedTemplate.Substring(cursor, match.Index - cursor));
+                    cursor = match.Index + match.Length;
+                }
+
+                normalizedLiterals.Add(normalizedTemplate.Substring(cursor));
+                extractionLiterals = normalizedLiterals.AsReadOnly();
+            }
+
+            for (var index = 1; index < extractionLiterals.Count - 1; index++)
+            {
+                if (extractionLiterals[index].Length == 0)
+                {
+                    throw new InvalidDataException(
+                        $"The {action} {direction} template contains adjacent placeholders "
+                        + "after response formatting is normalized.");
+                }
+            }
+
             return new TemplateDefinition(
                 action,
                 direction,
                 placeholders.AsReadOnly(),
-                literals.AsReadOnly());
+                literals.AsReadOnly(),
+                extractionLiterals,
+                normalizeResponseFormatting);
         }
 
         public string Render(IReadOnlyDictionary<string, string> values)
@@ -1291,7 +1380,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             var builder = new StringBuilder();
             for (var index = 0; index < _placeholders.Count; index++)
             {
-                builder.Append(_literals[index]);
+                builder.Append(_renderLiterals[index]);
                 if (!values.TryGetValue(_placeholders[index], out var value))
                 {
                     throw new InvalidDataException(
@@ -1301,7 +1390,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 builder.Append(EscapeXml(value));
             }
 
-            builder.Append(_literals[_literals.Count - 1]);
+            builder.Append(_renderLiterals[_renderLiterals.Count - 1]);
             return builder.ToString();
         }
 
@@ -1314,8 +1403,13 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 throw new ArgumentNullException(nameof(candidateValidator));
             }
 
+            if (_normalizeResponseFormatting)
+            {
+                text = NormalizeResponseFormatting(text);
+            }
+
             var candidates = new List<IReadOnlyDictionary<string, string>>();
-            if (!text.StartsWith(_literals[0], StringComparison.Ordinal))
+            if (!text.StartsWith(_extractionLiterals[0], StringComparison.Ordinal))
             {
                 return new ExtractionResult(candidates.AsReadOnly(), false, false);
             }
@@ -1330,7 +1424,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             ExploreCandidates(
                 text,
                 placeholderIndex: 0,
-                cursor: _literals[0].Length,
+                cursor: _extractionLiterals[0].Length,
                 valueStarts,
                 valueEnds,
                 candidateValidator,
@@ -1398,7 +1492,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 return;
             }
 
-            var nextLiteral = _literals[placeholderIndex + 1];
+            var nextLiteral = _extractionLiterals[placeholderIndex + 1];
             if (placeholderIndex == _placeholders.Count - 1)
             {
                 var end = text.Length - nextLiteral.Length;

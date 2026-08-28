@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using DrillFlow.Application.Communication;
 using DrillFlow.Infrastructure.Communication;
 using Xunit;
@@ -52,11 +53,97 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
 
         var xml = Encoding.UTF8.GetString(_codec.SerializeRequest(integration));
 
-        Assert.Contains("<hfw>3.02E-6</hfw>", xml, StringComparison.Ordinal);
+        Assert.Contains("<hfw>3.02E-06</hfw>", xml, StringComparison.Ordinal);
         Assert.Contains("<image_path>C:\\Images\\A&amp;B.png</image_path>", xml, StringComparison.Ordinal);
         Assert.DoesNotContain("{{{", xml, StringComparison.Ordinal);
         Assert.True(_codec.TryDeserializeRequest(Encoding.UTF8.GetBytes(xml), out var restored));
         Assert.Equal(@"C:\Images\A&B.png", restored!.Parameters["image_path"]);
+    }
+
+    [Fact]
+    public void StageRequest_PadsScientificExponentToTwoDigits()
+    {
+        var request = new EquipmentRequestMessage(
+            43,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 1E-6,
+                ["stage_y"] = -2.56E-3
+            });
+
+        var xml = Encoding.UTF8.GetString(_codec.SerializeRequest(request));
+
+        Assert.Contains("<stage_x>1E-06</stage_x>", xml, StringComparison.Ordinal);
+        Assert.Contains("<stage_y>-2.56E-03</stage_y>", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("<stage_x>1E-6</stage_x>", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("<stage_y>-2.56E-3</stage_y>", xml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StageResponse_DeserializesRegardlessOfLineBreakLayout()
+    {
+        var expectedRequest = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var serialized = Encoding.UTF8.GetString(
+            _codec.SerializeResponse(CreateResponse(
+                expectedRequest.CorrelationId,
+                EquipmentActionNames.Stage)));
+        var lf = serialized.Replace("\r\n", "\n");
+        var variants = new[]
+        {
+            lf,
+            lf.Replace("\n", "\r\n"),
+            lf.Replace("\n", "\r"),
+            Regex.Replace(lf, @">\s+<", "><").Trim(),
+            " \t\r\n" + Regex.Replace(lf, @">\s+<", ">  <").Trim() + "\r\n "
+        };
+
+        foreach (var xml in variants)
+        {
+            Assert.True(_codec.TryDeserializeResponse(
+                Encoding.UTF8.GetBytes(xml),
+                expectedRequest,
+                out var response));
+            Assert.NotNull(response);
+            Assert.Equal(expectedRequest.CorrelationId, response!.CorrelationId);
+            Assert.Equal(EquipmentActionNames.Stage, response.Action);
+            Assert.Equal(0, response.Result);
+            Assert.Equal(-3.2E-6, response.CurrentStageX);
+            Assert.Equal(4.12E-4, response.CurrentStageY);
+        }
+    }
+
+    [Theory]
+    [InlineData("-3.2E-6", "4.12E-4")]
+    [InlineData("-3.2E-06", "4.12E-04")]
+    public void StageResponse_AcceptsPaddedAndUnpaddedScientificExponents(
+        string stageX,
+        string stageY)
+    {
+        var expectedRequest = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var xml = Encoding.UTF8.GetString(
+            _codec.SerializeResponse(CreateResponse(
+                expectedRequest.CorrelationId,
+                EquipmentActionNames.Stage)));
+        xml = Regex.Replace(
+            xml,
+            @"(?<=<current_stage_x>).*?(?=</current_stage_x>)",
+            stageX);
+        xml = Regex.Replace(
+            xml,
+            @"(?<=<current_stage_y>).*?(?=</current_stage_y>)",
+            stageY);
+
+        Assert.True(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            expectedRequest,
+            out var response));
+        Assert.NotNull(response);
+        Assert.Equal(-3.2E-6, response!.CurrentStageX);
+        Assert.Equal(4.12E-4, response.CurrentStageY);
     }
 
     [Fact]
@@ -137,7 +224,7 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
 
         var xml = Encoding.UTF8.GetString(_codec.SerializeRequest(request));
 
-        Assert.Contains("<hfw>1E-3</hfw>", xml, StringComparison.Ordinal);
+        Assert.Contains("<hfw>1E-03</hfw>", xml, StringComparison.Ordinal);
         Assert.Contains("{{{hfw}}}", xml, StringComparison.Ordinal);
         Assert.Contains("&amp;&apos;frame&apos;", xml, StringComparison.Ordinal);
         Assert.True(_codec.TryDeserializeRequest(Encoding.UTF8.GetBytes(xml), out var restored));
@@ -473,7 +560,7 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
                 ["z_to_sharpness_2d"] = new[] { new[] { 1d, 1d } }
             }));
         var xml = Encoding.UTF8.GetString(compact).Replace(
-            "[[1E0,1E0]]",
+            "[[1E+00,1E+00]]",
             " [ [ 0.1 , 500 ] ,\r\n\t[ 1.5 , 600 ] ] ");
 
         Assert.True(_codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), out var restored));

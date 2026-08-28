@@ -65,7 +65,7 @@ public sealed class InfrastructureLiveInteractionSessionTests
             requestPath,
             "<correlation_id>502</correlation_id>");
         Assert.Contains("<action>live</action>", livePayload);
-        Assert.Contains("<hfw>1E-3</hfw>", livePayload);
+        Assert.Contains("<hfw>1E-03</hfw>", livePayload);
         Assert.Contains("<frame_count>1</frame_count>", livePayload);
         await WriteResponseAsync(
             responsePath,
@@ -138,7 +138,7 @@ public sealed class InfrastructureLiveInteractionSessionTests
             "<correlation_id>702</correlation_id>");
 
         Assert.Contains("<action>stage</action>", movePayload);
-        Assert.Contains("<stage_x>1E-3</stage_x>", movePayload);
+        Assert.Contains("<stage_x>1E-03</stage_x>", movePayload);
         Assert.DoesNotContain("<correlation_id>701</correlation_id>", movePayload);
         await WriteResponseAsync(
             responsePath,
