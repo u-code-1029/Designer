@@ -92,6 +92,39 @@
                         </ui:Button>
                     </Grid>
 
+                    <TextBlock Text="{DynamicResource LiveImageFolder}"
+                               Style="{StaticResource FieldLabelStyle}" />
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding LiveImageFolder, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="{DynamicResource LiveImageFolderHint}" />
+                        <ui:Button Grid.Column="2"
+                                   Content="{DynamicResource Browse}"
+                                   Command="{Binding BrowseLiveImageFolderCommand}">
+                            <ui:Button.Icon>
+                                <ui:SymbolIcon Symbol="FolderSearch24" />
+                            </ui:Button.Icon>
+                        </ui:Button>
+                        <ui:Button Grid.Column="4"
+                                   Command="{Binding OpenLiveImageFolderCommand}"
+                                   ToolTip="{DynamicResource OpenLiveImageFolder}"
+                                   AutomationProperties.Name="{DynamicResource OpenLiveImageFolder}">
+                            <ui:Button.Icon>
+                                <ui:SymbolIcon Symbol="FolderOpen24" />
+                            </ui:Button.Icon>
+                        </ui:Button>
+                    </Grid>
+                    <TextBlock Text="{DynamicResource LiveImageFolderHint}"
+                               Style="{StaticResource CaptionTextStyle}"
+                               Margin="0,0,0,14" />
+
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

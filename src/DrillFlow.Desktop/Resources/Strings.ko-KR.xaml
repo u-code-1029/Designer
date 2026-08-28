@@ -121,6 +121,8 @@
     <system:String x:Key="ThemeDark">다크</system:String>
     <system:String x:Key="CommunicationSettings">장비 파일 통신</system:String>
     <system:String x:Key="ExchangeFolder">통신 폴더</system:String>
+    <system:String x:Key="LiveImageFolder">Live 이미지 공유 폴더 (image_path)</system:String>
+    <system:String x:Key="LiveImageFolderHint">Designer와 장비가 모두 접근할 수 있는 절대 로컬 또는 UNC 폴더를 지정하세요. 실제 요청에는 이 폴더 아래의 live-{correlation_id}.bmp가 사용됩니다.</system:String>
     <system:String x:Key="RequestFileName">요청 파일명</system:String>
     <system:String x:Key="ResponseFileName">응답 파일명</system:String>
     <system:String x:Key="EquipmentRequestHandling">장비의 요청 파일 처리 방식</system:String>
@@ -153,6 +155,7 @@
     <system:String x:Key="LifecycleRequired">지원되는 장비 요청, 앱 요청 정리 및 응답 파일 처리 방식을 선택하세요.</system:String>
     <system:String x:Key="FileNameOnly">경로가 아닌 확장자를 포함한 파일명만 입력하세요.</system:String>
     <system:String x:Key="FolderRequired">통신 폴더를 입력하세요.</system:String>
+    <system:String x:Key="LiveImageFolderRequired">절대 로컬 또는 UNC Live 이미지 공유 폴더를 입력하세요.</system:String>
     <system:String x:Key="PositiveNumberRequired">유한한 시간 값을 입력하세요. Timeout과 Polling은 0.001 s 이상, 대기는 0 또는 0.001 s 이상이어야 하며 재시도 값은 0 이상이어야 합니다.</system:String>
     <system:String x:Key="ResultIteration">반복 경로</system:String>
     <system:String x:Key="ResultCorrelation">Correlation ID</system:String>
@@ -177,6 +180,7 @@
     <system:String x:Key="ResultHttpJsonDescription">동적으로 파싱된 JSON 응답</system:String>
     <system:String x:Key="Browse">찾아보기</system:String>
     <system:String x:Key="SelectExchangeFolder">장비 파일 통신 폴더를 선택하세요. UNC 경로는 직접 입력할 수 있습니다.</system:String>
+    <system:String x:Key="SelectLiveImageFolder">장비가 Live frame 이미지를 저장할 공유 폴더를 선택하세요. UNC 경로는 직접 입력할 수 있습니다.</system:String>
     <system:String x:Key="OK">확인</system:String>
     <system:String x:Key="Cancel">취소</system:String>
     <system:String x:Key="Discard">버리기</system:String>
@@ -198,8 +202,11 @@
     <system:String x:Key="ResponseTestPublished">Response 테스트 파일을 생성했습니다.</system:String>
     <system:String x:Key="ResponseTestFailed">Response 테스트 파일을 생성하지 못했습니다.</system:String>
     <system:String x:Key="OpenExchangeFolder">장비 통신 폴더 열기</system:String>
+    <system:String x:Key="OpenLiveImageFolder">Live 이미지 공유 폴더 열기</system:String>
     <system:String x:Key="ExchangeFolderOpened">장비 통신 폴더를 열었습니다: {0}</system:String>
     <system:String x:Key="ExchangeFolderOpenFailed">장비 통신 폴더를 열지 못했습니다.</system:String>
+    <system:String x:Key="LiveImageFolderOpened">Live 이미지 공유 폴더를 열었습니다: {0}</system:String>
+    <system:String x:Key="LiveImageFolderOpenFailed">Live 이미지 공유 폴더를 열지 못했습니다.</system:String>
     <system:String x:Key="ZoomOut">캔버스 축소 (Ctrl+-)</system:String>
     <system:String x:Key="ResetZoom">캔버스 배율 100% (Ctrl+0)</system:String>
     <system:String x:Key="ZoomIn">캔버스 확대 (Ctrl++)</system:String>

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace DrillFlow.Application.Communication;
 
@@ -8,6 +9,7 @@ namespace DrillFlow.Application.Communication;
 public sealed class EquipmentCommunicationOptions
 {
     private string _exchangeDirectory = string.Empty;
+    private string _liveImageDirectory = string.Empty;
 
     public const string SectionName = "EquipmentCommunication";
 
@@ -18,10 +20,24 @@ public sealed class EquipmentCommunicationOptions
     /// </summary>
     public const string ExchangeLockFileName = ".drillflow.exchange.lock";
 
+    public const string DefaultLiveImageDirectoryName = ".drillflow-live";
+
     public string ExchangeDirectory
     {
         get => _exchangeDirectory;
         set => _exchangeDirectory = NormalizeExchangeDirectory(value);
+    }
+
+    /// <summary>
+    /// Shared local or UNC directory proposed to the controller through each Live request's
+    /// image_path. The actual filename remains correlation-specific so a delayed older frame
+    /// cannot overwrite a newer request. When omitted, the existing exchange-directory
+    /// subfolder is retained for backward compatibility.
+    /// </summary>
+    public string LiveImageDirectory
+    {
+        get => ResolveLiveImageDirectory(_exchangeDirectory, _liveImageDirectory);
+        set => _liveImageDirectory = NormalizeExchangeDirectory(value);
     }
 
     /// <summary>
@@ -31,6 +47,22 @@ public sealed class EquipmentCommunicationOptions
     public static string NormalizeExchangeDirectory(string? value)
     {
         return (value ?? string.Empty).Trim().Replace('/', '\\');
+    }
+
+    public static string ResolveLiveImageDirectory(
+        string? exchangeDirectory,
+        string? configuredLiveImageDirectory)
+    {
+        var configured = NormalizeExchangeDirectory(configuredLiveImageDirectory);
+        if (configured.Length > 0)
+        {
+            return configured;
+        }
+
+        var exchange = NormalizeExchangeDirectory(exchangeDirectory);
+        return exchange.Length == 0
+            ? string.Empty
+            : Path.Combine(exchange, DefaultLiveImageDirectoryName);
     }
 
     public string RequestFileName { get; set; } = "request.xml";

@@ -90,4 +90,43 @@ public sealed class DesktopCommunicationTimingTests
         Assert.Equal(100, (int)JObject.FromObject(persisted)[
             nameof(CommunicationSettings.RequestPublishDelayMilliseconds)]!);
     }
+
+    [Fact]
+    public void LegacySettingsWithoutLiveImageFolder_FallBackToPersistedExchangeFolder()
+    {
+        var persisted = JObject.Parse(
+                "{\"ExchangeFolder\":\"D:\\\\Shared\\\\Exchange\"}")
+            .ToObject<CommunicationSettings>();
+        Assert.NotNull(persisted);
+
+        var options = new EquipmentCommunicationOptions();
+        persisted!.ApplyTo(options);
+
+        Assert.Equal(
+            @"D:\Shared\Exchange\.drillflow-live",
+            options.LiveImageDirectory);
+        Assert.Equal(
+            @"D:\Shared\Exchange\.drillflow-live",
+            persisted.ResolveLiveImageFolder());
+    }
+
+    [Fact]
+    public void ExplicitLiveImageFolder_IsClonedPersistedAndAppliedWithNormalizedSeparators()
+    {
+        var settings = new CommunicationSettings
+        {
+            ExchangeFolder = @"C:\Exchange",
+            LiveImageFolder = "//camera/share/frames",
+        };
+
+        var clone = settings.Clone();
+        var roundTripped = JObject.FromObject(clone).ToObject<CommunicationSettings>();
+        Assert.NotNull(roundTripped);
+        var options = new EquipmentCommunicationOptions();
+        roundTripped!.ApplyTo(options);
+
+        Assert.Equal("//camera/share/frames", clone.LiveImageFolder);
+        Assert.Equal(@"\\camera\share\frames", options.LiveImageDirectory);
+        Assert.Equal(@"\\camera\share\frames", roundTripped.ResolveLiveImageFolder());
+    }
 }

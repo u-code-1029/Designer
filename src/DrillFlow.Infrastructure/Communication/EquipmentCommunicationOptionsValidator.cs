@@ -27,6 +27,15 @@ public sealed class EquipmentCommunicationOptionsValidator
             failures.Add("The equipment exchange directory must be an absolute local or UNC path.");
         }
 
+        if (string.IsNullOrWhiteSpace(options.LiveImageDirectory))
+        {
+            failures.Add("A Live image directory is required.");
+        }
+        else if (!IsAbsoluteWindowsDirectory(options.LiveImageDirectory))
+        {
+            failures.Add("The Live image directory must be an absolute local or UNC path.");
+        }
+
         ValidateLeafFileName(options.RequestFileName, "request", failures);
         ValidateLeafFileName(options.ResponseFileName, "response", failures);
 

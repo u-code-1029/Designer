@@ -74,6 +74,43 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.True(EquipmentResponseMessage.IsSupportedAbsoluteImagePath(exchange.RequestedImagePath));
     }
 
+    [Fact]
+    public async Task ConfiguredLiveImageDirectory_IsUsedOnlyForUniqueLiveFramePaths()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        var configuredLiveDirectory = Path.Combine(directory.Path, "shared-live-frames");
+        var transport = new RecordingTransport((request, _) =>
+            Task.FromResult(ResponseFor(request)));
+        using var session = CreateSession(
+            transport,
+            directory.Path,
+            configuredLiveDirectory);
+
+        var firstLive = await session.RequestFrameAsync(1E-3);
+        var secondLive = await session.RequestFrameAsync(1E-3);
+        var integration = await session.IntegrateAsync(1E-3, 4);
+
+        Assert.Equal(
+            Path.Combine(configuredLiveDirectory, "live-1.bmp"),
+            firstLive.RequestedImagePath);
+        Assert.Equal(
+            Path.Combine(configuredLiveDirectory, "live-2.bmp"),
+            secondLive.RequestedImagePath);
+        Assert.NotEqual(firstLive.RequestedImagePath, secondLive.RequestedImagePath);
+        Assert.Equal(
+            Path.Combine(directory.Path, ".drillflow-live", "integration-3.bmp"),
+            integration.RequestedImagePath);
+        Assert.Equal(
+            firstLive.RequestedImagePath,
+            transport.Requests[0].Parameters["image_path"]);
+        Assert.Equal(
+            secondLive.RequestedImagePath,
+            transport.Requests[1].Parameters["image_path"]);
+        Assert.Equal(
+            integration.RequestedImagePath,
+            transport.Requests[2].Parameters["image_path"]);
+    }
+
     [Theory]
     [InlineData(0d)]
     [InlineData(-1E-3)]
@@ -313,17 +350,24 @@ public sealed class ApplicationLiveInteractionSessionTests
 
     private static LiveInteractionSession CreateSession(
         IEquipmentFileTransport transport,
-        string exchangeDirectory)
+        string exchangeDirectory,
+        string? liveImageDirectory = null)
     {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = exchangeDirectory,
+            RequestFileName = "request.xml",
+            ResponseFileName = "response.xml",
+        };
+        if (liveImageDirectory is not null)
+        {
+            options.LiveImageDirectory = liveImageDirectory;
+        }
+
         return new LiveInteractionSession(
             transport,
             new IncrementingCorrelationProvider(),
-            Options.Create(new EquipmentCommunicationOptions
-            {
-                ExchangeDirectory = exchangeDirectory,
-                RequestFileName = "request.xml",
-                ResponseFileName = "response.xml",
-            }),
+            Options.Create(options),
             NullLogger<LiveInteractionSession>.Instance);
     }
 

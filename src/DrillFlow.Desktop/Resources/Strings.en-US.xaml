@@ -121,6 +121,8 @@
     <system:String x:Key="ThemeDark">Dark</system:String>
     <system:String x:Key="CommunicationSettings">Equipment file exchange</system:String>
     <system:String x:Key="ExchangeFolder">Exchange folder</system:String>
+    <system:String x:Key="LiveImageFolder">Live image shared folder (image_path)</system:String>
+    <system:String x:Key="LiveImageFolderHint">Choose an absolute local or UNC folder that both the Designer and equipment can access. Requests use live-{correlation_id}.bmp inside this folder.</system:String>
     <system:String x:Key="RequestFileName">Request file name</system:String>
     <system:String x:Key="ResponseFileName">Response file name</system:String>
     <system:String x:Key="EquipmentRequestHandling">Equipment request-file behavior</system:String>
@@ -153,6 +155,7 @@
     <system:String x:Key="LifecycleRequired">Select supported equipment-request, app-request cleanup, and response-file handling modes.</system:String>
     <system:String x:Key="FileNameOnly">Enter one file name including its extension, not a path.</system:String>
     <system:String x:Key="FolderRequired">Enter an exchange folder.</system:String>
+    <system:String x:Key="LiveImageFolderRequired">Enter an absolute local or UNC Live image shared folder.</system:String>
     <system:String x:Key="PositiveNumberRequired">Enter finite timing values. Timeout and polling must be at least 0.001 s; delay may be 0 or at least 0.001 s; retry values must be non-negative.</system:String>
     <system:String x:Key="ResultIteration">Iteration path</system:String>
     <system:String x:Key="ResultCorrelation">Correlation ID</system:String>
@@ -177,6 +180,7 @@
     <system:String x:Key="ResultHttpJsonDescription">Dynamically parsed JSON response</system:String>
     <system:String x:Key="Browse">Browse</system:String>
     <system:String x:Key="SelectExchangeFolder">Select the equipment exchange folder. UNC paths can also be entered manually.</system:String>
+    <system:String x:Key="SelectLiveImageFolder">Select the shared folder where the equipment saves Live frame images. UNC paths can also be entered manually.</system:String>
     <system:String x:Key="OK">OK</system:String>
     <system:String x:Key="Cancel">Cancel</system:String>
     <system:String x:Key="Discard">Discard</system:String>
@@ -198,8 +202,11 @@
     <system:String x:Key="ResponseTestPublished">The simulated response file was published.</system:String>
     <system:String x:Key="ResponseTestFailed">The simulated response file could not be published.</system:String>
     <system:String x:Key="OpenExchangeFolder">Open equipment exchange folder</system:String>
+    <system:String x:Key="OpenLiveImageFolder">Open Live image shared folder</system:String>
     <system:String x:Key="ExchangeFolderOpened">Opened the equipment exchange folder: {0}</system:String>
     <system:String x:Key="ExchangeFolderOpenFailed">The equipment exchange folder could not be opened.</system:String>
+    <system:String x:Key="LiveImageFolderOpened">Opened the Live image shared folder: {0}</system:String>
+    <system:String x:Key="LiveImageFolderOpenFailed">The Live image shared folder could not be opened.</system:String>
     <system:String x:Key="ZoomOut">Zoom out canvas (Ctrl+-)</system:String>
     <system:String x:Key="ResetZoom">Reset canvas zoom to 100% (Ctrl+0)</system:String>
     <system:String x:Key="ZoomIn">Zoom in canvas (Ctrl++)</system:String>

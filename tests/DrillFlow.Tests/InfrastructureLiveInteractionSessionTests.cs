@@ -207,6 +207,38 @@ public sealed class InfrastructureLiveInteractionSessionTests
         Assert.Equal(@"C:\camera\frame.png", response.Response.ImagePath);
     }
 
+    [Fact]
+    public async Task LiveRequestXml_UsesConfiguredSharedDirectoryAndCorrelationFileName()
+    {
+        using var directory = new LiveTransportTestDirectory();
+        var options = CreateOptions(directory.Path);
+        options.LiveImageDirectory = Path.Combine(directory.Path, "shared & live");
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options),
+            NullLogger<FileEquipmentTransport>.Instance);
+        using var live = CreateLiveSession(
+            transport,
+            new FixedCorrelationProvider(901),
+            options);
+        using var cancellation = new CancellationTokenSource();
+        var requestPath = Path.Combine(directory.Path, options.RequestFileName);
+
+        var frame = live.RequestFrameAsync(1E-3, cancellation.Token);
+        var payload = await WaitForTextContainingAsync(
+            requestPath,
+            "<correlation_id>901</correlation_id>");
+
+        Assert.Contains(
+            "<image_path>"
+            + Path.Combine(options.LiveImageDirectory, "live-901.bmp")
+                .Replace("&", "&amp;")
+            + "</image_path>",
+            payload);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => frame);
+    }
+
     private static EquipmentCommunicationOptions CreateOptions(string directory) => new()
     {
         ExchangeDirectory = directory,

@@ -99,6 +99,19 @@ public sealed class FileDialogService : IFileDialogService
 
     public string? ShowSelectFolderDialog(string initialFolder)
     {
+        return ShowFolderDialog(initialFolder, "SelectExchangeFolder", "equipment exchange");
+    }
+
+    public string? ShowSelectLiveImageFolderDialog(string initialFolder)
+    {
+        return ShowFolderDialog(initialFolder, "SelectLiveImageFolder", "Live image");
+    }
+
+    private string? ShowFolderDialog(
+        string initialFolder,
+        string titleResourceKey,
+        string folderRole)
+    {
         try
         {
             var owner = System.Windows.Application.Current?.MainWindow;
@@ -115,14 +128,17 @@ public sealed class FileDialogService : IFileDialogService
 
             return ShellFolderPicker.Show(
                 ownerHandle,
-                _localization["SelectExchangeFolder"],
+                _localization[titleResourceKey],
                 initialFolder);
         }
         catch (Exception exception) when (
             exception is COMException ||
             exception is InvalidOperationException)
         {
-            _logger.LogError(exception, "Failed to show the Windows folder picker.");
+            _logger.LogError(
+                exception,
+                "Failed to show the Windows folder picker for the {FolderRole} folder.",
+                folderRole);
             return null;
         }
     }

@@ -27,6 +27,9 @@ public sealed class InfrastructureOptionsTests
         Assert.False(options.RetryEnabled);
         Assert.Equal("request.xml", options.RequestFileName);
         Assert.Equal("response.xml", options.ResponseFileName);
+        Assert.Equal(
+            Path.Combine(options.ExchangeDirectory, ".drillflow-live"),
+            options.LiveImageDirectory);
     }
 
     [Theory]
@@ -45,6 +48,50 @@ public sealed class InfrastructureOptionsTests
 
         Assert.True(result.Succeeded);
         Assert.Equal(expected, options.ExchangeDirectory);
+    }
+
+    [Theory]
+    [InlineData("C:/Shared/LiveFrames", @"C:\Shared\LiveFrames")]
+    [InlineData("//server/share/LiveFrames", @"\\server\share\LiveFrames")]
+    public void EquipmentOptions_NormalizeConfiguredLiveImageDirectory(
+        string configured,
+        string expected)
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = @"C:\Exchange",
+            LiveImageDirectory = configured,
+        };
+
+        var result = new EquipmentCommunicationOptionsValidator().Validate(null, options);
+
+        Assert.True(
+            result.Succeeded,
+            string.Join(Environment.NewLine, result.Failures ?? Array.Empty<string>()));
+        Assert.Equal(expected, options.LiveImageDirectory);
+    }
+
+    [Theory]
+    [InlineData("relative-folder")]
+    [InlineData(@"C:LiveFrames")]
+    [InlineData(@"\LiveFrames")]
+    [InlineData(@"\\server")]
+    [InlineData(@"C:\Live|Frames")]
+    public void EquipmentOptions_RejectInvalidConfiguredLiveImageDirectory(string path)
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = @"C:\Exchange",
+            LiveImageDirectory = path,
+        };
+
+        var result = new EquipmentCommunicationOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures,
+            failure => failure.Contains("live", StringComparison.OrdinalIgnoreCase)
+                       && failure.Contains("absolute", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -9,4 +9,6 @@ public interface IFileDialogService
     string? ShowSaveImageDialog(string sourceImagePath, string detectedExtension);
 
     string? ShowSelectFolderDialog(string initialFolder);
+
+    string? ShowSelectLiveImageFolderDialog(string initialFolder);
 }

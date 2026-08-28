@@ -13,8 +13,6 @@ namespace DrillFlow.Application.LiveInteraction;
 /// <summary>Builds canonical live equipment actions on the correlated file transport.</summary>
 public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposable
 {
-    private const string OwnedImageDirectoryName = ".drillflow-live";
-
     private readonly IEquipmentFileTransport _transport;
     private readonly ICorrelationIdProvider _correlationIds;
     private readonly EquipmentCommunicationOptions _communicationOptions;
@@ -220,7 +218,8 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
                 .ConfigureAwait(false);
             if (prepareOwnedImageDirectory)
             {
-                await EnsureOwnedImageDirectoryAsync(cancellationToken).ConfigureAwait(false);
+                await EnsureOwnedImageDirectoryAsync(action, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             var request = new EquipmentRequestMessage(
@@ -300,10 +299,20 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
 
     private string CreateOwnedImagePath(string action, int correlationId)
     {
-        var directory = Path.Combine(
-            _communicationOptions.ExchangeDirectory,
-            OwnedImageDirectoryName);
+        var directory = GetOwnedImageDirectory(action);
         return Path.Combine(directory, action + "-" + correlationId + ".bmp");
+    }
+
+    private string GetOwnedImageDirectory(string action)
+    {
+        if (string.Equals(action, LiveInteractionProtocol.LiveAction, StringComparison.Ordinal))
+        {
+            return _communicationOptions.LiveImageDirectory;
+        }
+
+        return Path.Combine(
+            _communicationOptions.ExchangeDirectory,
+            EquipmentCommunicationOptions.DefaultLiveImageDirectoryName);
     }
 
     private void TryDeleteOwnedImagePath(string? requestedImagePath)
@@ -339,11 +348,11 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         }
     }
 
-    private Task EnsureOwnedImageDirectoryAsync(CancellationToken cancellationToken)
+    private Task EnsureOwnedImageDirectoryAsync(
+        string action,
+        CancellationToken cancellationToken)
     {
-        var directory = Path.Combine(
-            _communicationOptions.ExchangeDirectory,
-            OwnedImageDirectoryName);
+        var directory = GetOwnedImageDirectory(action);
         return Task.Run(
             () =>
             {

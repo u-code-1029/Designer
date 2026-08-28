@@ -44,6 +44,12 @@ public sealed class CommunicationSettings
         "DrillFlow",
         "Exchange");
 
+    /// <summary>
+    /// Shared folder used to build Live request image_path values. Blank values from older
+    /// settings files intentionally resolve below the configured exchange folder.
+    /// </summary>
+    public string LiveImageFolder { get; set; } = string.Empty;
+
     public string RequestFileName { get; set; } = "request.xml";
 
     public string ResponseFileName { get; set; } = "response.xml";
@@ -74,6 +80,7 @@ public sealed class CommunicationSettings
         }
 
         options.ExchangeDirectory = ExchangeFolder;
+        options.LiveImageDirectory = ResolveLiveImageFolder();
         options.RequestFileName = RequestFileName;
         options.ResponseFileName = ResponseFileName;
         options.EquipmentRequestLifecycle = Enum.TryParse<EquipmentRequestFileLifecycle>(
@@ -102,6 +109,11 @@ public sealed class CommunicationSettings
         options.RequestPublishDelay = TimeSpan.FromMilliseconds(
             RequestPublishDelayMilliseconds);
     }
+
+    internal string ResolveLiveImageFolder() =>
+        EquipmentCommunicationOptions.ResolveLiveImageDirectory(
+            ExchangeFolder,
+            LiveImageFolder);
 
     public CommunicationSettings Clone() => (CommunicationSettings)MemberwiseClone();
 }

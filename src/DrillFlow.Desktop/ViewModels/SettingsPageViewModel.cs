@@ -28,6 +28,7 @@ public sealed class SettingsPageViewModel : ObservableObject
     private string _language = "Auto";
     private string _theme = ThemeSelection.System;
     private string _exchangeFolder = string.Empty;
+    private string _liveImageFolder = string.Empty;
     private string _requestFileName = "request.xml";
     private string _responseFileName = "response.xml";
     private string _equipmentRequestHandling = "RetainUntilOverwritten";
@@ -70,6 +71,12 @@ public sealed class SettingsPageViewModel : ObservableObject
         TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync, () => CanEditSettings);
         BrowseFolderCommand = new RelayCommand(BrowseFolder, () => CanEditSettings);
         OpenFolderCommand = new RelayCommand(OpenFolder, CanOpenFolder);
+        BrowseLiveImageFolderCommand = new RelayCommand(
+            BrowseLiveImageFolder,
+            () => CanEditSettings);
+        OpenLiveImageFolderCommand = new RelayCommand(
+            OpenLiveImageFolder,
+            CanOpenLiveImageFolder);
 
         Load();
         // Invalid persisted drafts remain visible so the operator can correct them, but they
@@ -102,6 +109,10 @@ public sealed class SettingsPageViewModel : ObservableObject
     public IRelayCommand BrowseFolderCommand { get; }
 
     public IRelayCommand OpenFolderCommand { get; }
+
+    public IRelayCommand BrowseLiveImageFolderCommand { get; }
+
+    public IRelayCommand OpenLiveImageFolderCommand { get; }
 
     public string[] LanguageChoices { get; } = { "Auto", "ko-KR", "en-US" };
 
@@ -157,6 +168,18 @@ public sealed class SettingsPageViewModel : ObservableObject
             if (SetProperty(ref _exchangeFolder, value ?? string.Empty))
             {
                 OpenFolderCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string LiveImageFolder
+    {
+        get => _liveImageFolder;
+        set
+        {
+            if (SetProperty(ref _liveImageFolder, value ?? string.Empty))
+            {
+                OpenLiveImageFolderCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -264,6 +287,8 @@ public sealed class SettingsPageViewModel : ObservableObject
                 SaveCommand.NotifyCanExecuteChanged();
                 BrowseFolderCommand.NotifyCanExecuteChanged();
                 OpenFolderCommand.NotifyCanExecuteChanged();
+                BrowseLiveImageFolderCommand.NotifyCanExecuteChanged();
+                OpenLiveImageFolderCommand.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanEditSettings));
             }
         }
@@ -286,6 +311,8 @@ public sealed class SettingsPageViewModel : ObservableObject
                 TestConnectionCommand.NotifyCanExecuteChanged();
                 BrowseFolderCommand.NotifyCanExecuteChanged();
                 OpenFolderCommand.NotifyCanExecuteChanged();
+                BrowseLiveImageFolderCommand.NotifyCanExecuteChanged();
+                OpenLiveImageFolderCommand.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanEditSettings));
             }
         }
@@ -303,6 +330,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         Language = preferences.Language;
         Theme = preferences.Theme;
         ExchangeFolder = communication.ExchangeFolder;
+        LiveImageFolder = communication.ResolveLiveImageFolder();
         RequestFileName = communication.RequestFileName;
         ResponseFileName = communication.ResponseFileName;
         // Preserve unsupported persisted values as an invalid draft. Startup deliberately
@@ -381,15 +409,21 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
 
         IsTesting = true;
-        var testPath = Path.Combine(ExchangeFolder, ".drillflow-write-test-" + Guid.NewGuid().ToString("N") + ".tmp");
+        var testName = ".drillflow-write-test-" + Guid.NewGuid().ToString("N") + ".tmp";
+        var exchangeTestPath = Path.Combine(ExchangeFolder, testName);
+        var liveImageTestPath = Path.Combine(LiveImageFolder, testName);
         try
         {
             await Task.Run(() =>
             {
-                Directory.CreateDirectory(ExchangeFolder);
-                File.WriteAllText(testPath, "DrillFlow");
-                _ = File.ReadAllText(testPath);
-                File.Delete(testPath);
+                TestWritableDirectory(ExchangeFolder, exchangeTestPath);
+                if (!string.Equals(
+                        ExchangeFolder.TrimEnd('\\', '/'),
+                        LiveImageFolder.TrimEnd('\\', '/'),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    TestWritableDirectory(LiveImageFolder, liveImageTestPath);
+                }
             });
 
             StatusMessage = _localization["ConnectionTestPassed"];
@@ -397,10 +431,15 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            _logger.LogWarning(exception, "Exchange folder test failed for {Folder}", ExchangeFolder);
+            _logger.LogWarning(
+                exception,
+                "Communication folder test failed for exchange {ExchangeFolder} and Live images {LiveImageFolder}",
+                ExchangeFolder,
+                LiveImageFolder);
             StatusMessage = _localization["ConnectionTestFailed"] + " " + exception.Message;
             StatusIsError = true;
-            TryDelete(testPath);
+            TryDelete(exchangeTestPath);
+            TryDelete(liveImageTestPath);
         }
         finally
         {
@@ -418,6 +457,10 @@ public sealed class SettingsPageViewModel : ObservableObject
         else if (!IsLeafFileName(RequestFileName) || !IsLeafFileName(ResponseFileName))
         {
             failure = _localization["FileNameOnly"];
+        }
+        else if (!IsRootedPath(LiveImageFolder))
+        {
+            failure = _localization["LiveImageFolderRequired"];
         }
         else if (string.Equals(RequestFileName, ResponseFileName, StringComparison.OrdinalIgnoreCase))
         {
@@ -474,6 +517,7 @@ public sealed class SettingsPageViewModel : ObservableObject
     private CommunicationSettings BuildSettings() => new()
     {
         ExchangeFolder = EquipmentCommunicationOptions.NormalizeExchangeDirectory(ExchangeFolder),
+        LiveImageFolder = EquipmentCommunicationOptions.NormalizeExchangeDirectory(LiveImageFolder),
         RequestFileName = RequestFileName.Trim(),
         ResponseFileName = ResponseFileName.Trim(),
         EquipmentRequestHandling = EquipmentRequestHandling,
@@ -516,6 +560,34 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             _logger.LogWarning(exception, "Could not open the draft equipment exchange directory");
             StatusMessage = _localization["ExchangeFolderOpenFailed"] + " " + exception.Message;
+            StatusIsError = true;
+        }
+    }
+
+    private void BrowseLiveImageFolder()
+    {
+        var selected = _fileDialogs.ShowSelectLiveImageFolderDialog(LiveImageFolder);
+        if (!string.IsNullOrWhiteSpace(selected))
+        {
+            LiveImageFolder = selected!;
+        }
+    }
+
+    private bool CanOpenLiveImageFolder() =>
+        CanEditSettings && IsRootedPath(LiveImageFolder);
+
+    private void OpenLiveImageFolder()
+    {
+        try
+        {
+            var path = _exchangeFolderLauncher.Open(LiveImageFolder);
+            StatusMessage = string.Format(_localization["LiveImageFolderOpened"], path);
+            StatusIsError = false;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Could not open the draft Live image directory");
+            StatusMessage = _localization["LiveImageFolderOpenFailed"] + " " + exception.Message;
             StatusIsError = true;
         }
     }
@@ -657,6 +729,14 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
     }
 
+    private static void TestWritableDirectory(string directory, string testPath)
+    {
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(testPath, "DrillFlow");
+        _ = File.ReadAllText(testPath);
+        File.Delete(testPath);
+    }
+
     private static bool IsBusyState(DrillFlow.Application.Execution.WorkflowRunState state) =>
         state is DrillFlow.Application.Execution.WorkflowRunState.Validating
             or DrillFlow.Application.Execution.WorkflowRunState.Running
@@ -686,6 +766,8 @@ public sealed class SettingsPageViewModel : ObservableObject
             TestConnectionCommand.NotifyCanExecuteChanged();
             BrowseFolderCommand.NotifyCanExecuteChanged();
             OpenFolderCommand.NotifyCanExecuteChanged();
+            BrowseLiveImageFolderCommand.NotifyCanExecuteChanged();
+            OpenLiveImageFolderCommand.NotifyCanExecuteChanged();
             OnPropertyChanged(nameof(CanEditSettings));
         });
     }

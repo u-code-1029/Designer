@@ -1221,6 +1221,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         public string? ShowSaveImageDialog(string sourceImagePath, string detectedExtension) => null;
 
         public string? ShowSelectFolderDialog(string initialFolder) => null;
+
+        public string? ShowSelectLiveImageFolderDialog(string initialFolder) => null;
     }
 
     private sealed class StubCaptureSnapshotStore : ILiveCaptureSnapshotStore
