@@ -113,14 +113,33 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
     {
         response = null;
         if (expectedRequest is null
-            || !TryDecode(payload, out var text)
-            || !TryCreateUniqueResponse(text, out response))
+            || !_templates.TryGetValue(expectedRequest.Action, out var templates)
+            || !TryDecode(payload, out var text))
         {
             return false;
         }
 
-        return response!.CorrelationId == expectedRequest.CorrelationId
-               && string.Equals(response.Action, expectedRequest.Action, StringComparison.Ordinal);
+        // The transport already owns a concrete request, so its Action is the discriminator.
+        // Vendor answer sheets for different Actions may intentionally share the same fixed
+        // outer text; scanning every Action here would reject a valid correlated response as
+        // cross-template ambiguity even though the pending request makes it unambiguous.
+        var extraction = templates.Response.ExtractCandidates(
+            text,
+            fields => TryCreateResponse(expectedRequest.Action, fields, out _));
+        if (extraction.WasTruncated
+            || extraction.IsAmbiguous
+            || extraction.Candidates.Count != 1
+            || !TryCreateResponse(
+                expectedRequest.Action,
+                extraction.Candidates[0],
+                out response)
+            || response!.CorrelationId != expectedRequest.CorrelationId)
+        {
+            response = null;
+            return false;
+        }
+
+        return true;
     }
 
     private bool TryCreateUniqueRequest(string text, out EquipmentRequestMessage? request)

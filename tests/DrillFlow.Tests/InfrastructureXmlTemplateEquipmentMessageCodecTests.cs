@@ -183,7 +183,7 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     }
 
     [Fact]
-    public void ExpectedResponseDeserializer_AlsoRejectsMultipleActionMatches()
+    public void ExpectedResponseDeserializer_UsesThePendingRequestsActionAsDiscriminator()
     {
         var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
         {
@@ -217,7 +217,12 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
             });
 
         Assert.False(codec.TryDeserializeResponse(payload, out _));
-        Assert.False(codec.TryDeserializeResponse(payload, expectedRequest, out _));
+        Assert.True(codec.TryDeserializeResponse(payload, expectedRequest, out var response));
+        Assert.NotNull(response);
+        Assert.Equal(53, response!.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, response.Action);
+        Assert.Equal(-3.2E-6, response.CurrentStageX);
+        Assert.Equal(4.12E-4, response.CurrentStageY);
     }
 
     [Fact]

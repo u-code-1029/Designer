@@ -1022,11 +1022,17 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     {
         var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
             .ConfigureAwait(false);
-        return payload is not null
-               && !ByteArraysEqual(payload, baselineResponse)
-               && _codec.TryDeserializeResponse(payload, expectedRequest, out _)
-            ? payload
-            : null;
+        if (payload is null || ByteArraysEqual(payload, baselineResponse))
+        {
+            return null;
+        }
+
+        if (_codec.TryDeserializeResponse(payload, expectedRequest, out _))
+        {
+            return payload;
+        }
+
+        return null;
     }
 
     private async Task<byte[]?> WaitForMatchingResponseAsync(
@@ -1036,6 +1042,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + _options.ResponseTimeout;
+        byte[]? lastRejectedPayload = null;
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1043,10 +1050,18 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 .ConfigureAwait(false);
 
             if (payload is not null
-                && !ByteArraysEqual(payload, baselineResponse)
-                && _codec.TryDeserializeResponse(payload, expectedRequest, out _))
+                && !ByteArraysEqual(payload, baselineResponse))
             {
-                return payload;
+                if (_codec.TryDeserializeResponse(payload, expectedRequest, out _))
+                {
+                    return payload;
+                }
+
+                if (!ByteArraysEqual(payload, lastRejectedPayload))
+                {
+                    LogRejectedResponse(responsePath, expectedRequest);
+                    lastRejectedPayload = payload;
+                }
             }
 
             var remaining = deadline - DateTime.UtcNow;
@@ -1062,6 +1077,18 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
 
         return null;
+    }
+
+    private void LogRejectedResponse(
+        string responsePath,
+        EquipmentRequestMessage expectedRequest)
+    {
+        _logger.LogWarning(
+            "Ignored stable response file {ResponsePath}: its XML template fields, action, or "
+            + "correlation ID did not match pending {Action} request {CorrelationId}.",
+            responsePath,
+            expectedRequest.Action,
+            expectedRequest.CorrelationId);
     }
 
     private async Task<byte[]?> TryReadStableBytesAsync(

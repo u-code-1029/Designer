@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Infrastructure.Communication;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -315,7 +316,8 @@ public sealed class InfrastructureFileTransportTests
         var options = CreateOptions(directory.Path);
         options.ResponseTimeout = TimeSpan.FromMilliseconds(180);
         options.ApplicationRequestLifecycle = ApplicationRequestFileLifecycle.RetainUntilOverwritten;
-        using var transport = CreateTransport(options);
+        var logger = new ResponseRejectionLogger();
+        using var transport = CreateTransport(options, logger);
         var request = StageRequest(110);
 
         var exchange = transport.ExchangeAsync(request, CancellationToken.None);
@@ -324,6 +326,9 @@ public sealed class InfrastructureFileTransportTests
 
         await Assert.ThrowsAsync<EquipmentResponseTimeoutException>(() => exchange);
         Assert.True(File.Exists(RequestPath(options)));
+        var warning = await logger.WarningLogged.Task.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+        Assert.Contains("pending stage request 110", warning, StringComparison.Ordinal);
+        Assert.Equal(1, logger.WarningCount);
     }
 
     [Fact]
@@ -417,11 +422,13 @@ public sealed class InfrastructureFileTransportTests
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1));
     }
 
-    private FileEquipmentTransport CreateTransport(EquipmentCommunicationOptions options)
+    private FileEquipmentTransport CreateTransport(
+        EquipmentCommunicationOptions options,
+        ILogger<FileEquipmentTransport>? logger = null)
     {
         return new FileEquipmentTransport(
             Options.Create(options),
-            NullLogger<FileEquipmentTransport>.Instance,
+            logger ?? NullLogger<FileEquipmentTransport>.Instance,
             _codec);
     }
 
@@ -632,6 +639,46 @@ public sealed class InfrastructureFileTransportTests
 
     private static string ResponsePath(EquipmentCommunicationOptions options) =>
         Path.Combine(options.ExchangeDirectory, options.ResponseFileName);
+
+    private sealed class ResponseRejectionLogger : ILogger<FileEquipmentTransport>
+    {
+        private int _warningCount;
+
+        public TaskCompletionSource<string> WarningLogged { get; } = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int WarningCount => Volatile.Read(ref _warningCount);
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => EmptyScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel != LogLevel.Warning)
+            {
+                return;
+            }
+
+            Interlocked.Increment(ref _warningCount);
+            WarningLogged.TrySetResult(formatter(state, exception));
+        }
+
+        private sealed class EmptyScope : IDisposable
+        {
+            public static EmptyScope Instance { get; } = new EmptyScope();
+
+            public void Dispose()
+            {
+            }
+        }
+    }
 
     private sealed class TempDirectory : IDisposable
     {
