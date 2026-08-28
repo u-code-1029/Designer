@@ -115,6 +115,166 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
         }
     }
 
+    [Fact]
+    public void StageResponse_AcceptsWhitespaceInsideXmlSyntaxAndAroundPlaceholderValues()
+    {
+        var expectedRequest = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var xml = " \t\r\n"
+                  + "<?xml\tversion = \"1.0\"\r\n encoding = \"utf-8\"   ?>"
+                  + "<response \t>"
+                  + "<type > \tresponse\r\n</type >"
+                  + "<correlation_id\r\n> \t1\r\n</correlation_id >"
+                  + "<action >\r\nstage\t</action >"
+                  + "<result > 0 </result >"
+                  + "<current_stage_x > \t-3.2E-06\r\n</current_stage_x >"
+                  + "<current_stage_y\t> 4.12E-04 </current_stage_y >"
+                  + "</response   >\r\n ";
+
+        Assert.True(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            expectedRequest,
+            out var response));
+        Assert.NotNull(response);
+        Assert.Equal(expectedRequest.CorrelationId, response!.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, response.Action);
+        Assert.Equal(0, response.Result);
+        Assert.Equal(-3.2E-6, response.CurrentStageX);
+        Assert.Equal(4.12E-4, response.CurrentStageY);
+    }
+
+    [Fact]
+    public void VendorResponse_AcceptsWhitespaceAroundAttributes()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVendorLikeTemplate);
+        var expectedRequest = new EquipmentRequestMessage(
+            42,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 0d,
+                ["stage_y"] = 0d
+            });
+        var xml = Encoding.UTF8.GetString(codec.SerializeResponse(
+                CreateResponse(expectedRequest.CorrelationId, expectedRequest.Action)))
+            .Replace(
+                "<stage-response type=\"response\" action=\"stage\">",
+                "<stage-response\t type = \"response\"\r\n action= \"stage\"   >")
+            .Replace("</stage-response>", "</stage-response \t>");
+
+        Assert.True(codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            expectedRequest,
+            out var response));
+        Assert.NotNull(response);
+        Assert.Equal(expectedRequest.CorrelationId, response!.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, response.Action);
+        Assert.Equal(-3.2E-6, response.CurrentStageX);
+        Assert.Equal(4.12E-4, response.CurrentStageY);
+    }
+
+    [Fact]
+    public void IntegrationResponse_TrimsPlaceholderFormattingButPreservesImagePathContent()
+    {
+        var expectedRequest = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Integration);
+        var expectedPath = @"C:\Equipment Images\A & B\frame 01.png";
+        var xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                  + "<response>"
+                  + "<type> \tresponse\r\n</type>"
+                  + "<correlation_id> \t4\r\n</correlation_id>"
+                  + "<action>\r\nintegration\t</action>"
+                  + "<result> 0 </result>"
+                  + "<hfw> \t3.02E-06\r\n</hfw>"
+                  + "<frame_count> 8 </frame_count>"
+                  + "<image_path>\r\n\tC:\\Equipment Images\\A &amp; B\\frame 01.png \t\r\n</image_path>"
+                  + "</response>";
+
+        Assert.True(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            expectedRequest,
+            out var response));
+        Assert.NotNull(response);
+        Assert.Equal(3.02E-6, response!.Hfw);
+        Assert.Equal(8, response.FrameCount);
+        Assert.Equal(expectedPath, response.ImagePath);
+    }
+
+    [Fact]
+    public void Response_RejectsMalformedOrContentDifferentXmlDespiteWhitespaceTolerance()
+    {
+        var expectedRequest = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var valid = Encoding.UTF8.GetString(_codec.SerializeResponse(
+            CreateResponse(expectedRequest.CorrelationId, expectedRequest.Action)));
+        var invalidVariants = new Dictionary<string, string>
+        {
+            ["different action"] = valid.Replace(
+                "<action>stage</action>",
+                "<action>camera</action>"),
+            ["whitespace inside action value"] = valid.Replace(
+                "<action>stage</action>",
+                "<action>sta ge</action>"),
+            ["whitespace inside numeric token"] = valid.Replace(
+                "<current_stage_x>-3.2E-06</current_stage_x>",
+                "<current_stage_x>-3.2 E-06</current_stage_x>"),
+            ["mismatched closing element"] = valid.Replace(
+                "</current_stage_x>",
+                "</current_stage_y>"),
+            ["whitespace inside element name"] = valid.Replace(
+                "<current_stage_x>",
+                "<current_ stage_x>"),
+            ["unexpected content"] = valid.Replace(
+                "</response>",
+                "<unexpected /></response>")
+        };
+
+        foreach (var variant in invalidVariants)
+        {
+            Assert.False(
+                _codec.TryDeserializeResponse(
+                    Encoding.UTF8.GetBytes(variant.Value),
+                    expectedRequest,
+                    out _),
+                variant.Key);
+        }
+    }
+
+    [Fact]
+    public void VendorResponse_RejectsDifferentFixedAttributeContent()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVendorLikeTemplate);
+        var expectedRequest = new EquipmentRequestMessage(
+            42,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 0d,
+                ["stage_y"] = 0d
+            });
+        var xml = Encoding.UTF8.GetString(codec.SerializeResponse(
+                CreateResponse(expectedRequest.CorrelationId, expectedRequest.Action)))
+            .Replace("type=\"response\"", "type=\"request\"");
+
+        Assert.False(codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            expectedRequest,
+            out _));
+    }
+
+    [Fact]
+    public void RequestDeserializer_RemainsSensitiveToXmlFormattingDifferences()
+    {
+        var request = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var xml = Encoding.UTF8.GetString(_codec.SerializeRequest(request))
+            .Replace("<request>", "<request >");
+
+        Assert.False(_codec.TryDeserializeRequest(Encoding.UTF8.GetBytes(xml), out _));
+    }
+
     [Theory]
     [InlineData("-3.2E-6", "4.12E-4")]
     [InlineData("-3.2E-06", "4.12E-04")]

@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 using DrillFlow.Application.Communication;
 
 namespace DrillFlow.Infrastructure.Communication;
@@ -1006,42 +1007,17 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         return value.ToString("0.#################E+00", CultureInfo.InvariantCulture);
     }
 
-    private static string NormalizeResponseFormatting(string text)
+    private static string RemoveResponseFormattingWhitespace(string text)
     {
-        // Equipment responses may be emitted as one line even when the answer-sheet template
-        // is indented. Ignore only formatting whitespace between XML elements (and around the
-        // document); never remove whitespace from an actual non-empty field value.
+        // This is used only for fixed response-template literals. Placeholder values are never
+        // passed through it, so paths such as "C:\\Captured Images\\frame 1.png" retain their
+        // meaningful spaces while XML formatting remains whitespace-insensitive.
         var builder = new StringBuilder(text.Length);
-        var index = 0;
-        var leadingEnd = 0;
-        while (leadingEnd < text.Length && IsXmlFormattingWhitespace(text[leadingEnd]))
+        foreach (var character in text)
         {
-            leadingEnd++;
-        }
-
-        if (leadingEnd < text.Length && text[leadingEnd] == '<')
-        {
-            index = leadingEnd;
-        }
-
-        while (index < text.Length)
-        {
-            var current = text[index++];
-            builder.Append(current);
-            if (current != '>')
+            if (!IsXmlFormattingWhitespace(character))
             {
-                continue;
-            }
-
-            var whitespaceStart = index;
-            while (index < text.Length && IsXmlFormattingWhitespace(text[index]))
-            {
-                index++;
-            }
-
-            if (index < text.Length && text[index] != '<')
-            {
-                builder.Append(text, whitespaceStart, index - whitespaceStart);
+                builder.Append(character);
             }
         }
 
@@ -1050,6 +1026,51 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
     private static bool IsXmlFormattingWhitespace(char value) =>
         value == ' ' || value == '\t' || value == '\r' || value == '\n';
+
+    private static bool IsWellFormedXmlDocument(string text)
+    {
+        try
+        {
+            var start = 0;
+            var end = text.Length;
+            while (start < end && IsXmlFormattingWhitespace(text[start]))
+            {
+                start++;
+            }
+
+            while (end > start && IsXmlFormattingWhitespace(text[end - 1]))
+            {
+                end--;
+            }
+
+            var settings = new XmlReaderSettings
+            {
+                CheckCharacters = true,
+                ConformanceLevel = ConformanceLevel.Document,
+                DtdProcessing = DtdProcessing.Prohibit,
+                IgnoreComments = false,
+                IgnoreWhitespace = false,
+                MaxCharactersInDocument = EquipmentMessageLimits.MaximumWirePayloadBytes,
+                XmlResolver = null
+            };
+            var documentText = start == 0 && end == text.Length
+                ? text
+                : text.Substring(start, end - start);
+            using (var input = new StringReader(documentText))
+            using (var reader = XmlReader.Create(input, settings))
+            {
+                while (reader.Read())
+                {
+                }
+            }
+
+            return true;
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
+    }
 
     private static bool TryDecode(byte[]? payload, out string text)
     {
@@ -1208,7 +1229,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         private readonly IReadOnlyList<string> _placeholders;
         private readonly IReadOnlyList<string> _renderLiterals;
         private readonly IReadOnlyList<string> _extractionLiterals;
-        private readonly bool _normalizeResponseFormatting;
+        private readonly bool _ignoreResponseFormattingWhitespace;
         private readonly IReadOnlyList<int> _materializationOrder;
 
         private TemplateDefinition(
@@ -1217,14 +1238,14 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             IReadOnlyList<string> placeholders,
             IReadOnlyList<string> renderLiterals,
             IReadOnlyList<string> extractionLiterals,
-            bool normalizeResponseFormatting)
+            bool ignoreResponseFormattingWhitespace)
         {
             _action = action;
             _direction = direction;
             _placeholders = placeholders;
             _renderLiterals = renderLiterals;
             _extractionLiterals = extractionLiterals;
-            _normalizeResponseFormatting = normalizeResponseFormatting;
+            _ignoreResponseFormattingWhitespace = ignoreResponseFormattingWhitespace;
             _materializationOrder = Enumerable.Range(0, placeholders.Count)
                 .OrderBy(index => GetMaterializationPriority(placeholders[index]))
                 .ThenBy(index => index)
@@ -1324,37 +1345,14 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 }
             }
 
-            var normalizeResponseFormatting = string.Equals(
+            var ignoreResponseFormattingWhitespace = string.Equals(
                 direction,
                 "response",
                 StringComparison.Ordinal);
-            IReadOnlyList<string> extractionLiterals = literals.AsReadOnly();
-            if (normalizeResponseFormatting)
-            {
-                var normalizedTemplate = NormalizeResponseFormatting(template);
-                var normalizedMatches = PlaceholderPattern.Matches(normalizedTemplate);
-                var normalizedPlaceholders = normalizedMatches
-                    .Cast<Match>()
-                    .Select(match => match.Groups[1].Value)
-                    .ToArray();
-                if (!normalizedPlaceholders.SequenceEqual(placeholders, StringComparer.Ordinal))
-                {
-                    throw new InvalidDataException(
-                        $"The {action} {direction} template could not be normalized safely.");
-                }
-
-                var normalizedLiterals = new List<string>();
-                cursor = 0;
-                foreach (Match match in normalizedMatches)
-                {
-                    normalizedLiterals.Add(
-                        normalizedTemplate.Substring(cursor, match.Index - cursor));
-                    cursor = match.Index + match.Length;
-                }
-
-                normalizedLiterals.Add(normalizedTemplate.Substring(cursor));
-                extractionLiterals = normalizedLiterals.AsReadOnly();
-            }
+            IReadOnlyList<string> extractionLiterals = ignoreResponseFormattingWhitespace
+                ? Array.AsReadOnly(
+                    literals.Select(RemoveResponseFormattingWhitespace).ToArray())
+                : literals.AsReadOnly();
 
             for (var index = 1; index < extractionLiterals.Count - 1; index++)
             {
@@ -1372,7 +1370,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 placeholders.AsReadOnly(),
                 literals.AsReadOnly(),
                 extractionLiterals,
-                normalizeResponseFormatting);
+                ignoreResponseFormattingWhitespace);
         }
 
         public string Render(IReadOnlyDictionary<string, string> values)
@@ -1403,13 +1401,20 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 throw new ArgumentNullException(nameof(candidateValidator));
             }
 
-            if (_normalizeResponseFormatting)
+            if (_ignoreResponseFormattingWhitespace && !IsWellFormedXmlDocument(text))
             {
-                text = NormalizeResponseFormatting(text);
+                return new ExtractionResult(
+                    Array.AsReadOnly(Array.Empty<IReadOnlyDictionary<string, string>>()),
+                    false,
+                    false);
             }
 
+            var extractionText = _ignoreResponseFormattingWhitespace
+                ? ExtractionText.CreateWhitespaceInsensitive(text)
+                : ExtractionText.CreateExact(text);
+            var comparisonText = extractionText.ComparisonText;
             var candidates = new List<IReadOnlyDictionary<string, string>>();
-            if (!text.StartsWith(_extractionLiterals[0], StringComparison.Ordinal))
+            if (!comparisonText.StartsWith(_extractionLiterals[0], StringComparison.Ordinal))
             {
                 return new ExtractionResult(candidates.AsReadOnly(), false, false);
             }
@@ -1422,7 +1427,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             var wasTruncated = false;
             var isAmbiguous = false;
             ExploreCandidates(
-                text,
+                extractionText,
                 placeholderIndex: 0,
                 cursor: _extractionLiterals[0].Length,
                 valueStarts,
@@ -1438,7 +1443,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         }
 
         private void ExploreCandidates(
-            string text,
+            ExtractionText extractionText,
             int placeholderIndex,
             int cursor,
             int[] valueStarts,
@@ -1458,7 +1463,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
             if (placeholderIndex == _placeholders.Count)
             {
-                if (cursor != text.Length)
+                if (cursor != extractionText.ComparisonText.Length)
                 {
                     return;
                 }
@@ -1466,7 +1471,16 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 long candidateCharacters = 0;
                 for (var index = 0; index < valueStarts.Length; index++)
                 {
-                    candidateCharacters += valueEnds[index] - valueStarts[index];
+                    if (!extractionText.TryGetOriginalValueRange(
+                            valueStarts[index],
+                            valueEnds[index],
+                            out _,
+                            out var originalLength))
+                    {
+                        return;
+                    }
+
+                    candidateCharacters += originalLength;
                 }
 
                 if (candidateCharacters > MaximumMaterializedCharacters - materializedCharacters)
@@ -1476,7 +1490,11 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 }
 
                 materializedCharacters += candidateCharacters;
-                if (!TryMaterializeCandidate(text, valueStarts, valueEnds, out var candidate)
+                if (!TryMaterializeCandidate(
+                        extractionText,
+                        valueStarts,
+                        valueEnds,
+                        out var candidate)
                     || !candidateValidator(candidate))
                 {
                     return;
@@ -1492,6 +1510,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 return;
             }
 
+            var text = extractionText.ComparisonText;
             var nextLiteral = _extractionLiterals[placeholderIndex + 1];
             if (placeholderIndex == _placeholders.Count - 1)
             {
@@ -1502,7 +1521,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 }
 
                 ExploreBoundary(
-                    text,
+                    extractionText,
                     placeholderIndex,
                     cursor,
                     end,
@@ -1529,7 +1548,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 }
 
                 ExploreBoundary(
-                    text,
+                    extractionText,
                     placeholderIndex,
                     cursor,
                     end,
@@ -1548,7 +1567,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         }
 
         private void ExploreBoundary(
-            string text,
+            ExtractionText extractionText,
             int placeholderIndex,
             int cursor,
             int end,
@@ -1570,7 +1589,16 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 return;
             }
 
-            if (!IsPlausibleRawValue(_placeholders[placeholderIndex], text, cursor, end - cursor))
+            if (!extractionText.TryGetOriginalValueRange(
+                    cursor,
+                    end,
+                    out var originalStart,
+                    out var originalLength)
+                || !IsPlausibleRawValue(
+                    _placeholders[placeholderIndex],
+                    extractionText.OriginalText,
+                    originalStart,
+                    originalLength))
             {
                 return;
             }
@@ -1585,9 +1613,16 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     continue;
                 }
 
-                var comparisonCharacters = (long)(end - cursor)
-                                           + valueEnds[previousIndex]
-                                           - valueStarts[previousIndex];
+                if (!extractionText.TryGetOriginalValueRange(
+                        valueStarts[previousIndex],
+                        valueEnds[previousIndex],
+                        out var previousOriginalStart,
+                        out var previousOriginalLength))
+                {
+                    return;
+                }
+
+                var comparisonCharacters = (long)originalLength + previousOriginalLength;
                 if (comparisonCharacters > MaximumComparedCharacters - comparedCharacters)
                 {
                     wasTruncated = true;
@@ -1596,11 +1631,11 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
                 comparedCharacters += comparisonCharacters;
                 if (!XmlSegmentsEqual(
-                        text,
-                        valueStarts[previousIndex],
-                        valueEnds[previousIndex] - valueStarts[previousIndex],
-                        cursor,
-                        end - cursor))
+                        extractionText.OriginalText,
+                        previousOriginalStart,
+                        previousOriginalLength,
+                        originalStart,
+                        originalLength))
                 {
                     return;
                 }
@@ -1612,7 +1647,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             valueEnds[placeholderIndex] = end;
 
             ExploreCandidates(
-                text,
+                extractionText,
                 placeholderIndex + 1,
                 end + nextLiteral.Length,
                 valueStarts,
@@ -1627,7 +1662,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         }
 
         private bool TryMaterializeCandidate(
-            string text,
+            ExtractionText extractionText,
             IReadOnlyList<int> valueStarts,
             IReadOnlyList<int> valueEnds,
             out IReadOnlyDictionary<string, string> candidate)
@@ -1643,10 +1678,15 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     continue;
                 }
 
-                if (!TryUnescapeXml(
-                        text,
+                if (!extractionText.TryGetOriginalValueRange(
                         valueStarts[placeholderIndex],
-                        valueEnds[placeholderIndex] - valueStarts[placeholderIndex],
+                        valueEnds[placeholderIndex],
+                        out var originalStart,
+                        out var originalLength)
+                    || !TryUnescapeXml(
+                        extractionText.OriginalText,
+                        originalStart,
+                        originalLength,
                         out var value))
                 {
                     candidate = new ReadOnlyDictionary<string, string>(extracted);
@@ -1866,6 +1906,104 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                    || string.Equals(placeholder, "z_to_sharpness_2d", StringComparison.Ordinal)
                 ? 1
                 : 0;
+        }
+
+        private sealed class ExtractionText
+        {
+            private readonly int[]? _originalOffsets;
+
+            private ExtractionText(
+                string originalText,
+                string comparisonText,
+                int[]? originalOffsets)
+            {
+                OriginalText = originalText;
+                ComparisonText = comparisonText;
+                _originalOffsets = originalOffsets;
+            }
+
+            public string OriginalText { get; }
+
+            public string ComparisonText { get; }
+
+            public static ExtractionText CreateExact(string text) =>
+                new ExtractionText(text, text, null);
+
+            public static ExtractionText CreateWhitespaceInsensitive(string text)
+            {
+                var characterCount = 0;
+                foreach (var character in text)
+                {
+                    if (!IsXmlFormattingWhitespace(character))
+                    {
+                        characterCount++;
+                    }
+                }
+
+                var characters = new char[characterCount];
+                var originalOffsets = new int[characterCount];
+                var comparisonIndex = 0;
+                for (var originalIndex = 0; originalIndex < text.Length; originalIndex++)
+                {
+                    if (IsXmlFormattingWhitespace(text[originalIndex]))
+                    {
+                        continue;
+                    }
+
+                    characters[comparisonIndex] = text[originalIndex];
+                    originalOffsets[comparisonIndex] = originalIndex;
+                    comparisonIndex++;
+                }
+
+                return new ExtractionText(
+                    text,
+                    new string(characters),
+                    originalOffsets);
+            }
+
+            public bool TryGetOriginalValueRange(
+                int comparisonStart,
+                int comparisonEnd,
+                out int originalStart,
+                out int originalLength)
+            {
+                originalStart = 0;
+                originalLength = 0;
+                if (comparisonStart < 0
+                    || comparisonEnd < comparisonStart
+                    || comparisonEnd > ComparisonText.Length)
+                {
+                    return false;
+                }
+
+                if (_originalOffsets is null)
+                {
+                    originalStart = comparisonStart;
+                    originalLength = comparisonEnd - comparisonStart;
+                    return true;
+                }
+
+                originalStart = comparisonStart == 0
+                    ? 0
+                    : _originalOffsets[comparisonStart - 1] + 1;
+                var originalEnd = comparisonEnd == ComparisonText.Length
+                    ? OriginalText.Length
+                    : _originalOffsets[comparisonEnd];
+                while (originalStart < originalEnd
+                       && IsXmlFormattingWhitespace(OriginalText[originalStart]))
+                {
+                    originalStart++;
+                }
+
+                while (originalEnd > originalStart
+                       && IsXmlFormattingWhitespace(OriginalText[originalEnd - 1]))
+                {
+                    originalEnd--;
+                }
+
+                originalLength = originalEnd - originalStart;
+                return true;
+            }
         }
 
         public sealed class ExtractionResult

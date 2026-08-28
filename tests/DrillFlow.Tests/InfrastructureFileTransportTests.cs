@@ -44,7 +44,7 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
-    public async Task Exchange_DetectsCompactStageResponseWithPaddedScientificExponents()
+    public async Task Exchange_DetectsWhitespaceVariedStageResponseWithPaddedScientificExponents()
     {
         using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
@@ -55,13 +55,13 @@ public sealed class InfrastructureFileTransportTests
         await WaitForRequestAsync(options, request);
         PublishRawResponse(
             options,
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-            + "<response><type>response</type>"
-            + "<correlation_id>121</correlation_id>"
-            + "<action>stage</action><result>0</result>"
-            + "<current_stage_x>-3.2E-06</current_stage_x>"
-            + "<current_stage_y>4.12E-04</current_stage_y>"
-            + "</response>");
+            " \t\r\n<?xml\tversion = \"1.0\"\r\n encoding = \"utf-8\"   ?>"
+            + "<response \t><type > \tresponse\r\n</type >"
+            + "<correlation_id\r\n> 121 </correlation_id >"
+            + "<action >\r\nstage\t</action ><result > 0 </result >"
+            + "<current_stage_x > \t-3.2E-06\r\n</current_stage_x >"
+            + "<current_stage_y\t> 4.12E-04 </current_stage_y >"
+            + "</response   >\r\n ");
 
         var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
 
