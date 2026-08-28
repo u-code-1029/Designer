@@ -99,7 +99,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
     public bool TryDeserializeResponse(byte[] payload, out EquipmentResponseMessage? response)
     {
         response = null;
-        if (!TryDecode(payload, out var text))
+        if (!TryDecodeResponse(payload, out var text))
         {
             return false;
         }
@@ -115,7 +115,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         response = null;
         if (expectedRequest is null
             || !_templates.TryGetValue(expectedRequest.Action, out var templates)
-            || !TryDecode(payload, out var text))
+            || !TryDecodeResponse(payload, out var text))
         {
             return false;
         }
@@ -1074,6 +1074,21 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
     private static bool TryDecode(byte[]? payload, out string text)
     {
+        return TryDecode(payload, allowUtf8Bom: false, out text);
+    }
+
+    private static bool TryDecodeResponse(byte[]? payload, out string text)
+    {
+        // Equipment may write UTF-8 with or without the standard byte-order mark. Skip the
+        // three-byte preamble in memory instead of rewriting the controller-owned response file.
+        return TryDecode(payload, allowUtf8Bom: true, out text);
+    }
+
+    private static bool TryDecode(
+        byte[]? payload,
+        bool allowUtf8Bom,
+        out string text)
+    {
         text = string.Empty;
         if (payload is null
             || payload.Length == 0
@@ -1084,13 +1099,32 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
         try
         {
-            text = StrictUtf8.GetString(payload);
+            var offset = HasUtf8Bom(payload) ? 3 : 0;
+            if (offset != 0 && !allowUtf8Bom)
+            {
+                return false;
+            }
+
+            if (offset == payload.Length)
+            {
+                return false;
+            }
+
+            text = StrictUtf8.GetString(payload, offset, payload.Length - offset);
             return text.Length > 0 && text[0] != '\uFEFF';
         }
         catch (DecoderFallbackException)
         {
             return false;
         }
+    }
+
+    private static bool HasUtf8Bom(byte[] payload)
+    {
+        return payload.Length >= 3
+               && payload[0] == 0xEF
+               && payload[1] == 0xBB
+               && payload[2] == 0xBF;
     }
 
     private static byte[] EncodeWithinLimit(string text)

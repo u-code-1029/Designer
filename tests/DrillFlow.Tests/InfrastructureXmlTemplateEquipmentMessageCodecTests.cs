@@ -39,6 +39,43 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     }
 
     [Fact]
+    public void ResponsePayload_WithUtf8Bom_IsAcceptedByBothDeserializerOverloads()
+    {
+        var expectedRequest = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var responseBytes = _codec.SerializeResponse(CreateResponse(
+            expectedRequest.CorrelationId,
+            expectedRequest.Action));
+        var payload = Encoding.UTF8.GetBytes(
+            "\uFEFF" + Encoding.UTF8.GetString(responseBytes));
+
+        Assert.True(_codec.TryDeserializeResponse(payload, out var genericResponse));
+        Assert.NotNull(genericResponse);
+        Assert.Equal(expectedRequest.CorrelationId, genericResponse!.CorrelationId);
+        Assert.Equal(expectedRequest.Action, genericResponse.Action);
+
+        Assert.True(_codec.TryDeserializeResponse(
+            payload,
+            expectedRequest,
+            out var expectedRequestResponse));
+        Assert.NotNull(expectedRequestResponse);
+        Assert.Equal(expectedRequest.CorrelationId, expectedRequestResponse!.CorrelationId);
+        Assert.Equal(expectedRequest.Action, expectedRequestResponse.Action);
+    }
+
+    [Fact]
+    public void RequestPayload_WithUtf8Bom_RemainsRejected()
+    {
+        var request = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var requestBytes = _codec.SerializeRequest(request);
+        var payload = Encoding.UTF8.GetBytes(
+            "\uFEFF" + Encoding.UTF8.GetString(requestBytes));
+
+        Assert.False(_codec.TryDeserializeRequest(payload, out _));
+    }
+
+    [Fact]
     public void StageRequest_UsesScientificNotationAndXmlEscapesStringFields()
     {
         var integration = new EquipmentRequestMessage(

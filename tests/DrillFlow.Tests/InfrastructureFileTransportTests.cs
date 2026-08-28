@@ -94,6 +94,28 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_DetectsUtf8BomResponsePublishedAfterRequest()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(129);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        var responseXml = Encoding.UTF8.GetString(
+            _codec.SerializeResponse(StageResponse(129, 0.125, -0.25)));
+        PublishRawResponse(options, "\uFEFF" + responseXml);
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(129, response.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, response.Action);
+        Assert.Equal(0.125, response.CurrentStageX);
+        Assert.Equal(-0.25, response.CurrentStageY);
+    }
+
+    [Fact]
     public async Task Exchange_WaitsConfiguredDelayBeforeInitialRequestPublication()
     {
         using var directory = new TempDirectory();

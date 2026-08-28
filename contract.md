@@ -4,7 +4,7 @@
 > 범위: Designer/Live Interaction과 장비 사이의 단일 Action request/response
 > 비범위: 워크플로 저장 파일(`*.drillflow.json`), HTTP 및 로컬 Control Flow
 
-이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 장비에 게시하고 장비에서 읽는 파일은 **UTF-8(BOM 없음) XML**이다.
+이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 앱이 게시하는 request와 테스트 response는 **UTF-8(BOM 없음) XML**이다. 장비가 작성한 response는 UTF-8 BOM 유무를 모두 허용하며, BOM은 원본 파일을 수정하지 않고 메모리에서 제거한 뒤 파싱한다.
 
 XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿을 일반 텍스트로 취급하며 정확히 `{{{field_name}}}`인 자리만 XML-safe 값으로 치환하거나 추출한다. 태그·속성·주석·본문에 있는 일반 `field_name` 문자열과 `{{{{field_name}}}}` 같은 근접 표기는 placeholder가 아니다. 실제 장비 XML이 확정되면 [템플릿 폴더](#8-xml-템플릿과-변경-방법)의 12개 Dummy 파일을 실제 양식으로 바꾸고 placeholder 이름과 의미를 유지한다.
 
@@ -291,7 +291,7 @@ src/DrillFlow.Infrastructure/Communication/Templates/
 └─ Abort/request.xml, response.xml
 ~~~
 
-템플릿과 실제 request/response wire payload는 각각 UTF-8 기준 최대 **4 MiB**다. 앱은 이보다 큰 response 파일을 배열로 할당하기 전에 무시하며, 유효한 response가 제한 시간 안에 오지 않은 것과 동일하게 timeout 처리한다. 템플릿 파일은 UTF-8 **BOM 없이** 저장해야 하며 BOM/U+FEFF가 있으면 앱 시작 시 계약 오류로 즉시 거부한다.
+템플릿과 실제 request/response wire payload는 각각 UTF-8 기준 최대 **4 MiB**다. 앱은 이보다 큰 response 파일을 배열로 할당하기 전에 무시하며, 유효한 response가 제한 시간 안에 오지 않은 것과 동일하게 timeout 처리한다. 장비 response 선두의 표준 UTF-8 BOM은 이 크기에 포함되며 파싱 전에 메모리에서 제거한다. 템플릿 파일은 UTF-8 **BOM 없이** 저장해야 하며 BOM/U+FEFF가 있으면 앱 시작 시 계약 오류로 즉시 거부한다.
 
 현재 예시는 사람이 바로 찾을 수 있는 placeholder를 사용한다.
 
