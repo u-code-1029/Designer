@@ -41,30 +41,31 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     [Fact]
     public void ResponsePayload_WithUtf8Bom_IsAcceptedByBothDeserializerOverloads()
     {
-        var expectedRequest = CreateRequests()
-            .Single(item => item.Action == EquipmentActionNames.Stage);
-        var responseBytes = _codec.SerializeResponse(CreateResponse(
-            expectedRequest.CorrelationId,
-            expectedRequest.Action));
-        var payload = Encoding.UTF8.GetBytes(
-            "\uFEFF" + Encoding.UTF8.GetString(responseBytes));
+        foreach (var expectedRequest in CreateRequests())
+        {
+            var responseBytes = _codec.SerializeResponse(CreateResponse(
+                expectedRequest.CorrelationId,
+                expectedRequest.Action));
+            var payload = Encoding.UTF8.GetBytes(
+                "\uFEFF" + Encoding.UTF8.GetString(responseBytes));
 
-        Assert.True(_codec.TryDeserializeResponse(payload, out var genericResponse));
-        Assert.NotNull(genericResponse);
-        Assert.Equal(expectedRequest.CorrelationId, genericResponse!.CorrelationId);
-        Assert.Equal(expectedRequest.Action, genericResponse.Action);
+            Assert.True(_codec.TryDeserializeResponse(payload, out var genericResponse));
+            Assert.NotNull(genericResponse);
+            Assert.Equal(expectedRequest.CorrelationId, genericResponse!.CorrelationId);
+            Assert.Equal(expectedRequest.Action, genericResponse.Action);
 
-        Assert.True(_codec.TryDeserializeResponse(
-            payload,
-            expectedRequest,
-            out var expectedRequestResponse));
-        Assert.NotNull(expectedRequestResponse);
-        Assert.Equal(expectedRequest.CorrelationId, expectedRequestResponse!.CorrelationId);
-        Assert.Equal(expectedRequest.Action, expectedRequestResponse.Action);
+            Assert.True(_codec.TryDeserializeResponse(
+                payload,
+                expectedRequest,
+                out var expectedRequestResponse));
+            Assert.NotNull(expectedRequestResponse);
+            Assert.Equal(expectedRequest.CorrelationId, expectedRequestResponse!.CorrelationId);
+            Assert.Equal(expectedRequest.Action, expectedRequestResponse.Action);
+        }
     }
 
     [Fact]
-    public void RequestPayload_WithUtf8Bom_RemainsRejected()
+    public void RequestPayload_WithUtf8Bom_IsAccepted()
     {
         var request = CreateRequests()
             .Single(item => item.Action == EquipmentActionNames.Stage);
@@ -72,7 +73,62 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
         var payload = Encoding.UTF8.GetBytes(
             "\uFEFF" + Encoding.UTF8.GetString(requestBytes));
 
-        Assert.False(_codec.TryDeserializeRequest(payload, out _));
+        Assert.True(_codec.TryDeserializeRequest(payload, out var restored));
+        Assert.NotNull(restored);
+        Assert.Equal(request.CorrelationId, restored!.CorrelationId);
+        Assert.Equal(request.Action, restored.Action);
+    }
+
+    [Fact]
+    public void WirePayloads_WithDoubleOrEmbeddedUtf8BomMarker_AreRejected()
+    {
+        var request = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var requestXml = Encoding.UTF8.GetString(_codec.SerializeRequest(request));
+        var responseXml = Encoding.UTF8.GetString(_codec.SerializeResponse(CreateResponse(
+            request.CorrelationId,
+            request.Action)));
+
+        Assert.False(_codec.TryDeserializeRequest(
+            Encoding.UTF8.GetBytes("\uFEFF\uFEFF" + requestXml),
+            out _));
+        Assert.False(_codec.TryDeserializeRequest(
+            Encoding.UTF8.GetBytes(requestXml.Replace(
+                "<stage_x>",
+                "\uFEFF<stage_x>")),
+            out _));
+        Assert.False(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes("\uFEFF\uFEFF" + responseXml),
+            request,
+            out _));
+        Assert.False(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(responseXml.Replace(
+                "<current_stage_x>",
+                "\uFEFF<current_stage_x>")),
+            out _));
+    }
+
+    [Fact]
+    public void WirePayloads_WithInvalidUtf8OrUtf16OrUtf32_AreRejected()
+    {
+        var request = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
+        var requestXml = Encoding.UTF8.GetString(_codec.SerializeRequest(request));
+        var invalidUtf8 = new byte[] { 0xC3, 0x28 };
+        var utf16WithBom = Encoding.Unicode.GetPreamble()
+            .Concat(Encoding.Unicode.GetBytes(requestXml))
+            .ToArray();
+        var utf16WithoutBom = Encoding.Unicode.GetBytes(requestXml);
+        var utf32WithBom = Encoding.UTF32.GetPreamble()
+            .Concat(Encoding.UTF32.GetBytes(requestXml))
+            .ToArray();
+        var utf32WithoutBom = Encoding.UTF32.GetBytes(requestXml);
+
+        Assert.False(_codec.TryDeserializeRequest(invalidUtf8, out _));
+        Assert.False(_codec.TryDeserializeRequest(utf16WithBom, out _));
+        Assert.False(_codec.TryDeserializeRequest(utf16WithoutBom, out _));
+        Assert.False(_codec.TryDeserializeRequest(utf32WithBom, out _));
+        Assert.False(_codec.TryDeserializeRequest(utf32WithoutBom, out _));
     }
 
     [Fact]
@@ -809,13 +865,40 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     }
 
     [Fact]
-    public void TemplateCatalog_FailsFastWhenATemplateContainsUtf8BomMarker()
+    public void TemplateCatalog_AcceptsOneLeadingUtf8BomMarkerAndDoesNotRenderIt()
     {
-        var exception = Assert.Throws<InvalidDataException>(() =>
-            new XmlTemplateEquipmentMessageCodec((_, _) => "\uFEFF<message />"));
+        var codec = new XmlTemplateEquipmentMessageCodec(
+            (action, direction) => "\uFEFF" + CreateContractTextTemplate(action, direction));
+        var request = CreateRequests()
+            .Single(item => item.Action == EquipmentActionNames.Stage);
 
-        Assert.Contains("BOM", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("U+FEFF", exception.Message, StringComparison.Ordinal);
+        var requestBytes = codec.SerializeRequest(request);
+        var responseBytes = codec.SerializeResponse(CreateResponse(
+            request.CorrelationId,
+            request.Action));
+
+        Assert.False(HasUtf8Bom(requestBytes));
+        Assert.False(HasUtf8Bom(responseBytes));
+        Assert.True(codec.TryDeserializeRequest(requestBytes, out var restoredRequest));
+        Assert.NotNull(restoredRequest);
+        Assert.True(codec.TryDeserializeResponse(responseBytes, request, out var restoredResponse));
+        Assert.NotNull(restoredResponse);
+    }
+
+    [Fact]
+    public void TemplateCatalog_RejectsDoubleOrEmbeddedUtf8BomMarkers()
+    {
+        var doubleBom = Assert.Throws<InvalidDataException>(() =>
+            new XmlTemplateEquipmentMessageCodec(
+                (action, direction) => "\uFEFF\uFEFF" + CreateContractTextTemplate(action, direction)));
+        var embeddedBom = Assert.Throws<InvalidDataException>(() =>
+            new XmlTemplateEquipmentMessageCodec(
+                (action, direction) => CreateContractTextTemplate(action, direction) + "\uFEFF"));
+
+        Assert.Contains("UTF-8 BOM", doubleBom.Message, StringComparison.Ordinal);
+        Assert.Contains("U+FEFF", doubleBom.Message, StringComparison.Ordinal);
+        Assert.Contains("UTF-8 BOM", embeddedBom.Message, StringComparison.Ordinal);
+        Assert.Contains("U+FEFF", embeddedBom.Message, StringComparison.Ordinal);
     }
 
     [Fact]

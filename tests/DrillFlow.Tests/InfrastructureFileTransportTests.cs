@@ -116,6 +116,112 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_WaitsForResponseWriterToCloseBeforeReadingPublishedPayload()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(130);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        var responseBytes = _codec.SerializeResponse(StageResponse(130, 0.125, -0.25));
+        using (var responseWriter = new FileStream(
+                   ResponsePath(options),
+                   FileMode.Create,
+                   FileAccess.Write,
+                   FileShare.ReadWrite | FileShare.Delete))
+        {
+            await responseWriter.WriteAsync(responseBytes, 0, responseBytes.Length);
+            await responseWriter.FlushAsync();
+
+            await Task.Delay(
+                options.StableReadDelay
+                + options.PollingInterval
+                + options.StableReadDelay);
+            Assert.False(exchange.IsCompleted);
+        }
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(130, response.CorrelationId);
+        Assert.Equal(0.125, response.CurrentStageX);
+        Assert.Equal(-0.25, response.CurrentStageY);
+    }
+
+    [Fact]
+    public async Task Exchange_RetainModeCapturesOpenStaleResponseBeforePublishingRequest()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.ApplicationResponseLifecycle = ApplicationResponseFileLifecycle.RetainUntilOverwritten;
+        using var transport = CreateTransport(options);
+        var request = StageRequest(131);
+        var staleResponse = _codec.SerializeResponse(StageResponse(131, 1, 2));
+
+        var responseWriter = new FileStream(
+            ResponsePath(options),
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
+        try
+        {
+            await responseWriter.WriteAsync(staleResponse, 0, staleResponse.Length);
+            await responseWriter.FlushAsync();
+
+            var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+            await Task.Delay(
+                options.StableReadDelay
+                + options.PollingInterval
+                + options.StableReadDelay);
+            Assert.False(File.Exists(RequestPath(options)));
+
+            responseWriter.Dispose();
+            await WaitForRequestAsync(options, request);
+            await Task.Delay(options.StableReadDelay + options.PollingInterval);
+            Assert.False(exchange.IsCompleted);
+
+            PublishResponse(options, StageResponse(131, 3, 4));
+            var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+            Assert.Equal(3, response.CurrentStageX);
+            Assert.Equal(4, response.CurrentStageY);
+        }
+        finally
+        {
+            responseWriter.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Exchange_RetainModeDoesNotPublishWhenOpenBaselineNeverBecomesReadable()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.ResponseTimeout = TimeSpan.FromMilliseconds(120);
+        options.ApplicationResponseLifecycle = ApplicationResponseFileLifecycle.RetainUntilOverwritten;
+        using var transport = CreateTransport(options);
+        var request = StageRequest(132);
+        var staleResponse = _codec.SerializeResponse(StageResponse(132, 1, 2));
+
+        using (var responseWriter = new FileStream(
+                   ResponsePath(options),
+                   FileMode.Create,
+                   FileAccess.Write,
+                   FileShare.ReadWrite | FileShare.Delete))
+        {
+            await responseWriter.WriteAsync(staleResponse, 0, staleResponse.Length);
+            await responseWriter.FlushAsync();
+
+            var exception = await Assert.ThrowsAsync<TimeoutException>(
+                () => transport.ExchangeAsync(request, CancellationToken.None));
+
+            Assert.Contains("No request was published", exception.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(RequestPath(options)));
+        }
+    }
+
+    [Fact]
     public async Task Exchange_WaitsConfiguredDelayBeforeInitialRequestPublication()
     {
         using var directory = new TempDirectory();

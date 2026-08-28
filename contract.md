@@ -4,7 +4,7 @@
 > 범위: Designer/Live Interaction과 장비 사이의 단일 Action request/response
 > 비범위: 워크플로 저장 파일(`*.drillflow.json`), HTTP 및 로컬 Control Flow
 
-이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 앱이 게시하는 request와 테스트 response는 **UTF-8(BOM 없음) XML**이다. 장비가 작성한 response는 UTF-8 BOM 유무를 모두 허용하며, BOM은 원본 파일을 수정하지 않고 메모리에서 제거한 뒤 파싱한다.
+이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 앱이 게시하는 request와 테스트 response는 **UTF-8(BOM 없음) XML**이다. Embedded 템플릿과 장비 wire XML 입력은 strict UTF-8 BOM 유무를 모두 허용하며, 정확히 하나의 선두 BOM은 원본 파일을 수정하지 않고 메모리에서 제거한 뒤 파싱한다. 인코딩과 파일 인계의 상세 정책은 [`docs/xml-encoding-and-file-handshake.md`](docs/xml-encoding-and-file-handshake.md)를 따른다.
 
 XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿을 일반 텍스트로 취급하며 정확히 `{{{field_name}}}`인 자리만 XML-safe 값으로 치환하거나 추출한다. 태그·속성·주석·본문에 있는 일반 `field_name` 문자열과 `{{{{field_name}}}}` 같은 근접 표기는 placeholder가 아니다. 실제 장비 XML이 확정되면 [템플릿 폴더](#8-xml-템플릿과-변경-방법)의 25개 Dummy 파일을 실제 양식으로 바꾸고 placeholder 이름과 의미를 유지한다. Action별 성공 response에 추가 필드가 있는 경우에는 공통 필드만 담은 `failure-response.xml`도 함께 유지한다.
 
@@ -17,7 +17,7 @@ XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿�
 3. Action별 XML request 템플릿의 placeholder를 치환해 설정된 request 파일명으로 원자적으로 게시한다.
 4. 장비가 request를 읽고 동작을 완료한다.
 5. 장비가 같은 `correlation_id`와 같은 `action`을 가진 XML response를 게시한다.
-6. 앱은 안정적으로 기록된 response snapshot을 읽고 해당 Action의 response 템플릿으로 파싱한다. 다른 correlation/action과 깨진 XML은 현재 응답으로 인정하지 않는다. `result = 0`의 Action별 출력은 모두 유효해야 하며, `result = 1`의 성공 전용 출력은 요구하거나 신뢰하지 않는다.
+6. 앱은 장비 writer가 닫힌 뒤 안정화된 response snapshot을 읽고 해당 Action의 response 템플릿으로 파싱한다. 다른 correlation/action과 깨진 XML은 현재 응답으로 인정하지 않는다. `result = 0`의 Action별 출력은 모두 유효해야 하며, `result = 1`의 성공 전용 출력은 요구하거나 신뢰하지 않는다.
 7. matching response가 확인되면 기본 설정에서 request를 먼저 best-effort 삭제한다.
 8. response를 런타임 결과로 materialize한 다음 기본 설정에서 response도 best-effort 삭제한다.
 9. `result = 0`이면 성공하며 Action별 response 필드까지 검증한다. `result = 1`이면 공통 필드만으로도 유효한 실패 응답이며, 해당 Action을 `Faulted`로 기록하고 이후 Workflow를 즉시 중단한다.
@@ -349,7 +349,7 @@ Designer Workflow 실행과 Live Interaction 장비 동작은 같은 파일명�
 | `ApplicationResponseLifecycle` | materialize 뒤 앱이 response를 삭제(기본)하거나 보존하는지 |
 | `ResponseTimeout` | matching response 대기 시간 |
 | `RetryEnabled`, `MaximumRetryCount`, `RetryDelay` | timeout 재시도 정책 |
-| `PollingInterval`, `StableReadDelay` | 로컬/UNC stable polling 간격 |
+| `PollingInterval`, `StableReadDelay` | 로컬/UNC stable polling 간격. writer handle이 닫히고 metadata가 안정된 파일만 읽음 |
 
 request와 response filename은 서로 달라야 하고 경로가 아닌 leaf name이어야 한다. 게시에는 같은 폴더의 임시 파일과 atomic replace/move를 사용한다. 폴더별 `.drillflow.exchange.lock`과 프로세스 내부 gate가 exchange를 직렬화한다. 이 lock은 개별 exchange 충돌을 막지만 여러 운영자의 장기 장비 소유권까지 보장하지 않으므로 물리 장비/폴더에는 한 active controller만 연결한다.
 
@@ -387,7 +387,7 @@ src/DrillFlow.Infrastructure/Communication/Templates/
 
 총 25개다. 모든 Action에 `request.xml`과 정상 `response.xml`이 있고, 성공 response가 공통 envelope 밖의 필드를 갖는 Stage/Camera/Focus/Integration/Live/OM/Lens에는 공통 실패 shape를 위한 `failure-response.xml`이 하나씩 더 있다. Abort와 ACB는 정상 response 자체가 공통 필드만 가지므로 별도 failure 템플릿이 필요 없다.
 
-템플릿과 실제 request/response wire payload는 각각 UTF-8 기준 최대 **4 MiB**다. 앱은 이보다 큰 response 파일을 배열로 할당하기 전에 무시하며, 유효한 response가 제한 시간 안에 오지 않은 것과 동일하게 timeout 처리한다. 장비 response 선두의 표준 UTF-8 BOM은 이 크기에 포함되며 파싱 전에 메모리에서 제거한다. 템플릿 파일은 UTF-8 **BOM 없이** 저장해야 하며 BOM/U+FEFF가 있으면 앱 시작 시 계약 오류로 즉시 거부한다.
+템플릿과 실제 request/response wire payload는 각각 UTF-8 기준 최대 **4 MiB**다. 앱은 이보다 큰 response 파일을 배열로 할당하기 전에 무시하며, 유효한 response가 제한 시간 안에 오지 않은 것과 동일하게 timeout 처리한다. 템플릿과 wire 입력의 표준 UTF-8 BOM은 이 크기에 포함되며, 정확히 하나의 선두 BOM은 파싱 전에 메모리에서 제거한다. 잘못된 UTF-8, UTF-16/32, 이중 BOM, 본문의 U+FEFF/NUL은 거부한다. 앱이 생성하는 request/test response는 항상 UTF-8 BOM 없음으로 출력한다.
 
 현재 예시는 사람이 바로 찾을 수 있는 placeholder를 사용한다.
 
@@ -409,7 +409,7 @@ src/DrillFlow.Infrastructure/Communication/Templates/
 2. `correlation_id`와 Action별 동적 request/response 필드는 정확한 `{{{field_name}}}` 토큰으로 적어도 한 번 남긴다. response의 `result`도 필수다. `type`과 `action`은 토큰으로 둘 수도 있고 해당 Action/방향 템플릿의 고정 문자열로 표현할 수도 있다.
 3. 같은 논리 값을 XML 여러 위치에 넣어야 하면 동일 placeholder를 반복해도 된다. 렌더링 시 모두 같은 값으로 치환하며, response/request 파싱 시 반복 위치의 XML-unescape 결과가 하나라도 다르면 전체 payload를 거부한다. 값 경계를 알 수 없는 인접 placeholder는 허용하지 않으며, 한 템플릿은 재귀 깊이와 처리량을 제한하기 위해 placeholder 출현을 최대 256개까지 허용한다.
 4. 임의 placeholder나 공백·대문자가 섞인 잘못된 토큰을 추가하지 않는다. 일반 `correlation_id` 같은 텍스트는 개수와 관계없이 그대로 유지된다.
-5. 고정 태그·namespace·속성·주석의 공백 이외 내용과 순서는 실제 장비 정답지와 같게 작성하고, UTF-8 BOM 없이 4 MiB 미만으로 저장한다. 파서는 일반 XML-to-object 변환 대신 placeholder 사이의 고정 텍스트를 비교한다. 단, response의 고정 템플릿 구간은 선언·태그 내부·들여쓰기·문서 바깥을 포함하여 공백·탭·CR/LF 차이를 무시하므로 들여쓴 템플릿과 장비의 동등한 한 줄 XML이 호환된다. 비교에는 공백을 제외한 projection을 사용하지만 placeholder 값은 원본 XML 위치에서 추출한다. 따라서 값 바깥의 서식 공백은 제거되고 `image_path`나 Focus 배열 값 내부의 의미 있는 공백은 보존된다. response는 먼저 well-formed XML인지 확인하며, 잘못 닫힌 태그나 유효하지 않은 XML은 허용하지 않는다. request 파싱에는 이 완화를 적용하지 않는다. 고정 구분 문자열이 값 안에도 나타나면 뒤쪽 경계까지 탐색하되, 논리 계약까지 통과하는 해석이 정확히 하나일 때만 수락하고 탐색·비교·문자열 생성 예산을 넘는 비정상 payload는 거부한다.
+5. 고정 태그·namespace·속성·주석의 공백 이외 내용과 순서는 실제 장비 정답지와 같게 작성하고, strict UTF-8(BOM 없음 또는 선두에 하나)로 4 MiB 미만으로 저장한다. 파서는 일반 XML-to-object 변환 대신 placeholder 사이의 고정 텍스트를 비교한다. 단, response의 고정 템플릿 구간은 선언·태그 내부·들여쓰기·문서 바깥을 포함하여 공백·탭·CR/LF 차이를 무시하므로 들여쓴 템플릿과 장비의 동등한 한 줄 XML이 호환된다. 비교에는 공백을 제외한 projection을 사용하지만 placeholder 값은 원본 XML 위치에서 추출한다. 따라서 값 바깥의 서식 공백은 제거되고 `image_path`나 Focus 배열 값 내부의 의미 있는 공백은 보존된다. response는 먼저 well-formed XML인지 확인하며, 잘못 닫힌 태그나 유효하지 않은 XML은 허용하지 않는다. request 파싱에는 이 완화를 적용하지 않는다. 고정 구분 문자열이 값 안에도 나타나면 뒤쪽 경계까지 탐색하되, 논리 계약까지 통과하는 해석이 정확히 하나일 때만 수락하고 탐색·비교·문자열 생성 예산을 넘는 비정상 payload는 거부한다.
 6. 문자 필드는 codec이 XML escaping한다. 숫자는 invariant 대문자 scientific notation 및 최소 두 자리 지수부(`1E-06`, `-2.56E-03`)로 치환한다. 입력 파서는 기존 `1E-6`과 장비 표기 `1E-06`을 모두 허용한다. 삽입한 값 안의 `{{{...}}}` 문자열은 다시 치환하지 않는다.
 7. `failure-response.xml`에는 `type`, `correlation_id`, `action`, `result` placeholder만 둔다. 앱은 `result = 1`인 정상 response shape도 호환 입력으로 받아들이지만, 성공 전용 값은 검증하거나 결과로 사용하지 않는다.
 8. `InfrastructureXmlTemplateEquipmentMessageCodecTests`에 실제 fixture round-trip, 반복값 일치 및 잘못된 응답 rejection 사례를 추가한다.

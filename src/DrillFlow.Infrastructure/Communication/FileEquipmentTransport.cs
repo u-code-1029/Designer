@@ -180,7 +180,10 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             // accept an old matching ID without the equipment actually replacing the payload.
             // Apply the same protection when default-mode preflight deletion was not possible.
             var retainedResponseBaseline = preserveResponseBaseline
-                ? await TryReadStableBytesAsync(responsePath, cancellationToken)
+                ? await CaptureRetainedResponseBaselineAsync(
+                        responsePath,
+                        request,
+                        cancellationToken)
                     .ConfigureAwait(false)
                 : null;
 
@@ -621,14 +624,14 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             return;
                         }
 
-                        var presence = GetRequestFilePresence(requestPath);
-                        if (presence == RequestFilePresence.Absent)
+                        var presence = GetFilePresence(requestPath);
+                        if (presence == FilePresence.Absent)
                         {
                             return;
                         }
 
                         lastFailure = new IOException(
-                            presence == RequestFilePresence.Present
+                            presence == FilePresence.Present
                                 ? "The canceled request exists but could not be read as a stable file."
                                 : "The canceled request path could not be queried.");
                     }
@@ -1052,7 +1055,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (GetRequestFilePresence(requestPath) == RequestFilePresence.Absent)
+            if (GetFilePresence(requestPath) == FilePresence.Absent)
             {
                 return;
             }
@@ -1083,30 +1086,86 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
     }
 
-    private static RequestFilePresence GetRequestFilePresence(string requestPath)
+    private static FilePresence GetFilePresence(string filePath)
     {
         try
         {
-            File.GetAttributes(requestPath);
-            return RequestFilePresence.Present;
+            File.GetAttributes(filePath);
+            return FilePresence.Present;
         }
         catch (FileNotFoundException)
         {
-            return RequestFilePresence.Absent;
+            return FilePresence.Absent;
         }
         catch (DirectoryNotFoundException)
         {
-            return RequestFilePresence.Absent;
+            return FilePresence.Absent;
         }
         catch (IOException)
         {
             // A transient network/share failure is not evidence that the equipment has deleted
             // the file. Failing closed avoids publishing into an uncertain pathname.
-            return RequestFilePresence.Unknown;
+            return FilePresence.Unknown;
         }
         catch (UnauthorizedAccessException)
         {
-            return RequestFilePresence.Unknown;
+            return FilePresence.Unknown;
+        }
+    }
+
+    private async Task<byte[]?> CaptureRetainedResponseBaselineAsync(
+        string responsePath,
+        EquipmentRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var loggedWait = false;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (GetFilePresence(responsePath) == FilePresence.Absent)
+            {
+                return null;
+            }
+
+            var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
+                .ConfigureAwait(false);
+            if (payload is not null)
+            {
+                return payload;
+            }
+
+            // The response can disappear between the first presence check and the stable read.
+            // In that case there is no stale payload to preserve as the next exchange baseline.
+            if (GetFilePresence(responsePath) == FilePresence.Absent)
+            {
+                return null;
+            }
+
+            if (!loggedWait)
+            {
+                loggedWait = true;
+                _logger.LogDebug(
+                    "Waiting for pre-existing response file {ResponsePath} to become readable "
+                    + "or disappear before publishing {Action} request {CorrelationId}.",
+                    responsePath,
+                    request.Action,
+                    request.CorrelationId);
+            }
+
+            var remaining = _options.ResponseTimeout - elapsed.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                throw new TimeoutException(
+                    $"The pre-existing equipment response at '{responsePath}' did not become "
+                    + $"readable or disappear within {_options.ResponseTimeout}. No request "
+                    + "was published.");
+            }
+
+            var delay = remaining < _options.PollingInterval
+                ? remaining
+                : _options.PollingInterval;
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -1310,7 +1369,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                        filePath,
                        FileMode.Open,
                        FileAccess.Read,
-                       FileShare.ReadWrite | FileShare.Delete,
+                       // A response is considered publishable only after its writer has closed
+                       // the file. Denying write sharing makes an in-progress local or SMB write
+                       // fail this read attempt with a sharing violation, so the polling loop can
+                       // retry instead of parsing a payload that merely happened to keep the same
+                       // length and timestamp during StableReadDelay.
+                       FileShare.Read,
                        4096,
                        FileOptions.Asynchronous))
             {
@@ -1621,7 +1685,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
     }
 
-    private enum RequestFilePresence
+    private enum FilePresence
     {
         Absent,
         Present,

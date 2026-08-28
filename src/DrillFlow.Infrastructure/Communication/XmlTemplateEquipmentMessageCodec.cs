@@ -117,7 +117,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
     public bool TryDeserializeResponse(byte[] payload, out EquipmentResponseMessage? response)
     {
         response = null;
-        if (!TryDecodeResponse(payload, out var text))
+        if (!TryDecode(payload, out var text))
         {
             return false;
         }
@@ -133,7 +133,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         response = null;
         if (expectedRequest is null
             || !_templates.TryGetValue(expectedRequest.Action, out var templates)
-            || !TryDecodeResponse(payload, out var text))
+            || !TryDecode(payload, out var text))
         {
             return false;
         }
@@ -1247,21 +1247,6 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
     private static bool TryDecode(byte[]? payload, out string text)
     {
-        return TryDecode(payload, allowUtf8Bom: false, out text);
-    }
-
-    private static bool TryDecodeResponse(byte[]? payload, out string text)
-    {
-        // Equipment may write UTF-8 with or without the standard byte-order mark. Skip the
-        // three-byte preamble in memory instead of rewriting the controller-owned response file.
-        return TryDecode(payload, allowUtf8Bom: true, out text);
-    }
-
-    private static bool TryDecode(
-        byte[]? payload,
-        bool allowUtf8Bom,
-        out string text)
-    {
         text = string.Empty;
         if (payload is null
             || payload.Length == 0
@@ -1272,19 +1257,17 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
         try
         {
+            // Templates and equipment wire files use one canonical character encoding: strict
+            // UTF-8. A single leading UTF-8 preamble is tolerated at the integration boundary
+            // and removed in memory; output remains UTF-8 without a preamble.
             var offset = HasUtf8Bom(payload) ? 3 : 0;
-            if (offset != 0 && !allowUtf8Bom)
-            {
-                return false;
-            }
-
             if (offset == payload.Length)
             {
                 return false;
             }
 
             text = StrictUtf8.GetString(payload, offset, payload.Length - offset);
-            return text.Length > 0 && text[0] != '\uFEFF';
+            return IsValidNormalizedUtf8Text(text);
         }
         catch (DecoderFallbackException)
         {
@@ -1298,6 +1281,49 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                && payload[0] == 0xEF
                && payload[1] == 0xBB
                && payload[2] == 0xBF;
+    }
+
+    private static bool TryNormalizeUtf8Text(string? source, out string text)
+    {
+        text = string.Empty;
+        if (string.IsNullOrEmpty(source))
+        {
+            return false;
+        }
+
+        var offset = source![0] == '\uFEFF' ? 1 : 0;
+        if (offset == source.Length)
+        {
+            return false;
+        }
+
+        text = offset == 0 ? source : source.Substring(1);
+        if (!IsValidNormalizedUtf8Text(text))
+        {
+            text = string.Empty;
+            return false;
+        }
+
+        try
+        {
+            _ = StrictUtf8.GetByteCount(text);
+            return true;
+        }
+        catch (EncoderFallbackException)
+        {
+            text = string.Empty;
+            return false;
+        }
+    }
+
+    private static bool IsValidNormalizedUtf8Text(string text)
+    {
+        // A remaining marker means either a double BOM or an embedded U+FEFF. NUL is not legal
+        // XML text and also closes the common loophole where UTF-16/32 without a BOM can be
+        // decoded as technically valid UTF-8 byte sequences.
+        return text.Length > 0
+               && text.IndexOf('\uFEFF') < 0
+               && text.IndexOf('\0') < 0;
     }
 
     private static byte[] EncodeWithinLimit(string text)
@@ -1347,9 +1373,17 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     + $"{EquipmentMessageLimits.MaximumWirePayloadBytes} byte limit.");
             }
 
-            using (var reader = new StreamReader(stream, StrictUtf8, false, 4096, false))
+            using (var buffer = new MemoryStream())
             {
-                return reader.ReadToEnd();
+                stream.CopyTo(buffer);
+                if (!TryDecode(buffer.ToArray(), out var template))
+                {
+                    throw new InvalidDataException(
+                        $"Equipment XML template '{resourceName}' must be strict UTF-8 with "
+                        + "zero or one leading UTF-8 BOM and no embedded U+FEFF marker.");
+                }
+
+                return template;
             }
         }
     }
@@ -1505,14 +1539,15 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     $"The {action} {direction} XML template is empty.");
             }
 
-            if (template.IndexOf('\uFEFF') >= 0)
+            var originalTemplate = template;
+            if (!TryNormalizeUtf8Text(originalTemplate, out template))
             {
                 throw new InvalidDataException(
-                    $"The {action} {direction} XML template contains a UTF-8 BOM/U+FEFF marker; "
-                    + "templates must be UTF-8 without BOM.");
+                    $"The {action} {direction} XML template must be strict UTF-8 with zero or "
+                    + "one leading UTF-8 BOM and no embedded U+FEFF marker.");
             }
 
-            if (StrictUtf8.GetByteCount(template) > EquipmentMessageLimits.MaximumWirePayloadBytes)
+            if (StrictUtf8.GetByteCount(originalTemplate) > EquipmentMessageLimits.MaximumWirePayloadBytes)
             {
                 throw new InvalidDataException(
                     $"The {action} {direction} XML template exceeds the "
