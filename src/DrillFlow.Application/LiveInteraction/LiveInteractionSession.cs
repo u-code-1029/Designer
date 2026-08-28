@@ -128,6 +128,42 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
             cancellationToken);
     }
 
+    public Task<EquipmentResponseMessage> ChangeLensAsync(
+        string lensMode,
+        CancellationToken cancellationToken = default)
+    {
+        if (!LiveInteractionProtocol.IsLensMode(lensMode))
+        {
+            throw new ParameterValidationException(
+                "lens_mode must be exactly 'lens1', 'lens2', or 'no_change'.");
+        }
+
+        return ExchangeAsync(
+            LiveInteractionProtocol.LensAction,
+            _ => new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [LiveInteractionProtocol.LensModeParameter] = lensMode,
+            },
+            requireImagePath: false,
+            cancellationToken);
+    }
+
+    public Task<EquipmentResponseMessage> AutoContrastBrightnessAsync(
+        double horizontalFieldWidthMetres,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHorizontalFieldWidth(horizontalFieldWidthMetres);
+        return ExchangeAsync(
+            LiveInteractionProtocol.AutoContrastBrightnessAction,
+            _ => new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [LiveInteractionProtocol.HorizontalFieldWidthParameter] =
+                    horizontalFieldWidthMetres,
+            },
+            requireImagePath: false,
+            cancellationToken);
+    }
+
     public Task<LiveImageExchangeResult> IntegrateAsync(
         double horizontalFieldWidthMetres,
         int frameCount,

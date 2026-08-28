@@ -94,6 +94,9 @@ namespace DrillFlow.Tests
                 new FocusNode { Key = "focus_1" },
                 new IntegrationNode { Key = "integration_1" },
                 new LiveNode { Key = "live_1" },
+                new OmNode { Key = "om_1" },
+                new LensNode { Key = "lens_1" },
+                new AutoContrastBrightnessNode { Key = "acb_1" },
                 new AbortNode { Key = "abort_1" }
             };
 
@@ -108,6 +111,9 @@ namespace DrillFlow.Tests
                 node => Assert.IsType<FocusNode>(node),
                 node => Assert.IsType<IntegrationNode>(node),
                 node => Assert.IsType<LiveNode>(node),
+                node => Assert.IsType<OmNode>(node),
+                node => Assert.IsType<LensNode>(node),
+                node => Assert.IsType<AutoContrastBrightnessNode>(node),
                 node => Assert.IsType<AbortNode>(node));
             for (var index = 0; index < sources.Length; index++)
             {

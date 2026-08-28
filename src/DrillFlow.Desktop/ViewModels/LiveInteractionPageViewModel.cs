@@ -120,6 +120,9 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private string _cameraInputXText = "0E0";
     private string _cameraInputYText = "0E0";
     private string _cameraMoveValidationMessage = string.Empty;
+    private string _lensMode = LiveInteractionProtocol.NoLensChangeMode;
+    private string _currentLensMode = "-";
+    private bool _hasCurrentLensMode;
     private string _focusHfwText = "1E-3";
     private string _focusRangeText = "50E-6";
     private string _focusStepsText = "13";
@@ -141,6 +144,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private bool _hasCameraPosition;
     private string _focusResultText = "-";
     private IReadOnlyList<FocusSamplePoint> _focusSamples = Array.Empty<FocusSamplePoint>();
+    private int _lastAutoContrastBrightnessCorrelationId;
     private int _lastCorrelationId;
     private bool _hasStagePosition;
     private bool _hasTarget;
@@ -205,6 +209,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         CaptureCommand = new AsyncRelayCommand(CaptureAsync, CanCapture);
         ExecuteStageMoveCommand = new AsyncRelayCommand(ExecuteStageMoveAsync, CanExecuteStageMove);
         ExecuteCameraMoveCommand = new AsyncRelayCommand(ExecuteCameraMoveAsync, CanExecuteCameraMove);
+        ExecuteLensCommand = new AsyncRelayCommand(ExecuteLensAsync, CanExecuteLens);
+        ExecuteAutoContrastBrightnessCommand = new AsyncRelayCommand(
+            ExecuteAutoContrastBrightnessAsync,
+            CanExecuteAutoContrastBrightness);
         ExecuteFocusCommand = new AsyncRelayCommand(ExecuteFocusAsync, CanExecuteFocus);
         MoveToTargetCommand = new AsyncRelayCommand<LiveImageTarget>(MoveToTargetAsync, CanMoveToTarget);
         OpenSavedImageCommand = new RelayCommand(OpenSavedImage, CanOpenSavedImage);
@@ -236,6 +244,10 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     public IAsyncRelayCommand ExecuteStageMoveCommand { get; }
 
     public IAsyncRelayCommand ExecuteCameraMoveCommand { get; }
+
+    public IAsyncRelayCommand ExecuteLensCommand { get; }
+
+    public IAsyncRelayCommand ExecuteAutoContrastBrightnessCommand { get; }
 
     public IAsyncRelayCommand ExecuteFocusCommand { get; }
 
@@ -511,6 +523,37 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         get => _cameraMoveValidationMessage;
         private set => SetProperty(ref _cameraMoveValidationMessage, value);
     }
+
+    public string LensMode
+    {
+        get => _lensMode;
+        set
+        {
+            if (SetProperty(ref _lensMode, value ?? string.Empty))
+            {
+                ExecuteLensCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string CurrentLensMode
+    {
+        get => _currentLensMode;
+        private set => SetProperty(ref _currentLensMode, value);
+    }
+
+    public bool HasCurrentLensMode
+    {
+        get => _hasCurrentLensMode;
+        private set => SetProperty(ref _hasCurrentLensMode, value);
+    }
+
+    public string AutoContrastBrightnessResultText =>
+        _lastAutoContrastBrightnessCorrelationId > 0
+            ? FormatLocalized(
+                "LiveAcbResultCompleted",
+                new object[] { _lastAutoContrastBrightnessCorrelationId })
+            : "-";
 
     public string FocusHfwText
     {
@@ -1046,7 +1089,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         }
 
         // Shutdown cancels every app-owned Live operation. Navigation uses operation-specific
-        // live/stage/camera/focus/integration tokens; Stop owns only the active live-image loop.
+        // live/stage/camera/lens/acb/focus/integration tokens; Stop owns only the active
+        // live-image loop.
         _shutdownCancellation.Cancel();
 
         Task streamTask;
@@ -1065,6 +1109,9 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         var moveTask = MoveToTargetCommand.ExecutionTask ?? Task.CompletedTask;
         var stageMoveTask = ExecuteStageMoveCommand.ExecutionTask ?? Task.CompletedTask;
         var cameraMoveTask = ExecuteCameraMoveCommand.ExecutionTask ?? Task.CompletedTask;
+        var lensTask = ExecuteLensCommand.ExecutionTask ?? Task.CompletedTask;
+        var autoContrastBrightnessTask =
+            ExecuteAutoContrastBrightnessCommand.ExecutionTask ?? Task.CompletedTask;
         var focusTask = ExecuteFocusCommand.ExecutionTask ?? Task.CompletedTask;
         var singleFrameResponseTask = GenerateSingleFrameResponseCommand.ExecutionTask
                                       ?? Task.CompletedTask;
@@ -1075,6 +1122,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             moveTask,
             stageMoveTask,
             cameraMoveTask,
+            lensTask,
+            autoContrastBrightnessTask,
             focusTask,
             singleFrameResponseTask);
         var completedWithinBudget = await LiveInteractionShutdownDrain
@@ -1707,6 +1756,59 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             });
     }
 
+    private bool CanExecuteLens() =>
+        CanExecuteManualEquipmentAction()
+        && LiveInteractionProtocol.IsLensMode(LensMode);
+
+    private async Task ExecuteLensAsync()
+    {
+        if (!CanExecuteLens())
+        {
+            return;
+        }
+
+        await ExecuteManualEquipmentActionAsync(
+            "LiveStatusLensChanging",
+            new object[] { LensMode },
+            "LiveStatusLensChanged",
+            "LiveStatusLensChangeFailed",
+            token => _session.ChangeLensAsync(LensMode, token),
+            response =>
+            {
+                ApplyLensResponse(response);
+                return new object[] { CurrentLensMode };
+            });
+    }
+
+    private bool CanExecuteAutoContrastBrightness() =>
+        CanExecuteManualEquipmentAction()
+        && string.IsNullOrEmpty(HorizontalFieldWidthValidationMessage)
+        && LiveInteractionProtocol.IsValidHorizontalFieldWidth(
+            _horizontalFieldWidthMetres);
+
+    private async Task ExecuteAutoContrastBrightnessAsync()
+    {
+        if (!CanExecuteAutoContrastBrightness())
+        {
+            return;
+        }
+
+        var horizontalFieldWidthMetres = _horizontalFieldWidthMetres;
+        await ExecuteManualEquipmentActionAsync(
+            "LiveStatusAcbRunning",
+            new object[] { horizontalFieldWidthMetres },
+            "LiveStatusAcbCompleted",
+            "LiveStatusAcbFailed",
+            token => _session.AutoContrastBrightnessAsync(
+                horizontalFieldWidthMetres,
+                token),
+            response =>
+            {
+                ApplyAutoContrastBrightnessResponse(response);
+                return new object[] { horizontalFieldWidthMetres };
+            });
+    }
+
     private bool CanExecuteFocus() =>
         CanExecuteManualEquipmentAction()
         && string.IsNullOrEmpty(FocusValidationMessage);
@@ -2298,6 +2400,32 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         OnPropertyChanged(nameof(CameraYText));
     }
 
+    private void ApplyLensResponse(EquipmentResponseMessage response)
+    {
+        var currentLensMode = response.CurrentLensMode;
+        if (currentLensMode is null)
+        {
+            throw new InvalidOperationException(
+                "The lens response must contain current_lens_mode on success.");
+        }
+
+        CurrentLensMode = currentLensMode;
+        HasCurrentLensMode = true;
+        ApplyCorrelationResponse(response);
+
+        // The displayed pixels were acquired through the previous optical path. Require one
+        // fresh live response before translating another image point into a stage movement.
+        IsDisplayedFrameCalibrationCurrent = false;
+        IsTargetMarkerVisible = false;
+    }
+
+    private void ApplyAutoContrastBrightnessResponse(EquipmentResponseMessage response)
+    {
+        ApplyCorrelationResponse(response);
+        _lastAutoContrastBrightnessCorrelationId = response.CorrelationId;
+        OnPropertyChanged(nameof(AutoContrastBrightnessResultText));
+    }
+
     private void ApplyFocusResponse(EquipmentResponseMessage response)
     {
         var source = response.ZToSharpness2D;
@@ -2743,6 +2871,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         MoveToTargetCommand.NotifyCanExecuteChanged();
         ExecuteStageMoveCommand.NotifyCanExecuteChanged();
         ExecuteCameraMoveCommand.NotifyCanExecuteChanged();
+        ExecuteLensCommand.NotifyCanExecuteChanged();
+        ExecuteAutoContrastBrightnessCommand.NotifyCanExecuteChanged();
         ExecuteFocusCommand.NotifyCanExecuteChanged();
         OpenExchangeFolderCommand.NotifyCanExecuteChanged();
         GenerateSingleFrameResponseCommand.NotifyCanExecuteChanged();
@@ -2759,6 +2889,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         ValidateStageMove();
         ValidateCameraMove();
         ValidateFocus();
+        OnPropertyChanged(nameof(AutoContrastBrightnessResultText));
         OnPropertyChanged(nameof(StatusMessage));
     }
 

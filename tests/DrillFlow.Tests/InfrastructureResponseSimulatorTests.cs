@@ -79,6 +79,35 @@ public sealed class InfrastructureResponseSimulatorTests
         Assert.Equal(@"C:\Generated\preview.png", json["image_path"]!.Value<string>());
     }
 
+    [Fact]
+    public async Task CreateDraft_SupportsOmLensAndAutoContrastBrightness()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var simulator = CreateSimulator(options);
+
+        var om = JObject.Parse((await simulator.CreateDraftAsync(
+            new OmNode(),
+            51,
+            CancellationToken.None,
+            @"C:\Generated\om.png")).Payload);
+        var lens = JObject.Parse((await simulator.CreateDraftAsync(
+            new LensNode(),
+            52,
+            CancellationToken.None)).Payload);
+        var acb = JObject.Parse((await simulator.CreateDraftAsync(
+            new AutoContrastBrightnessNode(),
+            53,
+            CancellationToken.None)).Payload);
+
+        Assert.Equal(EquipmentActionNames.Om, om["action"]!.Value<string>());
+        Assert.Equal(@"C:\Generated\om.png", om["image_path"]!.Value<string>());
+        Assert.Equal(EquipmentActionNames.Lens, lens["action"]!.Value<string>());
+        Assert.Equal("lens1", lens["current_lens_mode"]!.Value<string>());
+        Assert.Equal(EquipmentActionNames.AutoContrastBrightness, acb["action"]!.Value<string>());
+        Assert.Null(acb["hfw"]);
+    }
+
     [Theory]
     [InlineData("not json")]
     [InlineData("{\"type\":\"request\",\"correlation_id\":1,\"action\":\"abort\",\"result\":0}")]
@@ -105,6 +134,20 @@ public sealed class InfrastructureResponseSimulatorTests
 
         Assert.False(validation.IsValid);
         Assert.Contains(validation.Errors, error => error.Contains("exactly 1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidatePayload_FailedResponseIgnoresUnavailableActionOutputs()
+    {
+        using var directory = new TempDirectory();
+        var simulator = CreateSimulator(CreateOptions(directory.Path));
+        const string failedLens = "{\"type\":\"response\",\"correlation_id\":54,"
+                                  + "\"action\":\"lens\",\"result\":1,"
+                                  + "\"current_lens_mode\":\"unavailable\"}";
+
+        var validation = simulator.ValidatePayload(failedLens);
+
+        Assert.True(validation.IsValid);
     }
 
     [Fact]

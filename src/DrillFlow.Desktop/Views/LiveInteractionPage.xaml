@@ -309,11 +309,16 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <ui:Card Grid.Row="4" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="5"
+                                     Header="{DynamicResource LiveFrameMagnification}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveFrameMagnification}"
-                                       Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock Text="{DynamicResource LiveHorizontalFieldWidth}"
                                        Style="{StaticResource FieldLabelStyle}" />
                             <Grid>
@@ -373,12 +378,15 @@
                             <ComboBox ItemsSource="{Binding IntegrationFrameCountOptions}"
                                       SelectedItem="{Binding IntegrationFrameCount, Mode=TwoWay}" />
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="2" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="2"
+                                     Header="{DynamicResource LiveStageControl}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveStageControl}"
-                                       Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock Text="move_mode"
                                        Style="{StaticResource FieldLabelStyle}" />
                             <ComboBox SelectedValue="{Binding StageMoveMode, Mode=TwoWay}"
@@ -418,12 +426,15 @@
                                 </ui:Button.Icon>
                             </ui:Button>
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="3" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="3"
+                                     Header="{DynamicResource LiveCameraControl}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveCameraControl}"
-                                       Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock Text="move_mode"
                                        Style="{StaticResource FieldLabelStyle}" />
                             <ComboBox SelectedValue="{Binding CameraMoveMode, Mode=TwoWay}"
@@ -482,12 +493,52 @@
                                 </StackPanel>
                             </Grid>
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="6" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="4"
+                                     Header="{DynamicResource LiveLensControl}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveFocusControl}"
-                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="lens_mode"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox SelectedValue="{Binding LensMode, Mode=TwoWay}"
+                                      SelectedValuePath="Tag">
+                                <ComboBoxItem Tag="lens1" Content="lens1" />
+                                <ComboBoxItem Tag="lens2" Content="lens2" />
+                                <ComboBoxItem Tag="no_change" Content="no_change" />
+                            </ComboBox>
+                            <TextBlock Text="{DynamicResource LiveLensNoChangeHint}"
+                                       Style="{StaticResource CaptionTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,7,0,0" />
+                            <ui:Button Content="{DynamicResource LiveExecuteLens}"
+                                       Command="{Binding ExecuteLensCommand}"
+                                       Appearance="Primary"
+                                       HorizontalAlignment="Left"
+                                       Margin="0,12,0,0">
+                                <ui:Button.Icon>
+                                    <ui:SymbolIcon Symbol="Play24" />
+                                </ui:Button.Icon>
+                            </ui:Button>
+                            <TextBlock Text="current_lens_mode"
+                                       Style="{StaticResource FieldLabelStyle}"
+                                       Margin="0,14,0,0" />
+                            <TextBlock Text="{Binding CurrentLensMode}"
+                                       FontFamily="Consolas"
+                                       FontWeight="SemiBold" />
+                        </StackPanel>
+                    </ui:CardExpander>
+
+                    <ui:CardExpander Grid.Row="7"
+                                     Header="{DynamicResource LiveFocusControl}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
+                        <StackPanel>
                             <TextBlock Text="hfw (m)" Style="{StaticResource FieldLabelStyle}" />
                             <TextBox Text="{Binding FocusHfwText, UpdateSourceTrigger=PropertyChanged}" />
                             <TextBlock Text="range (m)"
@@ -554,12 +605,49 @@
                                        Margin="0,6,0,0"
                                        TextAlignment="Center" />
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="5" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="8"
+                                     Header="{DynamicResource LiveAcbControl}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LivePixelCalibration}"
-                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="hfw (m)"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBlock Text="{Binding HorizontalFieldWidthMetres, StringFormat={}{0:0.########E+0} m}"
+                                       FontFamily="Consolas"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{DynamicResource LiveAcbHfwHint}"
+                                       Style="{StaticResource CaptionTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,7,0,0" />
+                            <ui:Button Content="{DynamicResource LiveExecuteAcb}"
+                                       Command="{Binding ExecuteAutoContrastBrightnessCommand}"
+                                       Appearance="Primary"
+                                       HorizontalAlignment="Left"
+                                       Margin="0,12,0,0">
+                                <ui:Button.Icon>
+                                    <ui:SymbolIcon Symbol="Play24" />
+                                </ui:Button.Icon>
+                            </ui:Button>
+                            <TextBlock Text="{DynamicResource LiveLatestResult}"
+                                       Style="{StaticResource FieldLabelStyle}"
+                                       Margin="0,14,0,0" />
+                            <TextBlock Text="{Binding AutoContrastBrightnessResultText}"
+                                       FontFamily="Consolas"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:CardExpander>
+
+                    <ui:CardExpander Grid.Row="6"
+                                     Header="{DynamicResource LivePixelCalibration}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
+                        <StackPanel>
                             <CheckBox Content="{DynamicResource LiveLinkPixelPitchToHfw}"
                                       IsChecked="{Binding IsPixelPitchLinkedToHorizontalFieldWidth, Mode=TwoWay}"
                                       Margin="0,8,0,0" />
@@ -602,12 +690,15 @@
                                         Severity="Informational"
                                         Margin="0,14,0,0" />
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="0" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="0"
+                                     Header="{DynamicResource LiveStagePosition}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveStagePosition}"
-                                       Style="{StaticResource SectionTitleStyle}" />
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -634,12 +725,15 @@
                                 <Run Text="{Binding LastCorrelationId, Mode=OneWay}" FontWeight="SemiBold" />
                             </TextBlock>
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="1" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="1"
+                                     Header="{DynamicResource LiveTargetMove}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveTargetMove}"
-                                       Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock Text="{DynamicResource LiveTargetPixel}"
                                        Style="{StaticResource FieldLabelStyle}" />
                             <TextBlock Text="{Binding TargetPixelText}"
@@ -651,12 +745,15 @@
                                        FontFamily="Consolas"
                                        TextWrapping="Wrap" />
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:Card Grid.Row="7" Padding="18" Margin="0,0,0,12">
+                    <ui:CardExpander Grid.Row="9"
+                                     Header="{DynamicResource LiveCaptureResult}"
+                                     IsExpanded="False"
+                                     ContentPadding="18"
+                                     HorizontalContentAlignment="Stretch"
+                                     Margin="0,0,0,12">
                         <StackPanel>
-                            <TextBlock Text="{DynamicResource LiveCaptureResult}"
-                                       Style="{StaticResource SectionTitleStyle}" />
                             <TextBlock Text="{DynamicResource LiveSavedPath}"
                                        Style="{StaticResource FieldLabelStyle}" />
                             <Grid>
@@ -683,9 +780,9 @@
                                 </ui:Button>
                             </Grid>
                         </StackPanel>
-                    </ui:Card>
+                    </ui:CardExpander>
 
-                    <ui:InfoBar Grid.Row="8"
+                    <ui:InfoBar Grid.Row="10"
                                 IsOpen="True"
                                 IsClosable="False"
                                 Title="{Binding StatusMessage}">

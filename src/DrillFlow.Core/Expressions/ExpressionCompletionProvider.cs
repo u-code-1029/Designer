@@ -269,6 +269,17 @@ namespace DrillFlow.Core.Expressions
                     members.Add("frame_count");
                     members.Add("image_path");
                     break;
+                case WorkflowNodeKind.Om:
+                    AddEquipmentEnvelope(members);
+                    members.Add("image_path");
+                    break;
+                case WorkflowNodeKind.Lens:
+                    AddEquipmentEnvelope(members);
+                    members.Add("current_lens_mode");
+                    break;
+                case WorkflowNodeKind.AutoContrastBrightness:
+                    AddEquipmentEnvelope(members);
+                    break;
                 case WorkflowNodeKind.Abort:
                     AddEquipmentEnvelope(members);
                     break;

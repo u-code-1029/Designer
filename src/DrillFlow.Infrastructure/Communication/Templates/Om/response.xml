@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<response>
+  <type>{{{type}}}</type>
+  <correlation_id>{{{correlation_id}}}</correlation_id>
+  <action>{{{action}}}</action>
+  <result>{{{result}}}</result>
+  <image_path>{{{image_path}}}</image_path>
+</response>

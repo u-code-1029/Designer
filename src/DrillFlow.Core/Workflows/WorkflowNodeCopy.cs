@@ -176,6 +176,27 @@ namespace DrillFlow.Core.Workflows
                     };
                     break;
 
+                case OmNode om:
+                    target = new OmNode
+                    {
+                        ImagePath = CloneBinding(om.ImagePath)
+                    };
+                    break;
+
+                case LensNode lens:
+                    target = new LensNode
+                    {
+                        LensMode = CloneBinding(lens.LensMode)
+                    };
+                    break;
+
+                case AutoContrastBrightnessNode autoContrastBrightness:
+                    target = new AutoContrastBrightnessNode
+                    {
+                        HorizontalFieldWidth = CloneBinding(autoContrastBrightness.HorizontalFieldWidth)
+                    };
+                    break;
+
                 case AbortNode _:
                     target = new AbortNode();
                     break;

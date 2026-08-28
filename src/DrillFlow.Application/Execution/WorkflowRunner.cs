@@ -449,6 +449,33 @@ public sealed class WorkflowRunner : IWorkflowRunner
                         cancellationToken)
                     .ConfigureAwait(false);
 
+            case OmNode om:
+                return await ExecuteEquipmentNodeAsync(
+                        om,
+                        EquipmentActionNames.Om,
+                        EvaluateOm(om),
+                        iterationPath,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            case LensNode lens:
+                return await ExecuteEquipmentNodeAsync(
+                        lens,
+                        EquipmentActionNames.Lens,
+                        EvaluateLens(lens),
+                        iterationPath,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            case AutoContrastBrightnessNode acb:
+                return await ExecuteEquipmentNodeAsync(
+                        acb,
+                        EquipmentActionNames.AutoContrastBrightness,
+                        EvaluateAutoContrastBrightness(acb),
+                        iterationPath,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
             case AbortNode abort:
                 await ExecuteEquipmentNodeAsync(
                         abort,
@@ -972,6 +999,42 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 _expressions.Evaluate(node.FrameCount, context)),
             ["image_path"] = ParameterValueValidator.GetAbsoluteImagePath(
                 _expressions.Evaluate(node.ImagePath, context))
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?> EvaluateOm(OmNode node)
+    {
+        var context = CreateExpressionContext();
+        return new Dictionary<string, object?>
+        {
+            ["image_path"] = ParameterValueValidator.GetAbsoluteImagePath(
+                _expressions.Evaluate(node.ImagePath, context))
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?> EvaluateLens(LensNode node)
+    {
+        var context = CreateExpressionContext();
+        var mode = ParameterValueValidator.GetLensMode(
+            _expressions.Evaluate(node.LensMode, context));
+        return new Dictionary<string, object?>
+        {
+            ["lens_mode"] = mode == LensMode.Lens1
+                ? "lens1"
+                : mode == LensMode.Lens2
+                    ? "lens2"
+                    : "no_change"
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?> EvaluateAutoContrastBrightness(
+        AutoContrastBrightnessNode node)
+    {
+        var context = CreateExpressionContext();
+        return new Dictionary<string, object?>
+        {
+            ["hfw"] = ParameterValueValidator.GetHorizontalFieldWidth(
+                _expressions.Evaluate(node.HorizontalFieldWidth, context))
         };
     }
 

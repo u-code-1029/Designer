@@ -89,10 +89,24 @@ public static class EquipmentActionNames
     public const string Focus = "focus";
     public const string Integration = "integration";
     public const string Live = "live";
+    public const string Om = "om";
+    public const string Lens = "lens";
+    public const string AutoContrastBrightness = "acb";
     public const string Abort = "abort";
 
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(
-        new[] { Stage, Camera, Focus, Integration, Live, Abort });
+        new[]
+        {
+            Stage,
+            Camera,
+            Focus,
+            Integration,
+            Live,
+            Om,
+            Lens,
+            AutoContrastBrightness,
+            Abort
+        });
 
     public static bool IsKnown(string? action)
     {
@@ -101,6 +115,9 @@ public static class EquipmentActionNames
                || string.Equals(action, Focus, StringComparison.Ordinal)
                || string.Equals(action, Integration, StringComparison.Ordinal)
                || string.Equals(action, Live, StringComparison.Ordinal)
+               || string.Equals(action, Om, StringComparison.Ordinal)
+               || string.Equals(action, Lens, StringComparison.Ordinal)
+               || string.Equals(action, AutoContrastBrightness, StringComparison.Ordinal)
                || string.Equals(action, Abort, StringComparison.Ordinal);
     }
 

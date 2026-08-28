@@ -161,15 +161,19 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         Assert.Equal("relative", viewModel.StageMoveMode);
         Assert.Equal("0E0", viewModel.StageInputXText);
         Assert.Equal("relative", viewModel.CameraMoveMode);
+        Assert.Equal("no_change", viewModel.LensMode);
         Assert.Equal("50E-6", viewModel.FocusRangeText);
         Assert.Equal("13", viewModel.FocusStepsText);
         Assert.Equal(8, viewModel.IntegrationFrameCount);
         Assert.True(viewModel.ExecuteStageMoveCommand.CanExecute(null));
         Assert.True(viewModel.ExecuteCameraMoveCommand.CanExecute(null));
+        Assert.True(viewModel.ExecuteLensCommand.CanExecute(null));
+        Assert.True(viewModel.ExecuteAutoContrastBrightnessCommand.CanExecute(null));
         Assert.True(viewModel.ExecuteFocusCommand.CanExecute(null));
 
         viewModel.StageInputXText = "NaN";
         viewModel.CameraMoveMode = "RELATIVE";
+        viewModel.LensMode = "Lens1";
         viewModel.FocusStepsText = "3";
         viewModel.IntegrationFrameCount = 3;
 
@@ -178,6 +182,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         Assert.NotEmpty(viewModel.FocusValidationMessage);
         Assert.False(viewModel.ExecuteStageMoveCommand.CanExecute(null));
         Assert.False(viewModel.ExecuteCameraMoveCommand.CanExecute(null));
+        Assert.False(viewModel.ExecuteLensCommand.CanExecute(null));
         Assert.False(viewModel.ExecuteFocusCommand.CanExecute(null));
         Assert.False(viewModel.CaptureCommand.CanExecute(null));
 
@@ -237,6 +242,58 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         Assert.Equal(3.75E-6, viewModel.FocusSamples[2].ZMetres, 15);
         Assert.Equal(1800d, viewModel.FocusSamples[2].Sharpness, 15);
         Assert.Equal(703, viewModel.LastCorrelationId);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task LensResponse_UpdatesModeAndLocksImageMoveUntilFreshFrame()
+    {
+        var session = new InteractiveMoveSession { LensResponseMode = "lens2" };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        SetLoadedImage(viewModel);
+        viewModel.PixelPitchUnit = "um";
+        viewModel.PixelPitchText = "2";
+        var target = new LiveImageTarget(20, 20, 100, 100, 1E-3, 1E-3);
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.True(viewModel.MoveToTargetCommand.CanExecute(target));
+
+        await viewModel.ExecuteLensCommand.ExecuteAsync(null);
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(session.FirstFrameCanceled.Task.IsCompleted);
+        Assert.Equal("no_change", session.LastRequestedLensMode);
+        Assert.Equal("lens2", viewModel.CurrentLensMode);
+        Assert.True(viewModel.HasCurrentLensMode);
+        Assert.Equal(704, viewModel.LastCorrelationId);
+        Assert.False(viewModel.IsDisplayedFrameCalibrationCurrent);
+        Assert.False(viewModel.MoveToTargetCommand.CanExecute(target));
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task AutoContrastBrightness_UsesCurrentLiveHfwAndResumesFrames()
+    {
+        var session = new InteractiveMoveSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.HorizontalFieldWidthText = "0.75";
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.ExecuteAutoContrastBrightnessCommand.ExecuteAsync(null);
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(session.FirstFrameCanceled.Task.IsCompleted);
+        Assert.Equal(0.75E-3, session.LastAutoContrastBrightnessHfwMetres);
+        Assert.Equal(705, viewModel.LastCorrelationId);
+        Assert.Equal("LiveAcbResultCompleted", viewModel.AutoContrastBrightnessResultText);
+        Assert.True(viewModel.IsStreamingRequested);
 
         viewModel.StopCommand.Execute(null);
         await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
@@ -798,6 +855,20 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             throw new NotSupportedException();
         }
 
+        public Task<EquipmentResponseMessage> ChangeLensAsync(
+            string lensMode,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<EquipmentResponseMessage> AutoContrastBrightnessAsync(
+            double horizontalFieldWidthMetres,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
         public Task<LiveImageExchangeResult> IntegrateAsync(
             double horizontalFieldWidthMetres,
             int frameCount,
@@ -855,6 +926,14 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             double horizontalFieldWidthMetres,
             double rangeMetres,
             int steps,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<EquipmentResponseMessage> ChangeLensAsync(
+            string lensMode,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<EquipmentResponseMessage> AutoContrastBrightnessAsync(
+            double horizontalFieldWidthMetres,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<LiveImageExchangeResult> IntegrateAsync(
@@ -916,6 +995,12 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                 new[] { 1.5E-6, 600d },
                 new[] { 2.1E-6, 1200d }
             };
+
+        public string LensResponseMode { get; set; } = "lens2";
+
+        public string? LastRequestedLensMode { get; private set; }
+
+        public double? LastAutoContrastBrightnessHfwMetres { get; private set; }
 
         public bool MoveStartedAfterFrameCancellation { get; private set; }
 
@@ -1055,6 +1140,49 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                         {
                             ["z_to_sharpness_2d"] = FocusResponseSamples
                         }));
+            }
+            finally
+            {
+                ExitCall();
+            }
+        }
+
+        public Task<EquipmentResponseMessage> ChangeLensAsync(
+            string lensMode,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnterCall();
+            try
+            {
+                LastRequestedLensMode = lensMode;
+                return Task.FromResult(
+                    new EquipmentResponseMessage(
+                        704,
+                        "lens",
+                        0,
+                        new Dictionary<string, object?>
+                        {
+                            ["current_lens_mode"] = LensResponseMode
+                        }));
+            }
+            finally
+            {
+                ExitCall();
+            }
+        }
+
+        public Task<EquipmentResponseMessage> AutoContrastBrightnessAsync(
+            double horizontalFieldWidthMetres,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnterCall();
+            try
+            {
+                LastAutoContrastBrightnessHfwMetres = horizontalFieldWidthMetres;
+                return Task.FromResult(
+                    new EquipmentResponseMessage(705, "acb", 0));
             }
             finally
             {

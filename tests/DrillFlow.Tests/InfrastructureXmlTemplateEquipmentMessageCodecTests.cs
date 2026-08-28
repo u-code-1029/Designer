@@ -16,7 +16,7 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     private readonly XmlTemplateEquipmentMessageCodec _codec = new();
 
     [Fact]
-    public void EmbeddedTemplates_RoundTripAllSixRequestsAndResponses()
+    public void EmbeddedTemplates_RoundTripAllRequestsAndResponses()
     {
         foreach (var request in CreateRequests())
         {
@@ -861,6 +861,67 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
         Assert.False(restored.IsSuccess);
     }
 
+    [Theory]
+    [InlineData(EquipmentActionNames.Stage)]
+    [InlineData(EquipmentActionNames.Camera)]
+    [InlineData(EquipmentActionNames.Focus)]
+    [InlineData(EquipmentActionNames.Integration)]
+    [InlineData(EquipmentActionNames.Live)]
+    [InlineData(EquipmentActionNames.Om)]
+    [InlineData(EquipmentActionNames.Lens)]
+    [InlineData(EquipmentActionNames.AutoContrastBrightness)]
+    public void FailedActionResponse_UsesCommonOnlyWireShape(string action)
+    {
+        var request = CreateRequests().Single(item => item.Action == action);
+        var response = new EquipmentResponseMessage(request.CorrelationId, action, 1);
+
+        var bytes = _codec.SerializeResponse(response);
+        var xml = Encoding.UTF8.GetString(bytes);
+
+        Assert.DoesNotContain("current_", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("image_path", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("z_to_sharpness_2d", xml, StringComparison.Ordinal);
+        Assert.True(_codec.TryDeserializeResponse(bytes, request, out var restored));
+        Assert.NotNull(restored);
+        Assert.Equal(1, restored!.Result);
+        Assert.Empty(restored.Properties);
+
+        Assert.True(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            out var genericRestored));
+        Assert.NotNull(genericRestored);
+        Assert.Equal(1, genericRestored!.Result);
+        Assert.Empty(genericRestored.Properties);
+    }
+
+    [Fact]
+    public void FailedResponse_WithExistingSuccessShape_IgnoresUnavailableOutputs()
+    {
+        var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
+        var xml = Encoding.UTF8.GetString(_codec.SerializeResponse(
+                CreateResponse(request.CorrelationId, request.Action)))
+            .Replace("<result>0</result>", "<result>1</result>")
+            .Replace("<current_stage_x>-3.2E-06</current_stage_x>",
+                "<current_stage_x>unavailable</current_stage_x>")
+            .Replace("<current_stage_y>4.12E-04</current_stage_y>",
+                "<current_stage_y></current_stage_y>");
+
+        Assert.True(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            request,
+            out var restored));
+        Assert.NotNull(restored);
+        Assert.Equal(1, restored!.Result);
+        Assert.Empty(restored.Properties);
+
+        Assert.True(_codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            out var genericRestored));
+        Assert.NotNull(genericRestored);
+        Assert.Equal(1, genericRestored!.Result);
+        Assert.Empty(genericRestored.Properties);
+    }
+
     private static IReadOnlyList<EquipmentRequestMessage> CreateRequests()
     {
         return new[]
@@ -887,7 +948,20 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
                 ["hfw"] = 3.02E-6, ["frame_count"] = 1,
                 ["image_path"] = @"C:\Images\live.png"
             }),
-            new EquipmentRequestMessage(6, EquipmentActionNames.Abort)
+            new EquipmentRequestMessage(6, EquipmentActionNames.Om, new Dictionary<string, object?>
+            {
+                ["image_path"] = @"C:\Images\om.png"
+            }),
+            new EquipmentRequestMessage(7, EquipmentActionNames.Lens, new Dictionary<string, object?>
+            {
+                ["lens_mode"] = "no_change"
+            }),
+            new EquipmentRequestMessage(8, EquipmentActionNames.AutoContrastBrightness,
+                new Dictionary<string, object?>
+                {
+                    ["hfw"] = 2.04E-6
+                }),
+            new EquipmentRequestMessage(9, EquipmentActionNames.Abort)
         };
     }
 
@@ -954,6 +1028,19 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
             case EquipmentActionNames.Live:
                 fields.AddRange(new[] { "hfw", "frame_count", "image_path" });
                 break;
+            case EquipmentActionNames.Om:
+                fields.Add("image_path");
+                break;
+            case EquipmentActionNames.Lens:
+                fields.Add(isRequest ? "lens_mode" : "current_lens_mode");
+                break;
+            case EquipmentActionNames.AutoContrastBrightness:
+                if (isRequest)
+                {
+                    fields.Add("hfw");
+                }
+
+                break;
         }
 
         var builder = new StringBuilder();
@@ -1008,6 +1095,18 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
                     ["hfw"] = 3.02E-6,
                     ["frame_count"] = 1,
                     ["image_path"] = @"C:\Images\live.png"
+                };
+                break;
+            case EquipmentActionNames.Om:
+                properties = new Dictionary<string, object?>
+                {
+                    ["image_path"] = @"C:\Images\om.png"
+                };
+                break;
+            case EquipmentActionNames.Lens:
+                properties = new Dictionary<string, object?>
+                {
+                    ["current_lens_mode"] = "lens2"
                 };
                 break;
             default:

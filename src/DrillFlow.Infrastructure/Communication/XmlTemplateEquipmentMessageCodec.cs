@@ -15,7 +15,7 @@ namespace DrillFlow.Infrastructure.Communication;
 
 /// <summary>
 /// Renders and extracts the equipment's fixed XML answer-sheet templates. This is intentionally
-/// not an XML object serializer: every non-placeholder byte comes from one of the twelve embedded
+/// not an XML object serializer: every non-placeholder byte comes from an embedded
 /// contract templates, while only declared scalar values are replaced or extracted.
 /// </summary>
 public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
@@ -27,11 +27,18 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
     private readonly IReadOnlyDictionary<string, ActionTemplates> _templates;
 
     public XmlTemplateEquipmentMessageCodec()
-        : this(LoadEmbeddedTemplate)
+        : this(LoadEmbeddedTemplate, loadFailureResponseTemplates: true)
     {
     }
 
     internal XmlTemplateEquipmentMessageCodec(Func<string, string, string> templateLoader)
+        : this(templateLoader, loadFailureResponseTemplates: false)
+    {
+    }
+
+    private XmlTemplateEquipmentMessageCodec(
+        Func<string, string, string> templateLoader,
+        bool loadFailureResponseTemplates)
     {
         if (templateLoader is null)
         {
@@ -55,7 +62,14 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                         action,
                         "response",
                         templateLoader(action, "response"),
-                        responseFields)));
+                        responseFields),
+                    loadFailureResponseTemplates && HasSuccessOnlyResponseFields(action)
+                        ? TemplateDefinition.Parse(
+                            action,
+                            "response",
+                            templateLoader(action, "failure-response"),
+                            GetExpectedFailureResponseFields())
+                        : null));
         }
 
         _templates = new ReadOnlyDictionary<string, ActionTemplates>(templates);
@@ -82,7 +96,11 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         }
 
         var fields = CreateResponseFields(response);
-        return EncodeWithinLimit(_templates[response.Action].Response.Render(fields));
+        var templates = _templates[response.Action];
+        var template = response.IsSuccess || templates.FailureResponse is null
+            ? templates.Response
+            : templates.FailureResponse;
+        return EncodeWithinLimit(template.Render(fields));
     }
 
     public bool TryDeserializeRequest(byte[] payload, out EquipmentRequestMessage? request)
@@ -124,17 +142,35 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         // Vendor answer sheets for different Actions may intentionally share the same fixed
         // outer text; scanning every Action here would reject a valid correlated response as
         // cross-template ambiguity even though the pending request makes it unambiguous.
-        var extraction = templates.Response.ExtractCandidates(
-            text,
-            fields => TryCreateResponse(expectedRequest.Action, fields, out _));
-        if (extraction.WasTruncated
-            || extraction.IsAmbiguous
-            || extraction.Candidates.Count != 1
-            || !TryCreateResponse(
-                expectedRequest.Action,
-                extraction.Candidates[0],
-                out response)
-            || response!.CorrelationId != expectedRequest.CorrelationId)
+        foreach (var template in templates.ResponseTemplates)
+        {
+            var extraction = template.ExtractCandidates(
+                text,
+                fields => TryCreateResponse(expectedRequest.Action, fields, out _));
+            if (extraction.WasTruncated || extraction.IsAmbiguous)
+            {
+                response = null;
+                return false;
+            }
+
+            foreach (var extracted in extraction.Candidates)
+            {
+                if (!TryCreateResponse(expectedRequest.Action, extracted, out var candidate))
+                {
+                    continue;
+                }
+
+                if (response is not null)
+                {
+                    response = null;
+                    return false;
+                }
+
+                response = candidate;
+            }
+        }
+
+        if (response is null || response.CorrelationId != expectedRequest.CorrelationId)
         {
             response = null;
             return false;
@@ -184,29 +220,32 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         response = null;
         foreach (var action in EquipmentActionNames.All)
         {
-            var extraction = _templates[action].Response.ExtractCandidates(
-                text,
-                fields => TryCreateResponse(action, fields, out _));
-            if (extraction.WasTruncated || extraction.IsAmbiguous)
+            foreach (var template in _templates[action].ResponseTemplates)
             {
-                response = null;
-                return false;
-            }
-
-            foreach (var extracted in extraction.Candidates)
-            {
-                if (!TryCreateResponse(action, extracted, out var candidate))
-                {
-                    continue;
-                }
-
-                if (response is not null)
+                var extraction = template.ExtractCandidates(
+                    text,
+                    fields => TryCreateResponse(action, fields, out _));
+                if (extraction.WasTruncated || extraction.IsAmbiguous)
                 {
                     response = null;
                     return false;
                 }
 
-                response = candidate;
+                foreach (var extracted in extraction.Candidates)
+                {
+                    if (!TryCreateResponse(action, extracted, out var candidate))
+                    {
+                        continue;
+                    }
+
+                    if (response is not null)
+                    {
+                        response = null;
+                        return false;
+                    }
+
+                    response = candidate;
+                }
             }
         }
 
@@ -253,6 +292,21 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 EnsureExactProperties(request.Parameters, "hfw", "frame_count", "image_path");
                 break;
 
+            case EquipmentActionNames.Om:
+                AddImagePath(request.Parameters, fields);
+                EnsureExactProperties(request.Parameters, "image_path");
+                break;
+
+            case EquipmentActionNames.Lens:
+                AddLensMode(request.Parameters, "lens_mode", fields, allowNoChange: true);
+                EnsureExactProperties(request.Parameters, "lens_mode");
+                break;
+
+            case EquipmentActionNames.AutoContrastBrightness:
+                AddHfw(request.Parameters, fields);
+                EnsureExactProperties(request.Parameters, "hfw");
+                break;
+
             case EquipmentActionNames.Abort:
                 EnsureExactProperties(request.Parameters);
                 break;
@@ -268,6 +322,14 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
     {
         var fields = CreateEnvelopeFields(response.Type, response.CorrelationId, response.Action);
         fields.Add("result", response.Result.ToString(CultureInfo.InvariantCulture));
+
+        if (!response.IsSuccess)
+        {
+            // A failed operation has no trustworthy action-specific outputs. Failure answer
+            // sheets therefore carry only the common envelope and result.
+            EnsureExactProperties(response.Properties);
+            return fields;
+        }
 
         switch (response.Action)
         {
@@ -302,6 +364,20 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 AddFrameCount(response.Properties, fields, live: true);
                 AddImagePath(response.Properties, fields);
                 EnsureExactProperties(response.Properties, "hfw", "frame_count", "image_path");
+                break;
+
+            case EquipmentActionNames.Om:
+                AddImagePath(response.Properties, fields);
+                EnsureExactProperties(response.Properties, "image_path");
+                break;
+
+            case EquipmentActionNames.Lens:
+                AddLensMode(response.Properties, "current_lens_mode", fields, allowNoChange: false);
+                EnsureExactProperties(response.Properties, "current_lens_mode");
+                break;
+
+            case EquipmentActionNames.AutoContrastBrightness:
+                EnsureExactProperties(response.Properties);
                 break;
 
             case EquipmentActionNames.Abort:
@@ -384,6 +460,33 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     parameters["frame_count"] = frameCount;
                     parameters["image_path"] = requestImagePath;
                     break;
+
+                case EquipmentActionNames.Om:
+                    if (!TryReadImagePath(fields, out var omImagePath))
+                    {
+                        return false;
+                    }
+
+                    parameters["image_path"] = omImagePath;
+                    break;
+
+                case EquipmentActionNames.Lens:
+                    if (!TryReadLensMode(fields, "lens_mode", allowNoChange: true, out var lensMode))
+                    {
+                        return false;
+                    }
+
+                    parameters["lens_mode"] = lensMode;
+                    break;
+
+                case EquipmentActionNames.AutoContrastBrightness:
+                    if (!TryReadHfw(fields, out var acbHfw))
+                    {
+                        return false;
+                    }
+
+                    parameters["hfw"] = acbHfw;
+                    break;
             }
 
             request = new EquipmentRequestMessage(correlationId, templateAction, parameters);
@@ -411,6 +514,16 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             }
 
             var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (result == 1)
+            {
+                response = new EquipmentResponseMessage(
+                    correlationId,
+                    templateAction,
+                    result,
+                    properties);
+                return true;
+            }
+
             switch (templateAction)
             {
                 case EquipmentActionNames.Stage:
@@ -458,6 +571,28 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     properties["frame_count"] = frameCount;
                     properties["image_path"] = imagePath;
                     break;
+
+                case EquipmentActionNames.Om:
+                    if (!TryReadImagePath(fields, out var omImagePath))
+                    {
+                        return false;
+                    }
+
+                    properties["image_path"] = omImagePath;
+                    break;
+
+                case EquipmentActionNames.Lens:
+                    if (!TryReadLensMode(
+                            fields,
+                            "current_lens_mode",
+                            allowNoChange: false,
+                            out var currentLensMode))
+                    {
+                        return false;
+                    }
+
+                    properties["current_lens_mode"] = currentLensMode;
+                    break;
             }
 
             response = new EquipmentResponseMessage(
@@ -497,6 +632,23 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                  || string.Equals(mode, "absolute", StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidDataException($"'{name}' must be 'relative' or 'absolute'.");
+        }
+
+        fields.Add(name, mode.ToLowerInvariant());
+    }
+
+    private static void AddLensMode(
+        IReadOnlyDictionary<string, object?> properties,
+        string name,
+        IDictionary<string, string> fields,
+        bool allowNoChange)
+    {
+        if (!TryGetString(properties, name, out var mode)
+            || !IsLensMode(mode, allowNoChange))
+        {
+            throw new InvalidDataException(
+                $"'{name}' must be 'lens1' or 'lens2'"
+                + (allowNoChange ? ", or 'no_change'." : "."));
         }
 
         fields.Add(name, mode.ToLowerInvariant());
@@ -807,6 +959,27 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         mode = fields[name];
         return string.Equals(mode, "relative", StringComparison.Ordinal)
                || string.Equals(mode, "absolute", StringComparison.Ordinal);
+    }
+
+    private static bool TryReadLensMode(
+        IReadOnlyDictionary<string, string> fields,
+        string name,
+        bool allowNoChange,
+        out string mode)
+    {
+        mode = fields[name];
+        return string.Equals(mode, "lens1", StringComparison.Ordinal)
+               || string.Equals(mode, "lens2", StringComparison.Ordinal)
+               || allowNoChange
+               && string.Equals(mode, "no_change", StringComparison.Ordinal);
+    }
+
+    private static bool IsLensMode(string mode, bool allowNoChange)
+    {
+        return string.Equals(mode, "lens1", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(mode, "lens2", StringComparison.OrdinalIgnoreCase)
+               || allowNoChange
+               && string.Equals(mode, "no_change", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryReadHfw(IReadOnlyDictionary<string, string> fields, out double hfw)
@@ -1194,6 +1367,12 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             case EquipmentActionNames.Integration:
             case EquipmentActionNames.Live:
                 return Fields("type", "correlation_id", "action", "hfw", "frame_count", "image_path");
+            case EquipmentActionNames.Om:
+                return Fields("type", "correlation_id", "action", "image_path");
+            case EquipmentActionNames.Lens:
+                return Fields("type", "correlation_id", "action", "lens_mode");
+            case EquipmentActionNames.AutoContrastBrightness:
+                return Fields("type", "correlation_id", "action", "hfw");
             case EquipmentActionNames.Abort:
                 return Fields("type", "correlation_id", "action");
             default:
@@ -1214,6 +1393,12 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             case EquipmentActionNames.Integration:
             case EquipmentActionNames.Live:
                 return Fields("type", "correlation_id", "action", "result", "hfw", "frame_count", "image_path");
+            case EquipmentActionNames.Om:
+                return Fields("type", "correlation_id", "action", "result", "image_path");
+            case EquipmentActionNames.Lens:
+                return Fields("type", "correlation_id", "action", "result", "current_lens_mode");
+            case EquipmentActionNames.AutoContrastBrightness:
+                return Fields("type", "correlation_id", "action", "result");
             case EquipmentActionNames.Abort:
                 return Fields("type", "correlation_id", "action", "result");
             default:
@@ -1226,17 +1411,39 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         return Array.AsReadOnly(fields);
     }
 
+    private static IReadOnlyCollection<string> GetExpectedFailureResponseFields()
+    {
+        return Fields("type", "correlation_id", "action", "result");
+    }
+
+    private static bool HasSuccessOnlyResponseFields(string action)
+    {
+        return !string.Equals(action, EquipmentActionNames.AutoContrastBrightness, StringComparison.Ordinal)
+               && !string.Equals(action, EquipmentActionNames.Abort, StringComparison.Ordinal);
+    }
+
     private sealed class ActionTemplates
     {
-        public ActionTemplates(TemplateDefinition request, TemplateDefinition response)
+        public ActionTemplates(
+            TemplateDefinition request,
+            TemplateDefinition response,
+            TemplateDefinition? failureResponse)
         {
             Request = request;
             Response = response;
+            FailureResponse = failureResponse;
+            ResponseTemplates = failureResponse is null
+                ? Array.AsReadOnly(new[] { response })
+                : Array.AsReadOnly(new[] { response, failureResponse });
         }
 
         public TemplateDefinition Request { get; }
 
         public TemplateDefinition Response { get; }
+
+        public TemplateDefinition? FailureResponse { get; }
+
+        public IReadOnlyList<TemplateDefinition> ResponseTemplates { get; }
     }
 
     private sealed class TemplateDefinition
@@ -1736,6 +1943,16 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
         private bool IsPlausibleRawValue(string placeholder, string text, int start, int length)
         {
+            if (string.Equals(_direction, "response", StringComparison.Ordinal)
+                && IsSuccessOnlyResponseField(placeholder))
+            {
+                // The result placeholder is validated by TryCreateResponse before these values
+                // are consumed. On result=1, equipment may leave the success-only elements blank
+                // or populated with unusable sentinel text; the logical failure intentionally
+                // discards them. On result=0, normal action-specific validation still applies.
+                return true;
+            }
+
             switch (placeholder)
             {
                 case "type":
@@ -1749,6 +1966,10 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 case "move_mode":
                     return SegmentEquals(text, start, length, "relative")
                            || SegmentEquals(text, start, length, "absolute");
+                case "lens_mode":
+                    return SegmentEquals(text, start, length, "lens1")
+                           || SegmentEquals(text, start, length, "lens2")
+                           || SegmentEquals(text, start, length, "no_change");
                 case "steps":
                     return TryParseIntegerSegment(text, start, length, 4, int.MaxValue, out _);
                 case "frame_count":
@@ -1782,6 +2003,19 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 default:
                     return true;
             }
+        }
+
+        private static bool IsSuccessOnlyResponseField(string field)
+        {
+            return string.Equals(field, "current_stage_x", StringComparison.Ordinal)
+                   || string.Equals(field, "current_stage_y", StringComparison.Ordinal)
+                   || string.Equals(field, "current_camera_x", StringComparison.Ordinal)
+                   || string.Equals(field, "current_camera_y", StringComparison.Ordinal)
+                   || string.Equals(field, "z_to_sharpness_2d", StringComparison.Ordinal)
+                   || string.Equals(field, "hfw", StringComparison.Ordinal)
+                   || string.Equals(field, "frame_count", StringComparison.Ordinal)
+                   || string.Equals(field, "image_path", StringComparison.Ordinal)
+                   || string.Equals(field, "current_lens_mode", StringComparison.Ordinal);
         }
 
         private static bool TryParseIntegerSegment(

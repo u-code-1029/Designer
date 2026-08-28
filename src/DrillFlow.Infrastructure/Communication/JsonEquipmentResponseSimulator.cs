@@ -355,6 +355,18 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
                 properties["frame_count"] = 1;
                 properties["image_path"] = GetSimulationImagePath(generatedImagePath);
                 break;
+            case EquipmentActionNames.Om:
+                properties["image_path"] = GetSimulationImagePath(generatedImagePath);
+                break;
+            case EquipmentActionNames.Lens:
+                var requestedMode = GetStringOrDefault(activeRequest, "lens_mode", "lens1");
+                properties["current_lens_mode"] = string.Equals(
+                    requestedMode,
+                    "lens2",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? "lens2"
+                    : "lens1";
+                break;
         }
 
         return new EquipmentResponseMessage(correlationId, action, 0, properties);
@@ -369,6 +381,9 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
             case FocusNode _: return EquipmentActionNames.Focus;
             case IntegrationNode _: return EquipmentActionNames.Integration;
             case LiveNode _: return EquipmentActionNames.Live;
+            case OmNode _: return EquipmentActionNames.Om;
+            case LensNode _: return EquipmentActionNames.Lens;
+            case AutoContrastBrightnessNode _: return EquipmentActionNames.AutoContrastBrightness;
             case AbortNode _: return EquipmentActionNames.Abort;
             default:
                 throw new ArgumentException(
@@ -423,6 +438,19 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         var number = GetNumberOrDefault(request, name, fallback);
         return number == Math.Truncate(number) && number >= int.MinValue && number <= int.MaxValue
             ? (int)number
+            : fallback;
+    }
+
+    private static string GetStringOrDefault(
+        EquipmentRequestSnapshot? request,
+        string name,
+        string fallback)
+    {
+        return request != null
+               && request.Parameters.TryGetValue(name, out var value)
+               && value is string text
+               && !string.IsNullOrWhiteSpace(text)
+            ? text
             : fallback;
     }
 
@@ -496,7 +524,7 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
         if (root["action"]?.Type != JTokenType.String
             || !EquipmentActionNames.IsKnown(root["action"]!.Value<string>()))
         {
-            error = "'action' must be one of stage, camera, focus, integration, live, or abort.";
+            error = "'action' must be one of stage, camera, focus, integration, live, om, lens, acb, or abort.";
             return false;
         }
 
@@ -524,7 +552,10 @@ public sealed class JsonEquipmentResponseSimulator : IEquipmentResponseSimulator
                 continue;
             }
 
-            properties.Add(property.Name, ConvertToken(property.Value));
+            if (result == 0)
+            {
+                properties.Add(property.Name, ConvertToken(property.Value));
+            }
         }
 
         try

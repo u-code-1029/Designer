@@ -113,6 +113,9 @@ public sealed class WorkflowActionViewModel : ObservableObject
         WorkflowNodeKind.Focus => "ActionFocus",
         WorkflowNodeKind.Integration => "ActionIntegration",
         WorkflowNodeKind.Live => "ActionLive",
+        WorkflowNodeKind.Om => "ActionOm",
+        WorkflowNodeKind.Lens => "ActionLens",
+        WorkflowNodeKind.AutoContrastBrightness => "ActionAcb",
         WorkflowNodeKind.Abort => "ActionAbort",
         WorkflowNodeKind.Http => "ActionHttp",
         WorkflowNodeKind.Delay => "ActionDelay",
@@ -127,6 +130,9 @@ public sealed class WorkflowActionViewModel : ObservableObject
         WorkflowNodeKind.Focus => SymbolRegular.ScanCamera20,
         WorkflowNodeKind.Integration => SymbolRegular.ImageMultiple20,
         WorkflowNodeKind.Live => SymbolRegular.Live20,
+        WorkflowNodeKind.Om => SymbolRegular.Microscope20,
+        WorkflowNodeKind.Lens => SymbolRegular.CameraSwitch20,
+        WorkflowNodeKind.AutoContrastBrightness => SymbolRegular.BrightnessHigh20,
         WorkflowNodeKind.Abort => SymbolRegular.Stop20,
         WorkflowNodeKind.Http => SymbolRegular.Globe20,
         WorkflowNodeKind.Delay => SymbolRegular.Timer20,
@@ -253,6 +259,9 @@ public sealed class WorkflowActionViewModel : ObservableObject
         or WorkflowNodeKind.Focus
         or WorkflowNodeKind.Integration
         or WorkflowNodeKind.Live
+        or WorkflowNodeKind.Om
+        or WorkflowNodeKind.Lens
+        or WorkflowNodeKind.AutoContrastBrightness
         or WorkflowNodeKind.Abort
             ? "ActionRunning"
             : "DesignerActionRunning"];
@@ -728,6 +737,7 @@ public sealed class WorkflowActionViewModel : ObservableObject
         "steps" => "ParamFocusSteps",
         "frame_count" => "ParamFrameCount",
         "image_path" => "ParamImagePath",
+        "lens_mode" => "ParamLensMode",
         "method" => "ParamHttpMethod",
         "url" => "ParamHttpUrl",
         "headers" => "ParamHttpHeaders",

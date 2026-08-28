@@ -92,6 +92,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             new(WorkflowNodeKind.Focus, "ActionFocus", "ToolboxFocusDescription", SymbolRegular.ScanCamera20, localization),
             new(WorkflowNodeKind.Integration, "ActionIntegration", "ToolboxIntegrationDescription", SymbolRegular.ImageMultiple20, localization),
             new(WorkflowNodeKind.Live, "ActionLive", "ToolboxLiveDescription", SymbolRegular.Live20, localization),
+            new(WorkflowNodeKind.Om, "ActionOm", "ToolboxOmDescription", SymbolRegular.Microscope20, localization),
+            new(WorkflowNodeKind.Lens, "ActionLens", "ToolboxLensDescription", SymbolRegular.CameraSwitch20, localization),
+            new(WorkflowNodeKind.AutoContrastBrightness, "ActionAcb", "ToolboxAcbDescription", SymbolRegular.BrightnessHigh20, localization),
             new(WorkflowNodeKind.Abort, "ActionAbort", "ToolboxAbortDescription", SymbolRegular.Stop20, localization)
         };
         FlowToolboxItems = new ObservableCollection<ToolboxItemViewModel>
@@ -1977,6 +1980,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             or WorkflowNodeKind.Focus
             or WorkflowNodeKind.Integration
             or WorkflowNodeKind.Live
+            or WorkflowNodeKind.Om
+            or WorkflowNodeKind.Lens
+            or WorkflowNodeKind.AutoContrastBrightness
             or WorkflowNodeKind.Abort;
 
     private string FormatValidationDetail(ValidationIssue issue)

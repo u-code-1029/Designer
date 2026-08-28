@@ -131,6 +131,40 @@ public sealed class ApplicationWorkflowRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_PublishesOmLensAndAutoContrastBrightnessContracts()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var om = new OmNode
+        {
+            ImagePath = ParameterBinding.Literal(@"C:\results\om.png")
+        };
+        var lens = new LensNode
+        {
+            LensMode = ParameterBinding.Literal("lens2")
+        };
+        var acb = new AutoContrastBrightnessNode
+        {
+            HorizontalFieldWidth = ParameterBinding.Literal("2.04E-6")
+        };
+
+        await runner.RunAsync(Document(om, lens, acb));
+
+        Assert.Equal(
+            new[]
+            {
+                EquipmentActionNames.Om,
+                EquipmentActionNames.Lens,
+                EquipmentActionNames.AutoContrastBrightness
+            },
+            transport.Requests.Select(request => request.Action));
+        Assert.Equal(@"C:\results\om.png", transport.Requests[0].Parameters["image_path"]);
+        Assert.Equal("lens2", transport.Requests[1].Parameters["lens_mode"]);
+        Assert.Equal(2.04E-6, (double)transport.Requests[2].Parameters["hfw"]!, 12);
+        Assert.Equal("lens2", runner.Results.GetLatest(lens.Id)!.Values["current_lens_mode"]);
+    }
+
+    [Fact]
     public async Task Repeat_PreservesEveryIterationResultAndUsesUniqueCorrelations()
     {
         var transport = new FakeTransport(request => Task.FromResult(
@@ -191,12 +225,7 @@ public sealed class ApplicationWorkflowRunnerTests
             new EquipmentResponseMessage(
                 request.CorrelationId,
                 request.Action,
-                1,
-                new Dictionary<string, object?>
-                {
-                    ["current_stage_x"] = 1.25E-3,
-                    ["current_stage_y"] = -2.5E-3
-                })));
+                1)));
         var runner = CreateRunner(transport);
         var failed = new StageNode { Key = "stage_failed" };
         var neverStarted = new StageNode { Key = "stage_after_failure" };
@@ -218,6 +247,8 @@ public sealed class ApplicationWorkflowRunnerTests
         var result = Assert.Single(runner.Results.GetAll(failed.Id));
         Assert.Equal(1, result.Values["result"]);
         Assert.Equal("stage", result.Values["action"]);
+        Assert.False(result.Values.ContainsKey("current_stage_x"));
+        Assert.False(result.Values.ContainsKey("current_stage_y"));
         Assert.Same(result, faultedEvent?.Result);
         Assert.Null(runner.Results.GetLatest(neverStarted.Id));
     }
@@ -795,6 +826,15 @@ public sealed class ApplicationWorkflowRunnerTests
                 responseProperties["hfw"] = request.Parameters["hfw"];
                 responseProperties["frame_count"] = request.Parameters["frame_count"];
                 responseProperties["image_path"] = request.Parameters["image_path"];
+                break;
+            case EquipmentActionNames.Om:
+                responseProperties["image_path"] = request.Parameters["image_path"];
+                break;
+            case EquipmentActionNames.Lens:
+                var requestedMode = (string)request.Parameters["lens_mode"]!;
+                responseProperties["current_lens_mode"] = requestedMode == "lens2"
+                    ? "lens2"
+                    : "lens1";
                 break;
         }
 

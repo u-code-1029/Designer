@@ -155,6 +155,73 @@ namespace DrillFlow.Core.Workflows
         }
     }
 
+    public sealed class OmNode : WorkflowNode
+    {
+        public OmNode()
+        {
+            Key = "om";
+            DisplayName = "Capture OM image";
+            ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\om.bmp");
+        }
+
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Om;
+
+        /// <summary>The absolute local or UNC pathname where equipment should save the OM image.</summary>
+        public ParameterBinding ImagePath { get; set; }
+
+        public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
+        {
+            return new Dictionary<string, ParameterBinding>
+            {
+                ["image_path"] = ImagePath
+            };
+        }
+    }
+
+    public sealed class LensNode : WorkflowNode
+    {
+        public LensNode()
+        {
+            Key = "lens";
+            DisplayName = "Change lens";
+            LensMode = ParameterBinding.Literal("no_change");
+        }
+
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.Lens;
+
+        public ParameterBinding LensMode { get; set; }
+
+        public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
+        {
+            return new Dictionary<string, ParameterBinding>
+            {
+                ["lens_mode"] = LensMode
+            };
+        }
+    }
+
+    public sealed class AutoContrastBrightnessNode : WorkflowNode
+    {
+        public AutoContrastBrightnessNode()
+        {
+            Key = "acb";
+            DisplayName = "Auto contrast and brightness";
+            HorizontalFieldWidth = ParameterBinding.Literal("2.04E-6");
+        }
+
+        public override WorkflowNodeKind Kind => WorkflowNodeKind.AutoContrastBrightness;
+
+        public ParameterBinding HorizontalFieldWidth { get; set; }
+
+        public override IReadOnlyDictionary<string, ParameterBinding> GetParameterBindings()
+        {
+            return new Dictionary<string, ParameterBinding>
+            {
+                ["hfw"] = HorizontalFieldWidth
+            };
+        }
+    }
+
     public sealed class AbortNode : WorkflowNode
     {
         private static readonly IReadOnlyDictionary<string, ParameterBinding> EmptyParameters =

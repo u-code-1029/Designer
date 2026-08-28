@@ -45,6 +45,7 @@ public sealed class RuntimeResultFieldViewModel : ObservableObject
         "current_stage_y" => "ResultCurrentStageYDescription",
         "current_camera_x" => "ResultCurrentCameraXDescription",
         "current_camera_y" => "ResultCurrentCameraYDescription",
+        "current_lens_mode" => "ResultCurrentLensModeDescription",
         "hfw" => "ParamHfw",
         "frame_count" => "ParamFrameCount",
         "z_to_sharpness_2d" => "ResultFocusSamplesDescription",

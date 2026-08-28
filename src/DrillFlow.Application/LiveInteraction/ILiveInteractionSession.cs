@@ -38,6 +38,18 @@ public interface ILiveInteractionSession
         int steps,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Selects an optical lens, or queries the current lens with <c>no_change</c>.
+    /// </summary>
+    Task<EquipmentResponseMessage> ChangeLensAsync(
+        string lensMode,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Runs automatic contrast and brightness adjustment at the current live HFW.</summary>
+    Task<EquipmentResponseMessage> AutoContrastBrightnessAsync(
+        double horizontalFieldWidthMetres,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Requests a high-quality integrated image at the supplied HFW and frame count.</summary>
     Task<LiveImageExchangeResult> IntegrateAsync(
         double horizontalFieldWidthMetres,

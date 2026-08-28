@@ -15,7 +15,7 @@ DrillFlow Designer는 철판 위 드릴 장비의 단위 동작과 디자이너 
 - Windows 7 SP1 이상과 .NET Framework 4.8(`net48`)을 지원한다. 현대 .NET 8 런타임은 Windows 7을 지원하지 않으므로 사용하지 않는다.
 - WPF-UI FluentWindow와 Compact Navigation 형태를 사용한다. 디자이너, 라이브 인터랙션, 설정의 세 페이지를 제공한다.
 - 중앙 편집기는 물리적인 X/Y 도면이 아니라 **실행 순서**를 정의한다.
-- 장비 response의 `result`는 `0`(성공) 또는 `1`(실패)이며, 실패 결과도 Action에 보존한 뒤 Workflow를 `Faulted`로 중단한다.
+- 장비 response의 `result`는 `0`(성공) 또는 `1`(실패)이며, 실패 response는 Action별 성공 필드 없이 공통 필드만 있어도 된다. 실패 결과를 Action에 보존한 뒤 Workflow를 `Faulted`로 중단한다.
 - `correlation_id`는 실행 순서가 아니라 요청과 응답을 연결하는 양의 Int32 식별자다.
 - Repeat의 내부 결과는 마지막 값만 덮지 않고 모든 iteration을 보존한다.
 - 실행 이력 archive는 만들지 않고 현재 결과 세션만 보유한다. “이 Action만 실행”은 같은 세션에 누적하고, 새 전체 Workflow Run을 시작하면 이전 결과를 비운다.
@@ -64,11 +64,11 @@ Action 앞의 붉은 점은 브레이크포인트다. 시작 pill 아래부터 �
 
 모든 `live` request에는 metre 기준의 필수 `hfw`가 포함된다. UI 기본값은 편집 가능한 `1 mm`이며 `0 < hfw < 2.4E-3 m`인 유한값만 허용한다. 이미지 위 마우스 휠 또는 입력 컨트롤 밖의 `+`/`-` 키와 버튼으로 범위 안에서 HFW를 절반(확대)/2배(축소) 조절한다. 유효한 Pixel Pitch는 같은 비율로 함께 보정된다. 유효 HFW가 바뀌면 이전 값으로 게시된 Live request를 즉시 취소·회수하고 새 값으로 재요청한다. 텍스트 편집은 300ms debounce하고 휠/키/버튼은 즉시 적용한다. 새 HFW 응답 이미지를 decode하기 전에는 이전 이미지를 보정 대기로 표시하고 이미지 지점 이동을 잠가 stale 이미지·새 Pixel Pitch 조합의 오이동을 막는다.
 
-라이브 페이지의 오른쪽 파라미터·Stage·Camera·Focus·결과 영역은 `CanContentScroll=False`인 독립 수직 ScrollViewer를 사용한다. 상단에는 설정된 통신 폴더 열기, 현재 active `live` request 하나에 768×512 모자이크 XML 응답을 만드는 “1프레임 테스트 생성”, 이후 각 Live `correlation_id`에 새 모자이크 응답을 만드는 “연속 response 결과 생성” 토글이 있다. 테스트 생성기는 같은 correlation의 response가 이미 있으면 실제 장비 결과일 수 있으므로 덮어쓰지 않는다. 연속 모드의 직전 이미지는 다음 request를 관찰한 뒤 해제하여 LocalAppData 파일 수를 제한하고, 남은 앱 소유 이미지는 종료 또는 다음 시작 때 정리한다.
+라이브 페이지의 오른쪽 파라미터·장비 상태·동작·결과 영역은 `CanContentScroll=False`인 독립 수직 ScrollViewer를 사용한다. 현재 상태, 최근 목표, Stage, Camera, 프레임 배율, Pixel Pitch, Focus, Lens, ACB, 촬영 결과를 포함한 모든 항목은 WPF-UI expandable card이며 모두 접힌 상태로 시작한다. 상단에는 설정된 통신 폴더 열기, 현재 active `live` request 하나에 768×512 모자이크 XML 응답을 만드는 “1프레임 테스트 생성”, 이후 각 Live `correlation_id`에 새 모자이크 응답을 만드는 “연속 response 결과 생성” 토글이 있다. 테스트 생성기는 같은 correlation의 response가 이미 있으면 실제 장비 결과일 수 있으므로 덮어쓰지 않는다. 연속 모드의 직전 이미지는 다음 request를 관찰한 뒤 해제하여 LocalAppData 파일 수를 제한하고, 남은 앱 소유 이미지는 종료 또는 다음 시작 때 정리한다.
 
 이미지를 더블클릭하거나 오른쪽 클릭 메뉴에서 “해당 위치로 이동”을 선택하면 동일한 좌표 mapper가 원본 pixel 크기와 X/Y DPI를 함께 사용해 WPF `Stretch=Uniform`의 실제 표시 영역과 letterbox를 계산한 뒤 원본 pixel 좌표로 되돌린다. 따라서 X/Y DPI가 다른 이미지도 화면 지점과 이동 지점이 일치한다. 이미지 중심을 이동량 `(0, 0)`으로 하고, 사용자가 입력한 pixel pitch와 m/mm/µm/nm 단위를 metre로 환산해 `action: "stage"`, `move_mode: "relative"`, `stage_x`, `stage_y` request를 만든다. 기본 축은 오른쪽 +X, 아래쪽 +Y이며 설치 방향에 맞춰 각 축을 반전할 수 있다. 계산 결과는 NaN/Infinity가 아닌 유한 signed number인지 검사하며 별도의 ±이동거리 제한은 두지 않는다.
 
-Stage/Camera 이동, Focus 또는 Integration 촬영을 시작하면 현재 Live exchange를 즉시 취소하고, transport가 그 exchange가 게시한 정확한 request를 회수해 gate를 놓을 때까지 기다린 뒤 interactive Action을 하나만 보낸다. 이미지 지점 Stage 이동은 matching 성공 response 뒤 페이지가 활성 상태이면 이전 Stop 여부와 관계없이 Live streaming을 자동 재개하지만, 실패·취소·페이지 이탈 때는 오류 확인을 위해 멈춘 상태를 유지한다. Integration은 이전 재생 상태를 복원한다. 페이지를 이탈하면 진행 중인 앱 소유 Stage/Camera/Focus/Integration도 취소하고 Live를 재개하지 않는다. `촬영`은 `action: "integration"`과 선택한 1/2/4/8/16/32/64 `frame_count`로 고화질 `image_path`를 받은 즉시 원본 바이트 그대로 전용 LocalAppData 스냅샷에 확보한다. 스냅샷 확보까지만 현재 response timeout의 image I/O 예산을 적용하고 저장 Dialog에서 사용자가 결정하는 시간에는 timer를 적용하지 않는다. 미리보기와 Windows 저장 Dialog의 로컬 복사는 모두 이 동일 스냅샷을 사용하므로 장비가 원본을 덮어쓰거나 삭제해도 결과가 바뀌지 않는다. 작업이 끝난 스냅샷은 즉시 지우며 종료/다음 시작에서도 남은 전용 파일을 정리한다. 스트리밍·장비 인터랙션 중에는 일반 워크플로 실행, Response 테스트, 통신 설정 변경을 막고, 반대로 워크플로 실행 중에는 라이브 명령을 막는다.
+Stage/Camera 이동, Focus, Integration 촬영, Lens 변경 또는 ACB를 시작하면 현재 Live exchange를 즉시 취소하고, transport가 그 exchange가 게시한 정확한 request를 회수해 gate를 놓을 때까지 기다린 뒤 interactive Action을 하나만 보낸다. 이미지 지점 Stage 이동은 matching 성공 response 뒤 페이지가 활성 상태이면 이전 Stop 여부와 관계없이 Live streaming을 자동 재개하지만, 실패·취소·페이지 이탈 때는 오류 확인을 위해 멈춘 상태를 유지한다. Integration, Lens, ACB는 이전 재생 상태를 복원하며, Lens 성공 뒤에는 새 Live frame이 decode될 때까지 기존 이미지의 이동 보정을 오래된 상태로 표시한다. Lens request는 `lens1`, `lens2`, `no_change` 중 하나이고 성공 response는 실제 `lens1` 또는 `lens2` 상태를 갱신한다. ACB는 현재 유효한 HFW를 request에 넣는다. Live Interaction에는 OM과 Abort를 제공하지 않는다. 페이지를 이탈하면 진행 중인 앱 소유 Stage/Camera/Focus/Integration/Lens/ACB도 취소하고 Live를 재개하지 않는다. `촬영`은 `action: "integration"`과 선택한 1/2/4/8/16/32/64 `frame_count`로 고화질 `image_path`를 받은 즉시 원본 바이트 그대로 전용 LocalAppData 스냅샷에 확보한다. 스냅샷 확보까지만 현재 response timeout의 image I/O 예산을 적용하고 저장 Dialog에서 사용자가 결정하는 시간에는 timer를 적용하지 않는다. 미리보기와 Windows 저장 Dialog의 로컬 복사는 모두 이 동일 스냅샷을 사용하므로 장비가 원본을 덮어쓰거나 삭제해도 결과가 바뀌지 않는다. 작업이 끝난 스냅샷은 즉시 지우며 종료/다음 시작에서도 남은 전용 파일을 정리한다. 스트리밍·장비 인터랙션 중에는 일반 워크플로 실행, Response 테스트, 통신 설정 변경을 막고, 반대로 워크플로 실행 중에는 라이브 명령을 막는다.
 
 ## 3. Action 모델
 
@@ -86,10 +86,13 @@ Stage/Camera 이동, Focus 또는 Integration 촬영을 시작하면 현재 Live
 | Integration | `integration` | `hfw`, `frame_count`, `image_path` | `hfw`, `frame_count`, `image_path` |
 | Live | `live` | `hfw`, 고정 `frame_count = 1`, `image_path` | `hfw`, 고정 `frame_count = 1`, `image_path` |
 | Abort | `abort` | 없음 | 없음 |
+| OM | `om` | `image_path` | `image_path` |
+| Lens Change | `lens` | `lens_mode` | `current_lens_mode` |
+| Auto Contrast/Brightness | `acb` | `hfw` | 없음 |
 
-Stage와 Camera의 relative·absolute 좌표는 모두 음수·0·양수를 허용하며, absolute는 각 장비의 home `(0, 0)`을 기준으로 한다. Focus 결과의 `z_to_sharpness_2d`는 `null`, 빈 배열 또는 양의 유한 `[z, sharpness]` pair 배열이다. Integration/Live의 `image_path`는 장비가 저장한 이미지의 절대 로컬/UNC 파일 경로이며 장비가 request와 다른 최종 경로를 반환할 수도 있다.
+Stage와 Camera의 relative·absolute 좌표는 모두 음수·0·양수를 허용하며, absolute는 각 장비의 home `(0, 0)`을 기준으로 한다. Focus 결과의 `z_to_sharpness_2d`는 `null`, 빈 배열 또는 양의 유한 `[z, sharpness]` pair 배열이다. Integration/Live/OM의 `image_path`는 장비가 저장한 이미지의 절대 로컬/UNC 파일 경로이며 장비가 request와 다른 최종 경로를 반환할 수도 있다. Lens request의 `lens_mode`는 `lens1`, `lens2`, `no_change` 중 하나이고, 성공 response의 실제 `current_lens_mode`는 `lens1` 또는 `lens2`다. ACB의 `hfw`는 다른 HFW와 같은 범위를 사용한다. Abort request는 공통 `type`, `correlation_id`, `action`만, response는 여기에 `result`만 더한 정확한 shape다.
 
-모든 장비 response는 공통으로 `type: "response"`, matching `correlation_id`, matching `action`, `result`를 가진다. `result = 0`은 성공, `result = 1`은 실패다. Action별 response 필드는 현재 결과 세션과 Expression 객체에 보존한다.
+모든 장비 response는 공통으로 `type: "response"`, matching `correlation_id`, matching `action`, `result`를 가진다. `result = 0`은 성공이며 Action별 response 필드가 모두 유효해야 한다. `result = 1`은 실패이며 성공 전용 필드를 생략할 수 있다. 장비가 실패에도 성공 shape를 보내면 읽을 수 있지만 성공 전용 값은 검증하거나 결과로 사용하지 않는다. 공통 실패 결과는 현재 결과 세션에 보존한 뒤 Workflow를 `Faulted`로 중단한다.
 
 ### 디자이너 동작
 
@@ -130,6 +133,8 @@ HTTP Action의 입력과 결과 shape는 다음과 같다.
 - Integration `frame_count`: `1`, `2`, `4`, `8`, `16`, `32`, `64` 중 하나
 - Live `frame_count`: 정확히 `1`
 - Integration/Live `image_path`: 파일명을 포함한 절대 Windows 로컬 또는 UNC 경로
+- OM `image_path`: 파일명을 포함한 절대 Windows 로컬 또는 UNC 경로
+- Lens `lens_mode`: `lens1`, `lens2`, `no_change` 중 하나
 - Repeat `count`: `1..Int32.MaxValue`
 - Delay: `0..29999 ms`
 - 수치는 NaN이나 Infinity가 아닌 유한값
@@ -153,7 +158,7 @@ action_key.results.last.field
 action_key.last.field
 ```
 
-미래 Action, 실행될 수 없는 분기, 순환 참조는 저장/실행 전 검증에서 거부한다. Expression TextBox에서 `Ctrl+Space`를 누르면 현재 token과 caret 위치를 분석해 접근 가능한 이전 Action 및 `parameters`/`result` 멤버를 ComboBox 팝업으로 보여준다. Enter/Tab은 후보를 입력하고 Esc는 닫는다. 여섯 장비 Action의 계약상 response 필드와 런타임에서 발견한 HTTP 동적 필드도 자동완성 후보에 합쳐진다.
+미래 Action, 실행될 수 없는 분기, 순환 참조는 저장/실행 전 검증에서 거부한다. Expression TextBox에서 `Ctrl+Space`를 누르면 현재 token과 caret 위치를 분석해 접근 가능한 이전 Action 및 `parameters`/`result` 멤버를 ComboBox 팝업으로 보여준다. Enter/Tab은 후보를 입력하고 Esc는 닫는다. 아홉 장비 Action의 계약상 response 필드와 런타임에서 발견한 HTTP 동적 필드도 자동완성 후보에 합쳐진다.
 
 ## 5. 실행 엔진
 
@@ -173,7 +178,7 @@ Breakpoint, Stop, 활성화 여부와 실행 상태는 runner 이벤트로 카�
 
 ## 6. 파일 통신과 Response 테스트
 
-request와 response는 같은 통신 폴더의 서로 다른 설정 파일명을 사용하며 기본값은 `request.xml`, `response.xml`이다. 워크플로·Dialog·runner는 JSON과 같은 논리 message 객체를 다루지만 중간 JSON 파일은 만들지 않는다. 앱이 생성하는 request와 테스트 response는 UTF-8(BOM 없음) XML이다. 장비 response는 UTF-8 BOM 유무를 모두 허용하며, 표준 3-byte BOM이 있으면 장비 파일을 다시 쓰지 않고 메모리에서 제외한 뒤 파싱한다. Stage/Camera/Focus/Integration/Live/Abort 각각의 request/response 템플릿 12개를 일반 텍스트로 취급해 정확한 `{{{field_name}}}` placeholder만 치환하거나 추출한다. 일반 필드명 문자열은 그대로 두고, 같은 placeholder가 반복되면 모두 같은 값으로 치환하며 파싱 시에도 모든 위치의 값이 같아야 한다. `type`과 `action`은 placeholder 대신 Action/방향별 고정 텍스트로 표현할 수 있다. 독립적인 payload 판별에서는 둘 이상의 Action 템플릿과 동시에 일치하면 거부하지만, 실제 파일 exchange는 이미 대기 중인 request의 Action을 알고 있으므로 해당 Action의 response 템플릿만 적용한다. 현재 request와 동일한 `correlation_id`와 `action`, `0|1`인 `result`, Action별 필수 필드가 모두 유효한 response만 받아들인다. 안정적으로 읽힌 파일이 이 조건을 통과하지 못하면 동일한 응답 대기 구간에서 같은 바이트에 대한 경고를 한 번만 기록해 단순 미감지와 계약 불일치를 구분한다.
+request와 response는 같은 통신 폴더의 서로 다른 설정 파일명을 사용하며 기본값은 `request.xml`, `response.xml`이다. 워크플로·Dialog·runner는 JSON과 같은 논리 message 객체를 다루지만 중간 JSON 파일은 만들지 않는다. 앱이 생성하는 request와 테스트 response는 UTF-8(BOM 없음) XML이다. 장비 response는 UTF-8 BOM 유무를 모두 허용하며, 표준 3-byte BOM이 있으면 장비 파일을 다시 쓰지 않고 메모리에서 제외한 뒤 파싱한다. 아홉 장비 Action의 request/정상-response 템플릿 18개와, 성공 전용 response 필드가 있는 일곱 Action의 공통 `failure-response.xml`을 합친 25개 템플릿을 일반 텍스트로 취급해 정확한 `{{{field_name}}}` placeholder만 치환하거나 추출한다. 일반 필드명 문자열은 그대로 두고, 같은 placeholder가 반복되면 모두 같은 값으로 치환하며 파싱 시에도 모든 위치의 값이 같아야 한다. `type`과 `action`은 placeholder 대신 Action/방향별 고정 텍스트로 표현할 수 있다. 독립적인 payload 판별에서는 둘 이상의 Action 템플릿과 동시에 일치하면 거부하지만, 실제 파일 exchange는 이미 대기 중인 request의 Action을 알고 있으므로 해당 Action의 response 템플릿만 적용한다. 현재 request와 동일한 `correlation_id`와 `action`, `0|1`인 `result`를 요구한다. `result = 0`이면 Action별 필수 필드를 모두 검증하고, `result = 1`이면 공통 필드만으로 받아들이며 성공 전용 필드를 사용하지 않는다. 안정적으로 읽힌 파일이 이 조건을 통과하지 못하면 동일한 응답 대기 구간에서 같은 바이트에 대한 경고를 한 번만 기록해 단순 미감지와 계약 불일치를 구분한다.
 
 파일 게시에는 같은 디렉터리의 temp 파일과 atomic replace/move를 사용한다. `.drillflow.exchange.lock`을 `FileShare.None`으로 열어 로컬 프로세스와 SMB 클라이언트의 전체 exchange를 직렬화한다. 설정한 request lifecycle의 게시 전 조건(장비 삭제 방식이면 기존 request 소멸)이 충족된 뒤 quiet interval만큼 기다리고, 기본 `DeleteAfterRead` 모드에서는 남아 있는 이전 response를 정리한 다음 첫 request를 게시한다. 이 대기는 취소 가능하며 취소되면 request/temp 파일을 만들지 않고, matching response 대기는 실제 게시 뒤에 온전한 timeout 예산으로 새로 시작한다. response 감지는 로컬/SMB 변경 알림에 의존하지 않고 polling을 기준으로 하며, 파일 크기와 수정 시간이 안정된 뒤 읽고 일시적인 share violation을 재시도한다. 기본 모드에서는 안정적으로 읽힌 파일을 현재 request의 Action과 `correlation_id`로 판별하므로 같은 내용의 테스트 파일을 다시 붙여넣어도 누락되지 않는다. `RetainUntilOverwritten` 모드에서는 다른 PC나 복원된 ID 상태가 남긴 응답까지 방어하기 위해 게시 전 response 바이트를 baseline으로 보존하며, 장비가 새 correlation을 포함한 payload로 실제 교체해야 한다.
 
@@ -181,7 +186,7 @@ request에는 서로 독립적인 두 lifecycle이 있다. 장비 lifecycle은 �
 
 timeout retry는 기본으로 꺼져 있다. 켜면 같은 XML payload와 `correlation_id`를 다시 게시하므로 장비가 correlation ID를 내구성 있는 idempotency key로 처리하지 않는 한 물리 동작은 at-least-once다. 게시 전 quiet interval은 새 Exchange의 최초 게시에 한 번만 적용하며 retry는 별도의 retry interval을 사용한다.
 
-Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI ContentDialog를 열 때마다 최신 설정의 `ExchangeDirectory + ResponseFileName`을 기본 경로로 표시하고, 감지한 request의 `correlation_id`/`action`과 Action별 기본 response 필드를 편집 가능한 논리 JSON 초안으로 제안한다. 이 초안은 UI 표현일 뿐 게시 시 해당 Action의 XML response 템플릿으로 렌더링된다. Stage/Camera/Focus/Abort에는 이미지 생성 UI가 없고, Integration/Live에서만 768×512 모자이크 PNG를 LocalAppData의 앱 전용 임시 폴더에 자동 생성하고 frozen bitmap을 메모리에 유지해 Dialog에서 바로 미리 본다. `다른 이미지`는 사용자가 편집한 필드를 보존한 채 이미지와 `image_path`만 함께 교체한다. 생성 중에는 게시를 막아 화면의 이미지와 실제 response 경로가 어긋나지 않게 한다. 생성한 파일은 앱 종료 시 삭제하고 비정상 종료 잔여물도 다음 시작 때 정리한다. 게시 시 Action별 스키마를 검증하고 원자적으로 XML response를 생성한다. 읽기 전용 경로·결과 TextBox는 명시적인 OneWay binding을 사용해 WPF가 getter-only 속성에 값을 되쓰지 않는다.
+Response 테스트는 선택한 **장비 Action**에만 제공된다. WPF-UI ContentDialog를 열 때마다 최신 설정의 `ExchangeDirectory + ResponseFileName`을 기본 경로로 표시하고, 감지한 request의 `correlation_id`/`action`과 Action별 기본 response 필드를 편집 가능한 논리 JSON 초안으로 제안한다. 이 초안은 UI 표현일 뿐 게시 시 해당 Action의 XML response 템플릿으로 렌더링된다. Stage/Camera/Focus/Abort/Lens/ACB에는 이미지 생성 UI가 없고, Integration/Live/OM에서 768×512 모자이크 PNG를 LocalAppData의 앱 전용 임시 폴더에 자동 생성하고 frozen bitmap을 메모리에 유지해 Dialog에서 바로 미리 본다. `다른 이미지`는 사용자가 편집한 필드를 보존한 채 이미지와 `image_path`만 함께 교체한다. 생성 중에는 게시를 막아 화면의 이미지와 실제 response 경로가 어긋나지 않게 한다. 생성한 파일은 앱 종료 시 삭제하고 비정상 종료 잔여물도 다음 시작 때 정리한다. 게시 시 Action별 스키마를 검증하고 원자적으로 XML response를 생성한다. 읽기 전용 경로·결과 TextBox는 명시적인 OneWay binding을 사용해 WPF가 getter-only 속성에 값을 되쓰지 않는다.
 
 세부 장비 계약과 XML 템플릿 교체 지점은 루트 `contract.md`가 source of truth다. HTTP Action은 장비 XML envelope를 따르지 않으며 이 계약의 범위 밖이다.
 
@@ -298,7 +303,7 @@ code-behind는 hit testing, mouse 좌표, drag payload, animation처럼 WPF visu
 - `F10` Continue 단축키, 넓어진 삽입 여백과 선을 완전히 가리는 불투명 Action/빈 안내 surface
 - Windows 7/net48 호환 Explorer형 통신 폴더 선택기와 현재 입력 폴더 열기 버튼
 - 이미 렌더링되어 frozen된 brush 때문에 부분 전환되던 Light/Dark 런타임 오류 수정
-- 장비 Action을 Stage/Camera/Focus/Integration/Live/Abort 여섯 종류와 Action별 response 결과로 갱신
+- 장비 Action을 Stage/Camera/Focus/Integration/Live/Abort/OM/Lens/ACB 아홉 종류와 Action별 response 결과로 갱신
 - Action 카드의 최신 결과·이미지 썸네일·실행중 indicator와 Inspector 이미지 전용 탭
 - 결과 기본 펼침·전체 접기/초기화, 편집/Undo/Redo 간 in-memory 결과 유지, 선택 이미지 `+`/`-` 배율 조절
 - Response 테스트의 768×512 임의 LocalAppData 이미지 생성 및 종료/다음 시작 정리
@@ -310,6 +315,8 @@ code-behind는 hit testing, mouse 좌표, drag payload, animation처럼 WPF visu
 - Action별 결과를 선택 실행 사이에도 누적하고 새 전체 Run/New/Open/명시적 초기화에서만 비우는 결과 세션
 - Live 오른쪽 독립 스크롤, 통신 폴더 열기, 1프레임/연속 테스트 response 생성과 즉시 Stop cleanup
 - 논리 message와 UTF-8 XML wire를 분리한 Action별 template codec, workflow schema v2와 v1 Move→Stage migration
+- `result = 1` 공통-only 실패 response와 Action별 failure template, OM/Lens/ACB Designer Action
+- OM/Abort를 제외한 Live Lens/ACB 독점 동작과 처음에는 모두 접힌 expandable control card
 
 ## 11. 확장 시 체크리스트
 

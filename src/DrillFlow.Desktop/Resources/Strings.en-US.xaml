@@ -77,6 +77,9 @@
     <system:String x:Key="ActionFocus">Auto focus</system:String>
     <system:String x:Key="ActionIntegration">Integration capture</system:String>
     <system:String x:Key="ActionLive">Capture one live frame</system:String>
+    <system:String x:Key="ActionOm">Capture OM image</system:String>
+    <system:String x:Key="ActionLens">Change lens</system:String>
+    <system:String x:Key="ActionAcb">Auto contrast/brightness</system:String>
     <system:String x:Key="ActionAbort">Abort</system:String>
     <system:String x:Key="ActionHttp">HTTP request</system:String>
     <system:String x:Key="ActionDelay">Delay</system:String>
@@ -87,6 +90,9 @@
     <system:String x:Key="ToolboxFocusDescription">Run the CCD camera auto-focus scan</system:String>
     <system:String x:Key="ToolboxIntegrationDescription">Integrate multiple frames and save an image</system:String>
     <system:String x:Key="ToolboxLiveDescription">Capture and save one CCD camera frame</system:String>
+    <system:String x:Key="ToolboxOmDescription">Capture and save an OM image to an absolute path</system:String>
+    <system:String x:Key="ToolboxLensDescription">Change the lens or query the current lens state</system:String>
+    <system:String x:Key="ToolboxAcbDescription">Automatically adjust contrast and brightness at the current HFW</system:String>
     <system:String x:Key="ToolboxAbortDescription">Create an abort request</system:String>
     <system:String x:Key="ToolboxHttpDescription">GET or POST with dynamic JSON results</system:String>
     <system:String x:Key="ToolboxDelayDescription">Local delay below 30,000 ms</system:String>
@@ -96,6 +102,7 @@
     <system:String x:Key="BranchElseIf">Else if</system:String>
     <system:String x:Key="BranchElse">Else</system:String>
     <system:String x:Key="ParamMoveMode">Move mode</system:String>
+    <system:String x:Key="ParamLensMode">Lens mode (lens1, lens2, or no_change)</system:String>
     <system:String x:Key="ParamStageX">Stage X coordinate or offset (m)</system:String>
     <system:String x:Key="ParamStageY">Stage Y coordinate or offset (m)</system:String>
     <system:String x:Key="ParamCameraX">Camera X coordinate or offset (m)</system:String>
@@ -168,6 +175,7 @@
     <system:String x:Key="ResultCurrentStageYDescription">Current absolute stage Y coordinate (m)</system:String>
     <system:String x:Key="ResultCurrentCameraXDescription">Current absolute camera X coordinate (m)</system:String>
     <system:String x:Key="ResultCurrentCameraYDescription">Current absolute camera Y coordinate (m)</system:String>
+    <system:String x:Key="ResultCurrentLensModeDescription">Current lens mode</system:String>
     <system:String x:Key="ResultFocusSamplesDescription">Positive [Z distance (m), sharpness] samples; null or empty is allowed</system:String>
     <system:String x:Key="ResultImagePathDescription">Path of the result image saved by the equipment</system:String>
     <system:String x:Key="ResultValueDescription">Value returned by the equipment</system:String>
@@ -270,6 +278,14 @@
     <system:String x:Key="LiveCameraPosition">Latest absolute camera position</system:String>
     <system:String x:Key="LiveExecuteCameraMove">Move camera</system:String>
     <system:String x:Key="LiveCameraMoveInvalid">Enter relative or absolute and finite signed X/Y values in metres.</system:String>
+    <system:String x:Key="LiveLensControl">Optical lens</system:String>
+    <system:String x:Key="LiveLensNoChangeHint">Choose no_change to query the current lens without changing it.</system:String>
+    <system:String x:Key="LiveExecuteLens">Apply lens mode</system:String>
+    <system:String x:Key="LiveAcbControl">Auto contrast and brightness</system:String>
+    <system:String x:Key="LiveAcbHfwHint">Uses the current Live frame HFW for this one-time adjustment.</system:String>
+    <system:String x:Key="LiveExecuteAcb">Adjust automatically</system:String>
+    <system:String x:Key="LiveLatestResult">Latest result</system:String>
+    <system:String x:Key="LiveAcbResultCompleted">Success · correlation_id: {0}</system:String>
     <system:String x:Key="LiveFocusControl">CCD auto focus</system:String>
     <system:String x:Key="LiveExecuteFocus">Run auto focus</system:String>
     <system:String x:Key="LiveFocusInvalid">Enter HFW between 0 and 2.4mm, a positive range, and at least 4 integer steps.</system:String>
@@ -311,6 +327,12 @@
     <system:String x:Key="LiveStatusCameraMoving">Moving the camera ({0}): X {1:0.########E+0}m, Y {2:0.########E+0}m</system:String>
     <system:String x:Key="LiveStatusCameraMoveCompleted">Camera move completed at absolute X {0:0.########E+0}m, Y {1:0.########E+0}m.</system:String>
     <system:String x:Key="LiveStatusCameraMoveFailed">Camera move failed. {0}</system:String>
+    <system:String x:Key="LiveStatusLensChanging">Applying lens mode {0}.</system:String>
+    <system:String x:Key="LiveStatusLensChanged">Lens operation completed. Current mode: {0}.</system:String>
+    <system:String x:Key="LiveStatusLensChangeFailed">Lens operation failed. {0}</system:String>
+    <system:String x:Key="LiveStatusAcbRunning">Adjusting contrast and brightness at HFW {0:0.########E+0}m.</system:String>
+    <system:String x:Key="LiveStatusAcbCompleted">Contrast and brightness adjustment completed at HFW {0:0.########E+0}m.</system:String>
+    <system:String x:Key="LiveStatusAcbFailed">Contrast and brightness adjustment failed. {0}</system:String>
     <system:String x:Key="LiveStatusFocusing">Running auto focus.</system:String>
     <system:String x:Key="LiveStatusFocusCompleted">Auto focus completed with {0} sample(s).</system:String>
     <system:String x:Key="LiveStatusFocusFailed">Auto focus failed. {0}</system:String>

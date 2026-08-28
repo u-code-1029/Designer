@@ -39,6 +39,7 @@ public sealed class EquipmentResponseMessage
         Properties = new ReadOnlyDictionary<string, object?>(
             CopyProperties(properties, nameof(properties)));
         _ = ImagePath;
+        _ = CurrentLensMode;
     }
 
     public string Type => "response";
@@ -83,6 +84,27 @@ public sealed class EquipmentResponseMessage
     public double? Hfw => ReadOptionalFiniteNumber("hfw");
 
     public int? FrameCount => ReadOptionalInteger("frame_count");
+
+    public string? CurrentLensMode
+    {
+        get
+        {
+            if (!Properties.TryGetValue("current_lens_mode", out var value))
+            {
+                return null;
+            }
+
+            if (value is string mode
+                && (string.Equals(mode, "lens1", StringComparison.Ordinal)
+                    || string.Equals(mode, "lens2", StringComparison.Ordinal)))
+            {
+                return mode;
+            }
+
+            throw new InvalidOperationException(
+                "The equipment response 'current_lens_mode' property must be 'lens1' or 'lens2' when present.");
+        }
+    }
 
     public IReadOnlyList<IReadOnlyList<double>>? ZToSharpness2D
     {

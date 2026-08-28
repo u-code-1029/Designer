@@ -77,6 +77,9 @@
     <system:String x:Key="ActionFocus">Auto Focus</system:String>
     <system:String x:Key="ActionIntegration">Integration 촬영</system:String>
     <system:String x:Key="ActionLive">Live 1Frame 촬영</system:String>
+    <system:String x:Key="ActionOm">OM 이미지 촬영</system:String>
+    <system:String x:Key="ActionLens">Lens 변경</system:String>
+    <system:String x:Key="ActionAcb">자동 Contrast/Brightness</system:String>
     <system:String x:Key="ActionAbort">멈추기</system:String>
     <system:String x:Key="ActionHttp">HTTP 요청</system:String>
     <system:String x:Key="ActionDelay">Delay</system:String>
@@ -87,6 +90,9 @@
     <system:String x:Key="ToolboxFocusDescription">CCD Camera Auto Focus 스캔 실행</system:String>
     <system:String x:Key="ToolboxIntegrationDescription">여러 Frame을 Integration하여 이미지 저장</system:String>
     <system:String x:Key="ToolboxLiveDescription">CCD Camera의 현재 1Frame을 촬영하여 저장</system:String>
+    <system:String x:Key="ToolboxOmDescription">OM 이미지를 지정한 절대 경로에 촬영하여 저장</system:String>
+    <system:String x:Key="ToolboxLensDescription">Lens를 변경하거나 현재 Lens 상태 조회</system:String>
+    <system:String x:Key="ToolboxAcbDescription">현재 HFW에서 Contrast와 Brightness를 자동 조정</system:String>
     <system:String x:Key="ToolboxAbortDescription">abort 요청 생성</system:String>
     <system:String x:Key="ToolboxHttpDescription">동적 JSON 결과를 지원하는 GET 또는 POST</system:String>
     <system:String x:Key="ToolboxDelayDescription">30,000ms 미만의 로컬 지연</system:String>
@@ -96,6 +102,7 @@
     <system:String x:Key="BranchElseIf">Else if</system:String>
     <system:String x:Key="BranchElse">Else</system:String>
     <system:String x:Key="ParamMoveMode">이동 모드</system:String>
+    <system:String x:Key="ParamLensMode">Lens 모드 (lens1, lens2 또는 no_change)</system:String>
     <system:String x:Key="ParamStageX">Stage X 좌표 또는 이동량 (m)</system:String>
     <system:String x:Key="ParamStageY">Stage Y 좌표 또는 이동량 (m)</system:String>
     <system:String x:Key="ParamCameraX">Camera X 좌표 또는 이동량 (m)</system:String>
@@ -168,6 +175,7 @@
     <system:String x:Key="ResultCurrentStageYDescription">현재 Stage 절대 Y 좌표 (m)</system:String>
     <system:String x:Key="ResultCurrentCameraXDescription">현재 Camera 절대 X 좌표 (m)</system:String>
     <system:String x:Key="ResultCurrentCameraYDescription">현재 Camera 절대 Y 좌표 (m)</system:String>
+    <system:String x:Key="ResultCurrentLensModeDescription">현재 Lens 모드</system:String>
     <system:String x:Key="ResultFocusSamplesDescription">양수 [Z 거리(m), Sharpness] 샘플 배열; null/빈 배열 허용</system:String>
     <system:String x:Key="ResultImagePathDescription">장비가 저장한 결과 이미지 경로</system:String>
     <system:String x:Key="ResultValueDescription">장비가 반환한 결과 값</system:String>
@@ -270,6 +278,14 @@
     <system:String x:Key="LiveCameraPosition">최근 Camera 절대 위치</system:String>
     <system:String x:Key="LiveExecuteCameraMove">Camera 이동 실행</system:String>
     <system:String x:Key="LiveCameraMoveInvalid">relative/absolute와 metre 기준 유한한 signed X/Y 값을 입력하세요.</system:String>
+    <system:String x:Key="LiveLensControl">광학 Lens 변경</system:String>
+    <system:String x:Key="LiveLensNoChangeHint">렌즈를 변경하지 않고 현재 상태만 조회하려면 no_change를 선택하세요.</system:String>
+    <system:String x:Key="LiveExecuteLens">Lens 모드 적용</system:String>
+    <system:String x:Key="LiveAcbControl">자동 Contrast/Brightness</system:String>
+    <system:String x:Key="LiveAcbHfwHint">현재 Live 프레임의 HFW를 사용해 일회성 자동 보정을 실행합니다.</system:String>
+    <system:String x:Key="LiveExecuteAcb">자동 보정 실행</system:String>
+    <system:String x:Key="LiveLatestResult">최근 결과</system:String>
+    <system:String x:Key="LiveAcbResultCompleted">성공 · correlation_id: {0}</system:String>
     <system:String x:Key="LiveFocusControl">CCD Auto Focus</system:String>
     <system:String x:Key="LiveExecuteFocus">Auto Focus 실행</system:String>
     <system:String x:Key="LiveFocusInvalid">0~2.4mm 사이 HFW, 양수 Range, 4 이상의 정수 Steps를 입력하세요.</system:String>
@@ -311,6 +327,12 @@
     <system:String x:Key="LiveStatusCameraMoving">Camera를 {0} 이동 중입니다. X {1:0.########E+0}m, Y {2:0.########E+0}m</system:String>
     <system:String x:Key="LiveStatusCameraMoveCompleted">Camera 이동을 완료했습니다. 절대 위치 X {0:0.########E+0}m, Y {1:0.########E+0}m</system:String>
     <system:String x:Key="LiveStatusCameraMoveFailed">Camera 이동에 실패했습니다. {0}</system:String>
+    <system:String x:Key="LiveStatusLensChanging">Lens 모드 {0}을(를) 적용하고 있습니다.</system:String>
+    <system:String x:Key="LiveStatusLensChanged">Lens 동작을 완료했습니다. 현재 모드: {0}</system:String>
+    <system:String x:Key="LiveStatusLensChangeFailed">Lens 동작에 실패했습니다. {0}</system:String>
+    <system:String x:Key="LiveStatusAcbRunning">HFW {0:0.########E+0}m 기준으로 Contrast/Brightness를 자동 보정하고 있습니다.</system:String>
+    <system:String x:Key="LiveStatusAcbCompleted">HFW {0:0.########E+0}m 기준 자동 Contrast/Brightness 보정을 완료했습니다.</system:String>
+    <system:String x:Key="LiveStatusAcbFailed">자동 Contrast/Brightness 보정에 실패했습니다. {0}</system:String>
     <system:String x:Key="LiveStatusFocusing">Auto Focus를 실행하고 있습니다.</system:String>
     <system:String x:Key="LiveStatusFocusCompleted">Auto Focus를 완료했습니다. 샘플 {0}개</system:String>
     <system:String x:Key="LiveStatusFocusFailed">Auto Focus에 실패했습니다. {0}</system:String>

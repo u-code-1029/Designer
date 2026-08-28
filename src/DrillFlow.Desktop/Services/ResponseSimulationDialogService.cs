@@ -54,7 +54,9 @@ public sealed class ResponseSimulationDialogService : IResponseSimulationDialogS
         var host = ContentDialogHost.GetForWindow(System.Windows.Application.Current.MainWindow)
                    ?? throw new InvalidOperationException("The main ContentDialog host is unavailable.");
         var lastCorrelation = action.Results.LastOrDefault()?.CorrelationId;
-        var supportsImageResponse = action.Kind is WorkflowNodeKind.Integration or WorkflowNodeKind.Live;
+        var supportsImageResponse = action.Kind is WorkflowNodeKind.Integration
+            or WorkflowNodeKind.Live
+            or WorkflowNodeKind.Om;
         TemporaryResponseImage? generatedImage = null;
         try
         {

@@ -57,6 +57,21 @@ namespace DrillFlow.Tests
                 Key = "live_1",
                 ImagePath = ParameterBinding.Literal(@"C:\images\live.png")
             };
+            var om = new OmNode
+            {
+                Key = "om_1",
+                ImagePath = ParameterBinding.Literal(@"C:\images\om.bmp")
+            };
+            var lens = new LensNode
+            {
+                Key = "lens_1",
+                LensMode = ParameterBinding.Literal("lens2")
+            };
+            var autoContrastBrightness = new AutoContrastBrightnessNode
+            {
+                Key = "acb_1",
+                HorizontalFieldWidth = ParameterBinding.Expression("focus_1.parameters.hfw")
+            };
             var conditional = new ConditionalNode { Key = "if_1" };
             conditional.Branches[0].Condition =
                 ParameterBinding.Expression("inside_delay.parameters.milliseconds >= 0");
@@ -68,7 +83,17 @@ namespace DrillFlow.Tests
             });
 
             var result = _validator.Validate(
-                Document(stage, camera, focus, repeat, integration, live, conditional));
+                Document(
+                    stage,
+                    camera,
+                    focus,
+                    repeat,
+                    integration,
+                    live,
+                    om,
+                    lens,
+                    autoContrastBrightness,
+                    conditional));
 
             Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Issues.Select(x => x.Message)));
             Assert.Empty(result.Issues);
@@ -266,6 +291,63 @@ namespace DrillFlow.Tests
             };
 
             AssertInvalid(Document(integration), "parameter.range_or_type", ".imagePath");
+        }
+
+        [Fact]
+        public void NewEquipmentActionsUseContractDefaults()
+        {
+            var om = new OmNode();
+            var lens = new LensNode();
+            var autoContrastBrightness = new AutoContrastBrightnessNode();
+
+            Assert.Equal(@"C:\DrillFlow\Images\om.bmp", om.ImagePath.RawText);
+            Assert.Equal("no_change", lens.LensMode.RawText);
+            Assert.Equal("2.04E-6", autoContrastBrightness.HorizontalFieldWidth.RawText);
+            Assert.True(_validator.Validate(Document(om, lens, autoContrastBrightness)).IsValid);
+        }
+
+        [Theory]
+        [InlineData("lens1", LensMode.Lens1)]
+        [InlineData(" LENS2 ", LensMode.Lens2)]
+        [InlineData("no_change", LensMode.NoChange)]
+        public void AcceptsSupportedLensModes(string rawText, LensMode expected)
+        {
+            var node = new LensNode { LensMode = ParameterBinding.Literal(rawText) };
+
+            Assert.Equal(
+                expected,
+                ParameterValueValidator.GetLensMode(ExpressionValue.String(rawText)));
+            Assert.True(_validator.Validate(Document(node)).IsValid);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("lens3")]
+        [InlineData("nochange")]
+        [InlineData("1")]
+        public void RejectsUnsupportedLensModes(string rawText)
+        {
+            var node = new LensNode { LensMode = ParameterBinding.Literal(rawText) };
+
+            AssertInvalid(Document(node), "parameter.range_or_type", ".lensMode");
+        }
+
+        [Fact]
+        public void OmAndAutoContrastBrightnessReuseImagePathAndHfwValidation()
+        {
+            var om = new OmNode { ImagePath = ParameterBinding.Literal(@"relative\om.bmp") };
+            var autoContrastBrightness = new AutoContrastBrightnessNode
+            {
+                HorizontalFieldWidth = ParameterBinding.Literal("2.4E-3")
+            };
+
+            var result = _validator.Validate(Document(om, autoContrastBrightness));
+
+            Assert.Contains(result.Issues, issue => issue.NodeId == om.Id && issue.Path.EndsWith(".imagePath"));
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == autoContrastBrightness.Id
+                         && issue.Path.EndsWith(".horizontalFieldWidth"));
         }
 
         [Theory]
@@ -484,6 +566,7 @@ namespace DrillFlow.Tests
             Assert.Equal(4, ParameterValueValidator.GetFocusSteps(ExpressionValue.Number(4)));
             Assert.Equal(64, ParameterValueValidator.GetIntegrationFrameCount(ExpressionValue.Number(64)));
             Assert.Equal(1, ParameterValueValidator.GetLiveFrameCount(ExpressionValue.Number(1)));
+            Assert.Equal(LensMode.NoChange, ParameterValueValidator.GetLensMode(ExpressionValue.String("NO_CHANGE")));
             Assert.Equal(
                 @"\\server\share\image.png",
                 ParameterValueValidator.GetAbsoluteImagePath(

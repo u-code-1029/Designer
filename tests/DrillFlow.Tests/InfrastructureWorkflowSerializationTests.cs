@@ -130,6 +130,21 @@ public sealed class InfrastructureWorkflowSerializationTests
                 FrameCount = ParameterBinding.Literal("1"),
                 ImagePath = ParameterBinding.Literal(@"C:\images\live.png")
             },
+            new OmNode
+            {
+                Key = "om_1",
+                ImagePath = ParameterBinding.Literal(@"C:\images\om.bmp")
+            },
+            new LensNode
+            {
+                Key = "lens_1",
+                LensMode = ParameterBinding.Literal("lens2")
+            },
+            new AutoContrastBrightnessNode
+            {
+                Key = "acb_1",
+                HorizontalFieldWidth = ParameterBinding.Literal("2.04E-6")
+            },
             new AbortNode { Key = "abort_1" }
         };
         var serializer = new JsonWorkflowDocumentSerializer();
@@ -148,6 +163,9 @@ public sealed class InfrastructureWorkflowSerializationTests
             node => Assert.IsType<FocusNode>(node),
             node => Assert.IsType<IntegrationNode>(node),
             node => Assert.IsType<LiveNode>(node),
+            node => Assert.IsType<OmNode>(node),
+            node => Assert.IsType<LensNode>(node),
+            node => Assert.IsType<AutoContrastBrightnessNode>(node),
             node => Assert.IsType<AbortNode>(node));
         for (var index = 0; index < nodes.Length; index++)
         {

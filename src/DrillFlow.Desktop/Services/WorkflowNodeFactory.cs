@@ -22,6 +22,18 @@ public static class WorkflowNodeFactory
             {
                 ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\live.bmp")
             },
+            WorkflowNodeKind.Om => new OmNode
+            {
+                ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\om.bmp")
+            },
+            WorkflowNodeKind.Lens => new LensNode
+            {
+                LensMode = ParameterBinding.Literal("no_change")
+            },
+            WorkflowNodeKind.AutoContrastBrightness => new AutoContrastBrightnessNode
+            {
+                HorizontalFieldWidth = ParameterBinding.Literal("2.04E-6")
+            },
             WorkflowNodeKind.Abort => new AbortNode(),
             WorkflowNodeKind.Http => new HttpActionNode(),
             WorkflowNodeKind.Delay => new DelayNode(),
@@ -60,6 +72,7 @@ public static class WorkflowNodeFactory
         var prefix = kind switch
         {
             WorkflowNodeKind.Conditional => "if",
+            WorkflowNodeKind.AutoContrastBrightness => "acb",
             _ => kind.ToString().ToLowerInvariant()
         };
         var existing = new HashSet<string>(existingAliases, StringComparer.OrdinalIgnoreCase);

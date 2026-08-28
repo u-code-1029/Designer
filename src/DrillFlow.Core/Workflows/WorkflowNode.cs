@@ -10,6 +10,9 @@ namespace DrillFlow.Core.Workflows
         Focus,
         Integration,
         Live,
+        Om,
+        Lens,
+        AutoContrastBrightness,
         Abort,
         Http,
         Delay,
@@ -21,6 +24,13 @@ namespace DrillFlow.Core.Workflows
     {
         Relative,
         Absolute
+    }
+
+    public enum LensMode
+    {
+        Lens1,
+        Lens2,
+        NoChange
     }
 
     public abstract class WorkflowNode

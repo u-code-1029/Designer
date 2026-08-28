@@ -41,6 +41,28 @@ namespace DrillFlow.Core.Validation
             throw new ParameterValidationException("Move mode must be 'relative' or 'absolute'.");
         }
 
+        public static LensMode GetLensMode(ExpressionValue value)
+        {
+            var text = GetString(value, "Lens mode").Trim();
+            if (string.Equals(text, "lens1", StringComparison.OrdinalIgnoreCase))
+            {
+                return LensMode.Lens1;
+            }
+
+            if (string.Equals(text, "lens2", StringComparison.OrdinalIgnoreCase))
+            {
+                return LensMode.Lens2;
+            }
+
+            if (string.Equals(text, "no_change", StringComparison.OrdinalIgnoreCase))
+            {
+                return LensMode.NoChange;
+            }
+
+            throw new ParameterValidationException(
+                "Lens mode must be 'lens1', 'lens2', or 'no_change'.");
+        }
+
         public static double GetMoveCoordinate(ExpressionValue value, string parameterName)
         {
             return GetFiniteCoordinate(value, parameterName);

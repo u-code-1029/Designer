@@ -137,9 +137,22 @@ public sealed class CoreExpressionCompletionProviderTests
         var focus = new FocusNode { Key = "focus_1" };
         var integration = new IntegrationNode { Key = "integration_1" };
         var live = new LiveNode { Key = "live_1" };
+        var om = new OmNode { Key = "om_1" };
+        var lens = new LensNode { Key = "lens_1" };
+        var autoContrastBrightness = new AutoContrastBrightnessNode { Key = "acb_1" };
         var abort = new AbortNode { Key = "abort_1" };
         var current = new DelayNode { Key = "current" };
-        var document = Document(stage, camera, focus, integration, live, abort, current);
+        var document = Document(
+            stage,
+            camera,
+            focus,
+            integration,
+            live,
+            om,
+            lens,
+            autoContrastBrightness,
+            abort,
+            current);
 
         var stageItems = Complete(document, current, "=stage_1.result.")
             .Items.Select(item => item.DisplayText).ToArray();
@@ -150,6 +163,12 @@ public sealed class CoreExpressionCompletionProviderTests
         var integrationItems = Complete(document, current, "=integration_1.result.")
             .Items.Select(item => item.DisplayText).ToArray();
         var liveItems = Complete(document, current, "=live_1.result.")
+            .Items.Select(item => item.DisplayText).ToArray();
+        var omItems = Complete(document, current, "=om_1.result.")
+            .Items.Select(item => item.DisplayText).ToArray();
+        var lensItems = Complete(document, current, "=lens_1.result.")
+            .Items.Select(item => item.DisplayText).ToArray();
+        var autoContrastBrightnessItems = Complete(document, current, "=acb_1.result.")
             .Items.Select(item => item.DisplayText).ToArray();
         var abortItems = Complete(document, current, "=abort_1.result.")
             .Items.Select(item => item.DisplayText).ToArray();
@@ -165,6 +184,10 @@ public sealed class CoreExpressionCompletionProviderTests
         Assert.Contains("hfw", liveItems);
         Assert.Contains("frame_count", liveItems);
         Assert.Contains("image_path", liveItems);
+        Assert.Contains("image_path", omItems);
+        Assert.Contains("current_lens_mode", lensItems);
+        Assert.Contains("result", autoContrastBrightnessItems);
+        Assert.DoesNotContain("image_path", autoContrastBrightnessItems);
         Assert.Contains("result", abortItems);
         Assert.DoesNotContain("image_path", stageItems);
         Assert.DoesNotContain("current_stage_x", cameraItems);

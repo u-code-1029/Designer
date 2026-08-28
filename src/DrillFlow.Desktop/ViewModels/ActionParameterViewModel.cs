@@ -109,6 +109,16 @@ public sealed class ActionParameterViewModel : ObservableObject
                         : Localized("relative 또는 absolute를 입력하세요.", "Enter relative or absolute.");
                 break;
 
+            case "lens_mode":
+                ValidationMessage = string.Equals(raw, "lens1", StringComparison.Ordinal)
+                                    || string.Equals(raw, "lens2", StringComparison.Ordinal)
+                                    || string.Equals(raw, "no_change", StringComparison.Ordinal)
+                    ? string.Empty
+                    : Localized(
+                        "lens1, lens2 또는 no_change를 입력하세요.",
+                        "Enter lens1, lens2, or no_change.");
+                break;
+
             case "stage_x":
             case "stage_y":
             case "camera_x":

@@ -306,6 +306,15 @@ namespace DrillFlow.Core.Validation
                         ValidateValue(live.FrameCount, node, "frame_count", available, path + ".frameCount", ParameterValueValidator.GetLiveFrameCount);
                         ValidateValue(live.ImagePath, node, "image_path", available, path + ".imagePath", ParameterValueValidator.GetAbsoluteImagePath);
                         break;
+                    case OmNode om:
+                        ValidateValue(om.ImagePath, node, "image_path", available, path + ".imagePath", ParameterValueValidator.GetAbsoluteImagePath);
+                        break;
+                    case LensNode lens:
+                        ValidateValue(lens.LensMode, node, "lens_mode", available, path + ".lensMode", ParameterValueValidator.GetLensMode);
+                        break;
+                    case AutoContrastBrightnessNode autoContrastBrightness:
+                        ValidateValue(autoContrastBrightness.HorizontalFieldWidth, node, "hfw", available, path + ".horizontalFieldWidth", ParameterValueValidator.GetHorizontalFieldWidth);
+                        break;
                     case HttpActionNode http:
                         ValidateValue(http.Method, node, "method", available, path + ".method", ParameterValueValidator.GetHttpMethod);
                         ValidateValue(http.Url, node, "url", available, path + ".url", ParameterValueValidator.GetHttpUrl);

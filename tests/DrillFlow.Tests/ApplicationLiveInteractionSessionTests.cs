@@ -27,11 +27,15 @@ public sealed class ApplicationLiveInteractionSessionTests
         var stage = await session.MoveStageAsync("relative", 2.5E-4, -3E-4);
         var camera = await session.MoveCameraAsync("absolute", -4E-6, 8E-6);
         var focus = await session.FocusAsync(1E-3, 50E-6, 13);
+        var lens = await session.ChangeLensAsync("no_change");
+        var acb = await session.AutoContrastBrightnessAsync(7.5E-4);
         var integration = await session.IntegrateAsync(8E-4, 8);
 
-        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, transport.Requests.Select(item => item.CorrelationId));
         Assert.Equal(
-            new[] { "live", "stage", "camera", "focus", "integration" },
+            new[] { 1, 2, 3, 4, 5, 6, 7 },
+            transport.Requests.Select(item => item.CorrelationId));
+        Assert.Equal(
+            new[] { "live", "stage", "camera", "focus", "lens", "acb", "integration" },
             transport.Requests.Select(item => item.Action));
 
         var liveRequest = transport.Requests[0];
@@ -51,13 +55,17 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.Equal(1E-3, transport.Requests[3].Parameters["hfw"]);
         Assert.Equal(50E-6, transport.Requests[3].Parameters["range"]);
         Assert.Equal(13, transport.Requests[3].Parameters["steps"]);
-        Assert.Equal(8E-4, transport.Requests[4].Parameters["hfw"]);
-        Assert.Equal(8, transport.Requests[4].Parameters["frame_count"]);
-        Assert.Equal(integration.RequestedImagePath, transport.Requests[4].Parameters["image_path"]);
+        Assert.Equal("no_change", transport.Requests[4].Parameters["lens_mode"]);
+        Assert.Equal(7.5E-4, transport.Requests[5].Parameters["hfw"]);
+        Assert.Equal(8E-4, transport.Requests[6].Parameters["hfw"]);
+        Assert.Equal(8, transport.Requests[6].Parameters["frame_count"]);
+        Assert.Equal(integration.RequestedImagePath, transport.Requests[6].Parameters["image_path"]);
 
         Assert.Equal(2, stage.CorrelationId);
         Assert.Equal(3, camera.CorrelationId);
         Assert.Equal(4, focus.CorrelationId);
+        Assert.Equal("lens1", lens.CurrentLensMode);
+        Assert.Equal(6, acb.CorrelationId);
     }
 
     [Fact]
@@ -174,6 +182,14 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.Throws<ParameterValidationException>(() =>
         {
             _ = session.FocusAsync(1E-3, 50E-6, 3);
+        });
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.ChangeLensAsync("Lens1");
+        });
+        Assert.Throws<ParameterValidationException>(() =>
+        {
+            _ = session.AutoContrastBrightnessAsync(2.4E-3);
         });
         Assert.Empty(transport.Requests);
     }
@@ -390,6 +406,9 @@ public sealed class ApplicationLiveInteractionSessionTests
                     new object?[] { 0.1d, 500d },
                     new object?[] { 1.5d, 600d },
                 };
+                break;
+            case "lens":
+                properties["current_lens_mode"] = "lens1";
                 break;
             case "live":
             case "integration":

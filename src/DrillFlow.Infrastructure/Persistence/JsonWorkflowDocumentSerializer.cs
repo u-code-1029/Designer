@@ -266,6 +266,12 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
                 return DeserializeNode<IntegrationNode>(scalarNode, serializer);
             case "live":
                 return DeserializeNode<LiveNode>(scalarNode, serializer);
+            case "om":
+                return DeserializeNode<OmNode>(scalarNode, serializer);
+            case "lens":
+                return DeserializeNode<LensNode>(scalarNode, serializer);
+            case "acb":
+                return DeserializeNode<AutoContrastBrightnessNode>(scalarNode, serializer);
             case "abort":
                 return DeserializeNode<AbortNode>(scalarNode, serializer);
             case "http":
@@ -357,6 +363,12 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
                 return "integration";
             case LiveNode _:
                 return "live";
+            case OmNode _:
+                return "om";
+            case LensNode _:
+                return "lens";
+            case AutoContrastBrightnessNode _:
+                return "acb";
             case AbortNode _:
                 return "abort";
             case HttpActionNode _:

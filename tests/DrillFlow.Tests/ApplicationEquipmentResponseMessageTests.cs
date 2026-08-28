@@ -103,4 +103,21 @@ public sealed class ApplicationEquipmentResponseMessageTests
         Assert.Equal(1, response.Result);
         Assert.False(response.IsSuccess);
     }
+
+    [Fact]
+    public void LensResponse_ExposesAndEagerlyValidatesCurrentMode()
+    {
+        var response = new EquipmentResponseMessage(
+            2,
+            EquipmentActionNames.Lens,
+            0,
+            new Dictionary<string, object?> { ["current_lens_mode"] = "lens2" });
+
+        Assert.Equal("lens2", response.CurrentLensMode);
+        Assert.Throws<InvalidOperationException>(() => new EquipmentResponseMessage(
+            3,
+            EquipmentActionNames.Lens,
+            0,
+            new Dictionary<string, object?> { ["current_lens_mode"] = "no_change" }));
+    }
 }

@@ -16,6 +16,11 @@ public static class LiveInteractionProtocol
 
     public const string IntegrationAction = EquipmentActionNames.Integration;
 
+    public const string LensAction = EquipmentActionNames.Lens;
+
+    public const string AutoContrastBrightnessAction =
+        EquipmentActionNames.AutoContrastBrightness;
+
     public const string HorizontalFieldWidthParameter = "hfw";
 
     public const string FrameCountParameter = "frame_count";
@@ -36,9 +41,17 @@ public static class LiveInteractionProtocol
 
     public const string FocusStepsParameter = "steps";
 
+    public const string LensModeParameter = "lens_mode";
+
     public const string RelativeMoveMode = "relative";
 
     public const string AbsoluteMoveMode = "absolute";
+
+    public const string Lens1Mode = "lens1";
+
+    public const string Lens2Mode = "lens2";
+
+    public const string NoLensChangeMode = "no_change";
 
     public const int LiveFrameCount = 1;
 
@@ -49,6 +62,11 @@ public static class LiveInteractionProtocol
     public static bool IsMoveMode(string? value) =>
         string.Equals(value, RelativeMoveMode, StringComparison.Ordinal)
         || string.Equals(value, AbsoluteMoveMode, StringComparison.Ordinal);
+
+    public static bool IsLensMode(string? value) =>
+        string.Equals(value, Lens1Mode, StringComparison.Ordinal)
+        || string.Equals(value, Lens2Mode, StringComparison.Ordinal)
+        || string.Equals(value, NoLensChangeMode, StringComparison.Ordinal);
 
     public static bool IsFinite(double value) =>
         !double.IsNaN(value) && !double.IsInfinity(value);
