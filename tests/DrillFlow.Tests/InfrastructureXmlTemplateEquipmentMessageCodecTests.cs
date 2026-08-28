@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -56,6 +57,288 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
         Assert.DoesNotContain("{{{", xml, StringComparison.Ordinal);
         Assert.True(_codec.TryDeserializeRequest(Encoding.UTF8.GetBytes(xml), out var restored));
         Assert.Equal(@"C:\Images\A&B.png", restored!.Parameters["image_path"]);
+    }
+
+    [Fact]
+    public void VendorTextTemplate_ReplacesOnlyExactTokensAndAllowsRepeatedFields()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVendorLikeTemplate);
+        var request = new EquipmentRequestMessage(
+            42,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 1E-6,
+                ["stage_y"] = -2.56E-3
+            });
+
+        var xml = Encoding.UTF8.GetString(codec.SerializeRequest(request));
+
+        Assert.Contains("<plain>correlation_id correlation_id</plain>", xml, StringComparison.Ordinal);
+        Assert.Contains("<!-- correlation_id=42 -->", xml, StringComparison.Ordinal);
+        Assert.Contains("correlation_id=\"42\"", xml, StringComparison.Ordinal);
+        Assert.Contains("{{{{correlation_id}}}}", xml, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{{stage_x}}}", xml, StringComparison.Ordinal);
+        Assert.True(codec.TryDeserializeRequest(Encoding.UTF8.GetBytes(xml), out var restored));
+        Assert.NotNull(restored);
+        Assert.Equal(42, restored!.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, restored.Action);
+        Assert.Equal("relative", restored.Parameters["move_mode"]);
+        Assert.Equal(1E-6, restored.Parameters["stage_x"]);
+        Assert.Equal(-2.56E-3, restored.Parameters["stage_y"]);
+    }
+
+    [Fact]
+    public void RepeatedPlaceholder_MustContainTheSameValueAtEveryParsedPosition()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVendorLikeTemplate);
+        var response = CreateResponse(42, EquipmentActionNames.Stage);
+        var xml = Encoding.UTF8.GetString(codec.SerializeResponse(response));
+        var expectedRequest = new EquipmentRequestMessage(
+            42,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 0d,
+                ["stage_y"] = 0d
+            });
+
+        Assert.Contains("<correlation-copy>42</correlation-copy>", xml, StringComparison.Ordinal);
+        Assert.True(codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml),
+            expectedRequest,
+            out var restored));
+        Assert.Equal(42, restored!.CorrelationId);
+
+        var inconsistent = xml.Replace(
+            "<correlation-copy>42</correlation-copy>",
+            "<correlation-copy>43</correlation-copy>");
+        Assert.False(codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(inconsistent),
+            expectedRequest,
+            out _));
+    }
+
+    [Fact]
+    public void Render_DoesNotInterpretPlaceholderTextInsideAnInsertedValue()
+    {
+        var path = @"C:\Images\{{{hfw}}}&'frame'.png";
+        var request = new EquipmentRequestMessage(
+            52,
+            EquipmentActionNames.Integration,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 1E-3,
+                ["frame_count"] = 8,
+                ["image_path"] = path
+            });
+
+        var xml = Encoding.UTF8.GetString(_codec.SerializeRequest(request));
+
+        Assert.Contains("<hfw>1E-3</hfw>", xml, StringComparison.Ordinal);
+        Assert.Contains("{{{hfw}}}", xml, StringComparison.Ordinal);
+        Assert.Contains("&amp;&apos;frame&apos;", xml, StringComparison.Ordinal);
+        Assert.True(_codec.TryDeserializeRequest(Encoding.UTF8.GetBytes(xml), out var restored));
+        Assert.Equal(path, restored!.Parameters["image_path"]);
+    }
+
+    [Fact]
+    public void GenericDeserializer_RejectsPayloadAcceptedByMultipleActionTemplates()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+        {
+            if (string.Equals(direction, "request", StringComparison.Ordinal)
+                && (string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    || string.Equals(action, EquipmentActionNames.Camera, StringComparison.Ordinal)))
+            {
+                var x = string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    ? "stage_x"
+                    : "camera_x";
+                var y = string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    ? "stage_y"
+                    : "camera_y";
+                return "<move><id>{{{correlation_id}}}</id>"
+                       + "<mode>{{{move_mode}}}</mode>"
+                       + "<x>{{{" + x + "}}}</x>"
+                       + "<y>{{{" + y + "}}}</y></move>";
+            }
+
+            return CreateContractTextTemplate(action, direction);
+        });
+        var request = new EquipmentRequestMessage(
+            51,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 1E-6,
+                ["stage_y"] = 2E-6
+            });
+
+        var payload = codec.SerializeRequest(request);
+
+        Assert.False(codec.TryDeserializeRequest(payload, out _));
+    }
+
+    [Fact]
+    public void ExpectedResponseDeserializer_AlsoRejectsMultipleActionMatches()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+        {
+            if (string.Equals(direction, "response", StringComparison.Ordinal)
+                && (string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    || string.Equals(action, EquipmentActionNames.Camera, StringComparison.Ordinal)))
+            {
+                var x = string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    ? "current_stage_x"
+                    : "current_camera_x";
+                var y = string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    ? "current_stage_y"
+                    : "current_camera_y";
+                return "<move-response><id>{{{correlation_id}}}</id>"
+                       + "<result>{{{result}}}</result>"
+                       + "<x>{{{" + x + "}}}</x>"
+                       + "<y>{{{" + y + "}}}</y></move-response>";
+            }
+
+            return CreateContractTextTemplate(action, direction);
+        });
+        var payload = codec.SerializeResponse(CreateResponse(53, EquipmentActionNames.Stage));
+        var expectedRequest = new EquipmentRequestMessage(
+            53,
+            EquipmentActionNames.Stage,
+            new Dictionary<string, object?>
+            {
+                ["move_mode"] = "relative",
+                ["stage_x"] = 0d,
+                ["stage_y"] = 0d
+            });
+
+        Assert.False(codec.TryDeserializeResponse(payload, out _));
+        Assert.False(codec.TryDeserializeResponse(payload, expectedRequest, out _));
+    }
+
+    [Fact]
+    public void Extraction_TriesLaterLiteralBoundariesUntilOneLogicalMessageMatches()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+        {
+            if (string.Equals(action, EquipmentActionNames.Integration, StringComparison.Ordinal)
+                && string.Equals(direction, "request", StringComparison.Ordinal))
+            {
+                return "<integration-request>"
+                       + "{{{image_path}}}-{{{correlation_id}}}"
+                       + "<hfw>{{{hfw}}}</hfw>"
+                       + "<frames>{{{frame_count}}}</frames>"
+                       + "</integration-request>";
+            }
+
+            return CreateContractTextTemplate(action, direction);
+        });
+        var path = @"C:\frames\" + new string('-', 300) + "sample.png";
+        var request = new EquipmentRequestMessage(
+            54,
+            EquipmentActionNames.Integration,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 1E-3,
+                ["frame_count"] = 8,
+                ["image_path"] = path
+            });
+
+        var payload = codec.SerializeRequest(request);
+
+        Assert.True(codec.TryDeserializeRequest(payload, out var restored));
+        Assert.NotNull(restored);
+        Assert.Equal(54, restored!.CorrelationId);
+        Assert.Equal(path, restored.Parameters["image_path"]);
+    }
+
+    [Fact]
+    public void Extraction_RejectsDelimiterFloodWithoutMaterializingEveryFalseBoundary()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+        {
+            if (string.Equals(action, EquipmentActionNames.Integration, StringComparison.Ordinal)
+                && string.Equals(direction, "request", StringComparison.Ordinal))
+            {
+                return "<integration-request>"
+                       + "{{{image_path}}}-{{{correlation_id}}}"
+                       + "<hfw>{{{hfw}}}</hfw>"
+                       + "<frames>{{{frame_count}}}</frames>"
+                       + "</integration-request>";
+            }
+
+            return CreateContractTextTemplate(action, direction);
+        });
+        var malformed = Encoding.UTF8.GetBytes(
+            "<integration-request>" + @"C:\frames\" + new string('-', 20_000));
+        var elapsed = Stopwatch.StartNew();
+
+        var parsed = codec.TryDeserializeRequest(malformed, out _);
+
+        elapsed.Stop();
+        Assert.False(parsed);
+        Assert.True(
+            elapsed.Elapsed < TimeSpan.FromSeconds(10),
+            $"Delimiter flood parsing took {elapsed.Elapsed}.");
+    }
+
+    [Fact]
+    public void Extraction_RejectsRepeatedLargeFieldDelimiterFloodWithinResourceBudget()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+        {
+            if (string.Equals(action, EquipmentActionNames.Integration, StringComparison.Ordinal)
+                && string.Equals(direction, "request", StringComparison.Ordinal))
+            {
+                return "<integration-request>"
+                       + "{{{image_path}}}X{{{image_path}}}"
+                       + "<id>{{{correlation_id}}}</id>"
+                       + "<hfw>{{{hfw}}}</hfw>"
+                       + "<frames>{{{frame_count}}}</frames>"
+                       + "</integration-request>";
+            }
+
+            return CreateContractTextTemplate(action, direction);
+        });
+        var repeatedPaths = string.Join(
+            "X",
+            Enumerable.Repeat(@"C:\frames\sample.png", 2_000));
+        var malformed = Encoding.UTF8.GetBytes(
+            "<integration-request>"
+            + repeatedPaths
+            + "<id>54</id><hfw>1E-3</hfw><frames>8</frames></integration-request>");
+        var elapsed = Stopwatch.StartNew();
+
+        var parsed = codec.TryDeserializeRequest(malformed, out _);
+
+        elapsed.Stop();
+        Assert.False(parsed);
+        Assert.True(
+            elapsed.Elapsed < TimeSpan.FromSeconds(10),
+            $"Repeated-field delimiter flood parsing took {elapsed.Elapsed}.");
+    }
+
+    [Fact]
+    public void Template_RejectsAnUnsafeNumberOfPlaceholderOccurrences()
+    {
+        var error = Assert.Throws<InvalidDataException>(() =>
+            new XmlTemplateEquipmentMessageCodec((action, direction) =>
+            {
+                if (string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                    && string.Equals(direction, "request", StringComparison.Ordinal))
+                {
+                    return string.Concat(
+                        Enumerable.Repeat("{{{correlation_id}}}-", 257));
+                }
+
+                return CreateContractTextTemplate(action, direction);
+            }));
+
+        Assert.Contains("more than 256 placeholder occurrences", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -205,8 +488,35 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     [Fact]
     public void TemplateCatalog_FailsClosedWhenARequiredPlaceholderIsMissing()
     {
-        Assert.Throws<InvalidDataException>(() => new XmlTemplateEquipmentMessageCodec(
-            (_, _) => "<message>{{{type}}}</message>"));
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            new XmlTemplateEquipmentMessageCodec(
+                (_, _) => "<message>{{{type}}}</message>"));
+
+        Assert.Contains("missing:", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("correlation_id", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("stage_x", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("exact", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TemplateCatalog_ReportsUnexpectedAndInvalidExactPlaceholders()
+    {
+        var unexpected = Assert.Throws<InvalidDataException>(() =>
+            new XmlTemplateEquipmentMessageCodec((action, direction) =>
+            {
+                var template = CreateContractTextTemplate(action, direction);
+                return string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+                       && string.Equals(direction, "request", StringComparison.Ordinal)
+                    ? template + "<extra>{{{unknown_field}}}</extra>"
+                    : template;
+            }));
+        Assert.Contains("unexpected: unknown_field", unexpected.Message, StringComparison.Ordinal);
+
+        var invalid = Assert.Throws<InvalidDataException>(() =>
+            new XmlTemplateEquipmentMessageCodec(
+                (_, _) => "<message>{{{ correlation_id }}}</message>"));
+        Assert.Contains("invalid placeholder", invalid.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("{{{correlation_id}}}", invalid.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -290,6 +600,84 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
             }),
             new EquipmentRequestMessage(6, EquipmentActionNames.Abort)
         };
+    }
+
+    private static string LoadVendorLikeTemplate(string action, string direction)
+    {
+        if (string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+            && string.Equals(direction, "request", StringComparison.Ordinal))
+        {
+            // type/action are fixed vendor literals. Plain field names and four-brace text are
+            // ordinary template bytes; only exact triple-brace tokens are replaceable slots.
+            return "<stage-request type=\"request\" action=\"stage\">"
+                   + "<plain>correlation_id correlation_id</plain>"
+                   + "<near-miss>{{{{correlation_id}}}}</near-miss>"
+                   + "<!-- correlation_id={{{correlation_id}}} -->"
+                   + "<payload correlation_id=\"{{{correlation_id}}}\">"
+                   + "<move_mode>{{{move_mode}}}</move_mode>"
+                   + "<stage_x>{{{stage_x}}}</stage_x>"
+                   + "<stage_y>{{{stage_y}}}</stage_y>"
+                   + "</payload></stage-request>";
+        }
+
+        if (string.Equals(action, EquipmentActionNames.Stage, StringComparison.Ordinal)
+            && string.Equals(direction, "response", StringComparison.Ordinal))
+        {
+            return "<stage-response type=\"response\" action=\"stage\">"
+                   + "<correlation>{{{correlation_id}}}</correlation>"
+                   + "<result>{{{result}}}</result>"
+                   + "<x>{{{current_stage_x}}}</x>"
+                   + "<y>{{{current_stage_y}}}</y>"
+                   + "<correlation-copy>{{{correlation_id}}}</correlation-copy>"
+                   + "</stage-response>";
+        }
+
+        return CreateContractTextTemplate(action, direction);
+    }
+
+    private static string CreateContractTextTemplate(string action, string direction)
+    {
+        var fields = new List<string> { "type", "correlation_id", "action" };
+        var isRequest = string.Equals(direction, "request", StringComparison.Ordinal);
+        if (!isRequest)
+        {
+            fields.Add("result");
+        }
+
+        switch (action)
+        {
+            case EquipmentActionNames.Stage:
+                fields.AddRange(isRequest
+                    ? new[] { "move_mode", "stage_x", "stage_y" }
+                    : new[] { "current_stage_x", "current_stage_y" });
+                break;
+            case EquipmentActionNames.Camera:
+                fields.AddRange(isRequest
+                    ? new[] { "move_mode", "camera_x", "camera_y" }
+                    : new[] { "current_camera_x", "current_camera_y" });
+                break;
+            case EquipmentActionNames.Focus:
+                fields.AddRange(isRequest
+                    ? new[] { "hfw", "range", "steps" }
+                    : new[] { "z_to_sharpness_2d" });
+                break;
+            case EquipmentActionNames.Integration:
+            case EquipmentActionNames.Live:
+                fields.AddRange(new[] { "hfw", "frame_count", "image_path" });
+                break;
+        }
+
+        var builder = new StringBuilder();
+        builder.Append('<').Append(action).Append('-').Append(direction).Append('>');
+        foreach (var field in fields)
+        {
+            builder.Append('<').Append(field).Append('>')
+                .Append("{{{").Append(field).Append("}}}")
+                .Append("</").Append(field).Append('>');
+        }
+
+        return builder.Append("</").Append(action).Append('-').Append(direction).Append('>')
+            .ToString();
     }
 
     private static EquipmentResponseMessage CreateResponse(int correlationId, string action)

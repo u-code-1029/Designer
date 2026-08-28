@@ -92,19 +92,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             return false;
         }
 
-        foreach (var action in EquipmentActionNames.All)
-        {
-            if (!_templates[action].Request.TryExtract(text, out var extracted)
-                || !TryCreateRequest(action, extracted, out request))
-            {
-                continue;
-            }
-
-            return true;
-        }
-
-        request = null;
-        return false;
+        return TryCreateUniqueRequest(text, out request);
     }
 
     public bool TryDeserializeResponse(byte[] payload, out EquipmentResponseMessage? response)
@@ -115,19 +103,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             return false;
         }
 
-        foreach (var action in EquipmentActionNames.All)
-        {
-            if (!_templates[action].Response.TryExtract(text, out var extracted)
-                || !TryCreateResponse(action, extracted, out response))
-            {
-                continue;
-            }
-
-            return true;
-        }
-
-        response = null;
-        return false;
+        return TryCreateUniqueResponse(text, out response);
     }
 
     public bool TryDeserializeResponse(
@@ -136,15 +112,85 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         out EquipmentResponseMessage? response)
     {
         response = null;
-        if (expectedRequest is null || !TryDecode(payload, out var text))
+        if (expectedRequest is null
+            || !TryDecode(payload, out var text)
+            || !TryCreateUniqueResponse(text, out response))
         {
             return false;
         }
 
-        return _templates[expectedRequest.Action].Response.TryExtract(text, out var extracted)
-               && TryCreateResponse(expectedRequest.Action, extracted, out response)
-               && response!.CorrelationId == expectedRequest.CorrelationId
+        return response!.CorrelationId == expectedRequest.CorrelationId
                && string.Equals(response.Action, expectedRequest.Action, StringComparison.Ordinal);
+    }
+
+    private bool TryCreateUniqueRequest(string text, out EquipmentRequestMessage? request)
+    {
+        request = null;
+        foreach (var action in EquipmentActionNames.All)
+        {
+            var extraction = _templates[action].Request.ExtractCandidates(
+                text,
+                fields => TryCreateRequest(action, fields, out _));
+            if (extraction.WasTruncated || extraction.IsAmbiguous)
+            {
+                request = null;
+                return false;
+            }
+
+            foreach (var extracted in extraction.Candidates)
+            {
+                if (!TryCreateRequest(action, extracted, out var candidate))
+                {
+                    continue;
+                }
+
+                if (request is not null)
+                {
+                    // Templates may omit the logical action placeholder when fixed vendor text
+                    // identifies the command. Never guess between two valid interpretations.
+                    request = null;
+                    return false;
+                }
+
+                request = candidate;
+            }
+        }
+
+        return request is not null;
+    }
+
+    private bool TryCreateUniqueResponse(string text, out EquipmentResponseMessage? response)
+    {
+        response = null;
+        foreach (var action in EquipmentActionNames.All)
+        {
+            var extraction = _templates[action].Response.ExtractCandidates(
+                text,
+                fields => TryCreateResponse(action, fields, out _));
+            if (extraction.WasTruncated || extraction.IsAmbiguous)
+            {
+                response = null;
+                return false;
+            }
+
+            foreach (var extracted in extraction.Candidates)
+            {
+                if (!TryCreateResponse(action, extracted, out var candidate))
+                {
+                    continue;
+                }
+
+                if (response is not null)
+                {
+                    response = null;
+                    return false;
+                }
+
+                response = candidate;
+            }
+        }
+
+        return response is not null;
     }
 
     private static Dictionary<string, string> CreateRequestFields(EquipmentRequestMessage request)
@@ -720,10 +766,13 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         out int correlationId)
     {
         correlationId = 0;
-        return string.Equals(fields["type"], expectedType, StringComparison.Ordinal)
-               && string.Equals(fields["action"], expectedAction, StringComparison.Ordinal)
+        return (!fields.TryGetValue("type", out var type)
+                || string.Equals(type, expectedType, StringComparison.Ordinal))
+               && (!fields.TryGetValue("action", out var action)
+                   || string.Equals(action, expectedAction, StringComparison.Ordinal))
+               && fields.TryGetValue("correlation_id", out var correlationText)
                && int.TryParse(
-                   fields["correlation_id"],
+                   correlationText,
                    NumberStyles.None,
                    CultureInfo.InvariantCulture,
                    out correlationId)
@@ -1079,19 +1128,43 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
     private sealed class TemplateDefinition
     {
-        private static readonly Regex PlaceholderPattern = new Regex(
-            "\\{\\{\\{([a-z][a-z0-9_]*)\\}\\}\\}",
-            RegexOptions.CultureInvariant);
+        private const int MaximumValidExtractionCandidates = 2;
+        private const int MaximumExtractionSearchSteps = 65536;
+        private const int MaximumPlaceholderOccurrences = 256;
+        private const long MaximumComparedCharacters =
+            EquipmentMessageLimits.MaximumWirePayloadBytes * 4L;
+        private const long MaximumMaterializedCharacters =
+            EquipmentMessageLimits.MaximumWirePayloadBytes * 4L;
 
+        private static readonly Regex PlaceholderPattern = new Regex(
+            "(?<!\\{)\\{\\{\\{([^{}]*)\\}\\}\\}(?!\\})",
+            RegexOptions.CultureInvariant);
+        private static readonly Regex PlaceholderNamePattern = new Regex(
+            "^[a-z][a-z0-9_]*$",
+            RegexOptions.CultureInvariant);
+        private static readonly HashSet<string> OptionalEnvelopePlaceholders =
+            new HashSet<string>(new[] { "type", "action" }, StringComparer.Ordinal);
+
+        private readonly string _action;
+        private readonly string _direction;
         private readonly IReadOnlyList<string> _placeholders;
         private readonly IReadOnlyList<string> _literals;
+        private readonly IReadOnlyList<int> _materializationOrder;
 
         private TemplateDefinition(
+            string action,
+            string direction,
             IReadOnlyList<string> placeholders,
             IReadOnlyList<string> literals)
         {
+            _action = action;
+            _direction = direction;
             _placeholders = placeholders;
             _literals = literals;
+            _materializationOrder = Enumerable.Range(0, placeholders.Count)
+                .OrderBy(index => GetMaterializationPriority(placeholders[index]))
+                .ThenBy(index => index)
+                .ToArray();
         }
 
         public static TemplateDefinition Parse(
@@ -1126,18 +1199,56 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             var cursor = 0;
             foreach (Match match in matches)
             {
+                if (placeholders.Count >= MaximumPlaceholderOccurrences)
+                {
+                    throw new InvalidDataException(
+                        $"The {action} {direction} template contains more than "
+                        + $"{MaximumPlaceholderOccurrences} placeholder occurrences.");
+                }
+
+                var placeholder = match.Groups[1].Value;
+                if (!PlaceholderNamePattern.IsMatch(placeholder))
+                {
+                    throw new InvalidDataException(
+                        $"The {action} {direction} template contains invalid placeholder "
+                        + $"'{match.Value}'. Use an exact token such as "
+                        + "'{{{correlation_id}}}'.");
+                }
+
                 literals.Add(template.Substring(cursor, match.Index - cursor));
-                placeholders.Add(match.Groups[1].Value);
+                placeholders.Add(placeholder);
                 cursor = match.Index + match.Length;
             }
 
             literals.Add(template.Substring(cursor));
             var actualFields = new HashSet<string>(placeholders, StringComparer.Ordinal);
             var expected = new HashSet<string>(expectedFields, StringComparer.Ordinal);
-            if (placeholders.Count != actualFields.Count || !actualFields.SetEquals(expected))
+            var missing = expected
+                .Where(field => !OptionalEnvelopePlaceholders.Contains(field)
+                                && !actualFields.Contains(field))
+                .OrderBy(field => field, StringComparer.Ordinal)
+                .ToArray();
+            var unexpected = actualFields
+                .Where(field => !expected.Contains(field))
+                .OrderBy(field => field, StringComparer.Ordinal)
+                .ToArray();
+            if (missing.Length > 0 || unexpected.Length > 0)
             {
+                var details = new List<string>();
+                if (missing.Length > 0)
+                {
+                    details.Add("missing: " + string.Join(", ", missing));
+                }
+
+                if (unexpected.Length > 0)
+                {
+                    details.Add("unexpected: " + string.Join(", ", unexpected));
+                }
+
                 throw new InvalidDataException(
-                    $"The {action} {direction} template placeholders do not match its logical contract.");
+                    $"The {action} {direction} template placeholders do not match its logical "
+                    + $"contract ({string.Join("; ", details)}). Only exact "
+                    + "'{{{field_name}}}' tokens are interpreted as placeholders.");
             }
 
             for (var index = 1; index < literals.Count - 1; index++)
@@ -1150,6 +1261,8 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             }
 
             return new TemplateDefinition(
+                action,
+                direction,
                 placeholders.AsReadOnly(),
                 literals.AsReadOnly());
         }
@@ -1173,41 +1286,492 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             return builder.ToString();
         }
 
-        public bool TryExtract(
+        public ExtractionResult ExtractCandidates(
             string text,
-            out IReadOnlyDictionary<string, string> values)
+            Func<IReadOnlyDictionary<string, string>, bool> candidateValidator)
         {
-            values = new Dictionary<string, string>();
-            if (!text.StartsWith(_literals[0], StringComparison.Ordinal))
+            if (candidateValidator is null)
             {
-                return false;
+                throw new ArgumentNullException(nameof(candidateValidator));
             }
 
-            var cursor = _literals[0].Length;
-            var extracted = new Dictionary<string, string>(StringComparer.Ordinal);
-            for (var index = 0; index < _placeholders.Count; index++)
+            var candidates = new List<IReadOnlyDictionary<string, string>>();
+            if (!text.StartsWith(_literals[0], StringComparison.Ordinal))
             {
-                var nextLiteral = _literals[index + 1];
-                var end = nextLiteral.Length == 0
-                    ? text.Length
-                    : text.IndexOf(nextLiteral, cursor, StringComparison.Ordinal);
-                if (end < cursor
-                    || !TryUnescapeXml(text.Substring(cursor, end - cursor), out var value))
+                return new ExtractionResult(candidates.AsReadOnly(), false, false);
+            }
+
+            var valueStarts = new int[_placeholders.Count];
+            var valueEnds = new int[_placeholders.Count];
+            var searchSteps = 0;
+            long comparedCharacters = 0;
+            long materializedCharacters = 0;
+            var wasTruncated = false;
+            var isAmbiguous = false;
+            ExploreCandidates(
+                text,
+                placeholderIndex: 0,
+                cursor: _literals[0].Length,
+                valueStarts,
+                valueEnds,
+                candidateValidator,
+                candidates,
+                ref searchSteps,
+                ref comparedCharacters,
+                ref materializedCharacters,
+                ref wasTruncated,
+                ref isAmbiguous);
+            return new ExtractionResult(candidates.AsReadOnly(), wasTruncated, isAmbiguous);
+        }
+
+        private void ExploreCandidates(
+            string text,
+            int placeholderIndex,
+            int cursor,
+            int[] valueStarts,
+            int[] valueEnds,
+            Func<IReadOnlyDictionary<string, string>, bool> candidateValidator,
+            ICollection<IReadOnlyDictionary<string, string>> candidates,
+            ref int searchSteps,
+            ref long comparedCharacters,
+            ref long materializedCharacters,
+            ref bool wasTruncated,
+            ref bool isAmbiguous)
+        {
+            if (wasTruncated || isAmbiguous)
+            {
+                return;
+            }
+
+            if (placeholderIndex == _placeholders.Count)
+            {
+                if (cursor != text.Length)
+                {
+                    return;
+                }
+
+                long candidateCharacters = 0;
+                for (var index = 0; index < valueStarts.Length; index++)
+                {
+                    candidateCharacters += valueEnds[index] - valueStarts[index];
+                }
+
+                if (candidateCharacters > MaximumMaterializedCharacters - materializedCharacters)
+                {
+                    wasTruncated = true;
+                    return;
+                }
+
+                materializedCharacters += candidateCharacters;
+                if (!TryMaterializeCandidate(text, valueStarts, valueEnds, out var candidate)
+                    || !candidateValidator(candidate))
+                {
+                    return;
+                }
+
+                if (candidates.Count >= MaximumValidExtractionCandidates - 1)
+                {
+                    isAmbiguous = true;
+                    return;
+                }
+
+                candidates.Add(candidate);
+                return;
+            }
+
+            var nextLiteral = _literals[placeholderIndex + 1];
+            if (placeholderIndex == _placeholders.Count - 1)
+            {
+                var end = text.Length - nextLiteral.Length;
+                if (end < cursor || !text.EndsWith(nextLiteral, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                ExploreBoundary(
+                    text,
+                    placeholderIndex,
+                    cursor,
+                    end,
+                    nextLiteral,
+                    valueStarts,
+                    valueEnds,
+                    candidateValidator,
+                    candidates,
+                    ref searchSteps,
+                    ref comparedCharacters,
+                    ref materializedCharacters,
+                    ref wasTruncated,
+                    ref isAmbiguous);
+                return;
+            }
+
+            var searchCursor = cursor;
+            while (!wasTruncated && !isAmbiguous && searchCursor <= text.Length)
+            {
+                var end = text.IndexOf(nextLiteral, searchCursor, StringComparison.Ordinal);
+                if (end < cursor)
+                {
+                    return;
+                }
+
+                ExploreBoundary(
+                    text,
+                    placeholderIndex,
+                    cursor,
+                    end,
+                    nextLiteral,
+                    valueStarts,
+                    valueEnds,
+                    candidateValidator,
+                    candidates,
+                    ref searchSteps,
+                    ref comparedCharacters,
+                    ref materializedCharacters,
+                    ref wasTruncated,
+                    ref isAmbiguous);
+                searchCursor = end + 1;
+            }
+        }
+
+        private void ExploreBoundary(
+            string text,
+            int placeholderIndex,
+            int cursor,
+            int end,
+            string nextLiteral,
+            int[] valueStarts,
+            int[] valueEnds,
+            Func<IReadOnlyDictionary<string, string>, bool> candidateValidator,
+            ICollection<IReadOnlyDictionary<string, string>> candidates,
+            ref int searchSteps,
+            ref long comparedCharacters,
+            ref long materializedCharacters,
+            ref bool wasTruncated,
+            ref bool isAmbiguous)
+        {
+            searchSteps++;
+            if (searchSteps > MaximumExtractionSearchSteps)
+            {
+                wasTruncated = true;
+                return;
+            }
+
+            if (!IsPlausibleRawValue(_placeholders[placeholderIndex], text, cursor, end - cursor))
+            {
+                return;
+            }
+
+            for (var previousIndex = placeholderIndex - 1; previousIndex >= 0; previousIndex--)
+            {
+                if (!string.Equals(
+                        _placeholders[previousIndex],
+                        _placeholders[placeholderIndex],
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var comparisonCharacters = (long)(end - cursor)
+                                           + valueEnds[previousIndex]
+                                           - valueStarts[previousIndex];
+                if (comparisonCharacters > MaximumComparedCharacters - comparedCharacters)
+                {
+                    wasTruncated = true;
+                    return;
+                }
+
+                comparedCharacters += comparisonCharacters;
+                if (!XmlSegmentsEqual(
+                        text,
+                        valueStarts[previousIndex],
+                        valueEnds[previousIndex] - valueStarts[previousIndex],
+                        cursor,
+                        end - cursor))
+                {
+                    return;
+                }
+
+                break;
+            }
+
+            valueStarts[placeholderIndex] = cursor;
+            valueEnds[placeholderIndex] = end;
+
+            ExploreCandidates(
+                text,
+                placeholderIndex + 1,
+                end + nextLiteral.Length,
+                valueStarts,
+                valueEnds,
+                candidateValidator,
+                candidates,
+                ref searchSteps,
+                ref comparedCharacters,
+                ref materializedCharacters,
+                ref wasTruncated,
+                ref isAmbiguous);
+        }
+
+        private bool TryMaterializeCandidate(
+            string text,
+            IReadOnlyList<int> valueStarts,
+            IReadOnlyList<int> valueEnds,
+            out IReadOnlyDictionary<string, string> candidate)
+        {
+            var extracted = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var placeholderIndex in _materializationOrder)
+            {
+                var placeholder = _placeholders[placeholderIndex];
+                if (extracted.ContainsKey(placeholder))
+                {
+                    // Repeated values were compared as decoded streams while their ranges were
+                    // explored, so only the first occurrence needs to allocate a string.
+                    continue;
+                }
+
+                if (!TryUnescapeXml(
+                        text,
+                        valueStarts[placeholderIndex],
+                        valueEnds[placeholderIndex] - valueStarts[placeholderIndex],
+                        out var value))
+                {
+                    candidate = new ReadOnlyDictionary<string, string>(extracted);
+                    return false;
+                }
+
+                extracted.Add(placeholder, value);
+            }
+
+            candidate = new ReadOnlyDictionary<string, string>(extracted);
+            return true;
+        }
+
+        private bool IsPlausibleRawValue(string placeholder, string text, int start, int length)
+        {
+            switch (placeholder)
+            {
+                case "type":
+                    return SegmentEquals(text, start, length, _direction);
+                case "action":
+                    return SegmentEquals(text, start, length, _action);
+                case "correlation_id":
+                    return TryParseIntegerSegment(text, start, length, 1, int.MaxValue, out _);
+                case "result":
+                    return length == 1 && (text[start] == '0' || text[start] == '1');
+                case "move_mode":
+                    return SegmentEquals(text, start, length, "relative")
+                           || SegmentEquals(text, start, length, "absolute");
+                case "steps":
+                    return TryParseIntegerSegment(text, start, length, 4, int.MaxValue, out _);
+                case "frame_count":
+                    if (!TryParseIntegerSegment(
+                            text,
+                            start,
+                            length,
+                            1,
+                            MaximumIntegrationFrameCount,
+                            out var frameCount))
+                    {
+                        return false;
+                    }
+
+                    return string.Equals(_action, EquipmentActionNames.Live, StringComparison.Ordinal)
+                        ? frameCount == 1
+                        : IsPowerOfTwo(frameCount);
+                case "hfw":
+                case "range":
+                case "stage_x":
+                case "stage_y":
+                case "camera_x":
+                case "camera_y":
+                case "current_stage_x":
+                case "current_stage_y":
+                case "current_camera_x":
+                case "current_camera_y":
+                    return IsPotentialFiniteNumberSegment(text, start, length);
+                case "image_path":
+                    return IsPlausibleAbsoluteImagePath(text, start, length);
+                default:
+                    return true;
+            }
+        }
+
+        private static bool TryParseIntegerSegment(
+            string text,
+            int start,
+            int length,
+            int minimum,
+            int maximum,
+            out int value)
+        {
+            value = 0;
+            var cursor = start;
+            var end = start + length;
+            SkipWhitespace(text, ref cursor, end);
+            var negative = false;
+            if (cursor < end && (text[cursor] == '+' || text[cursor] == '-'))
+            {
+                negative = text[cursor] == '-';
+                cursor++;
+            }
+
+            var digitStart = cursor;
+            long magnitude = 0;
+            while (cursor < end && text[cursor] >= '0' && text[cursor] <= '9')
+            {
+                magnitude = (magnitude * 10) + (text[cursor] - '0');
+                if (magnitude > (long)int.MaxValue + 1L)
                 {
                     return false;
                 }
 
-                extracted.Add(_placeholders[index], value);
-                cursor = end + nextLiteral.Length;
+                cursor++;
             }
 
-            if (cursor != text.Length)
+            if (cursor == digitStart)
             {
                 return false;
             }
 
-            values = new ReadOnlyDictionary<string, string>(extracted);
-            return true;
+            SkipWhitespace(text, ref cursor, end);
+            if (cursor != end)
+            {
+                return false;
+            }
+
+            var signed = negative ? -magnitude : magnitude;
+            if (signed < int.MinValue || signed > int.MaxValue)
+            {
+                return false;
+            }
+
+            value = (int)signed;
+            return value >= minimum && value <= maximum;
+        }
+
+        private static bool IsPotentialFiniteNumberSegment(
+            string text,
+            int start,
+            int length)
+        {
+            var cursor = start;
+            var end = start + length;
+            SkipWhitespace(text, ref cursor, end);
+            if (cursor < end && (text[cursor] == '+' || text[cursor] == '-'))
+            {
+                cursor++;
+            }
+
+            var digitCount = ConsumeAsciiDigits(text, ref cursor, end);
+            if (cursor < end && text[cursor] == '.')
+            {
+                cursor++;
+                digitCount += ConsumeAsciiDigits(text, ref cursor, end);
+            }
+
+            if (digitCount == 0)
+            {
+                return false;
+            }
+
+            if (cursor < end && (text[cursor] == 'e' || text[cursor] == 'E'))
+            {
+                cursor++;
+                if (cursor < end && (text[cursor] == '+' || text[cursor] == '-'))
+                {
+                    cursor++;
+                }
+
+                if (ConsumeAsciiDigits(text, ref cursor, end) == 0)
+                {
+                    return false;
+                }
+            }
+
+            SkipWhitespace(text, ref cursor, end);
+            return cursor == end;
+        }
+
+        private static int ConsumeAsciiDigits(string text, ref int cursor, int end)
+        {
+            var start = cursor;
+            while (cursor < end && text[cursor] >= '0' && text[cursor] <= '9')
+            {
+                cursor++;
+            }
+
+            return cursor - start;
+        }
+
+        private static void SkipWhitespace(string text, ref int cursor, int end)
+        {
+            while (cursor < end && char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+            }
+        }
+
+        private static bool IsPlausibleAbsoluteImagePath(
+            string text,
+            int start,
+            int length)
+        {
+            if (length <= 3 || text[start + length - 1] == '\\')
+            {
+                return false;
+            }
+
+            var driveRooted = IsAsciiLetter(text[start])
+                              && text[start + 1] == ':'
+                              && text[start + 2] == '\\';
+            var uncRooted = length > 5
+                            && text[start] == '\\'
+                            && text[start + 1] == '\\'
+                            && text[start + 2] != '\\';
+            return driveRooted || uncRooted;
+        }
+
+        private static bool IsAsciiLetter(char value)
+        {
+            return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+        }
+
+        private static bool SegmentEquals(
+            string text,
+            int start,
+            int length,
+            string expected)
+        {
+            return length == expected.Length
+                   && string.CompareOrdinal(text, start, expected, 0, length) == 0;
+        }
+
+        private static int GetMaterializationPriority(string placeholder)
+        {
+            return string.Equals(placeholder, "image_path", StringComparison.Ordinal)
+                   || string.Equals(placeholder, "z_to_sharpness_2d", StringComparison.Ordinal)
+                ? 1
+                : 0;
+        }
+
+        public sealed class ExtractionResult
+        {
+            public ExtractionResult(
+                IReadOnlyList<IReadOnlyDictionary<string, string>> candidates,
+                bool wasTruncated,
+                bool isAmbiguous)
+            {
+                Candidates = candidates;
+                WasTruncated = wasTruncated;
+                IsAmbiguous = isAmbiguous;
+            }
+
+            public IReadOnlyList<IReadOnlyDictionary<string, string>> Candidates { get; }
+
+            public bool WasTruncated { get; }
+
+            public bool IsAmbiguous { get; }
         }
 
         private static string EscapeXml(string value)
@@ -1220,18 +1784,82 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 .Replace("'", "&apos;");
         }
 
-        private static bool TryUnescapeXml(string value, out string unescaped)
+        private static bool XmlSegmentsEqual(
+            string text,
+            int firstStart,
+            int firstLength,
+            int secondStart,
+            int secondLength)
         {
-            var builder = new StringBuilder(value.Length);
-            for (var index = 0; index < value.Length; index++)
+            var firstCursor = firstStart;
+            var firstEnd = firstStart + firstLength;
+            var secondCursor = secondStart;
+            var secondEnd = secondStart + secondLength;
+            while (firstCursor < firstEnd && secondCursor < secondEnd)
             {
-                if (value[index] != '&')
+                if (!TryReadDecodedCharacter(text, ref firstCursor, firstEnd, out var first)
+                    || !TryReadDecodedCharacter(text, ref secondCursor, secondEnd, out var second)
+                    || first != second)
                 {
-                    builder.Append(value[index]);
+                    return false;
+                }
+            }
+
+            return firstCursor == firstEnd && secondCursor == secondEnd;
+        }
+
+        private static bool TryReadDecodedCharacter(
+            string text,
+            ref int cursor,
+            int end,
+            out char decoded)
+        {
+            if (cursor >= end)
+            {
+                decoded = default;
+                return false;
+            }
+
+            if (text[cursor] != '&')
+            {
+                decoded = text[cursor];
+                cursor++;
+                return true;
+            }
+
+            if (!TryReadEntity(text, cursor, end, out var entityLength, out decoded))
+            {
+                return false;
+            }
+
+            cursor += entityLength;
+            return true;
+        }
+
+        private static bool TryUnescapeXml(
+            string text,
+            int start,
+            int length,
+            out string unescaped)
+        {
+            var entityStart = text.IndexOf('&', start, length);
+            if (entityStart < 0)
+            {
+                unescaped = text.Substring(start, length);
+                return true;
+            }
+
+            var end = start + length;
+            var builder = new StringBuilder(length);
+            for (var index = start; index < end; index++)
+            {
+                if (text[index] != '&')
+                {
+                    builder.Append(text[index]);
                     continue;
                 }
 
-                if (TryReadEntity(value, index, out var entityLength, out var decoded))
+                if (TryReadEntity(text, index, end, out var entityLength, out var decoded))
                 {
                     builder.Append(decoded);
                     index += entityLength - 1;
@@ -1249,6 +1877,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         private static bool TryReadEntity(
             string text,
             int index,
+            int end,
             out int entityLength,
             out char decoded)
         {
@@ -1262,11 +1891,8 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             };
             foreach (var entity in entities)
             {
-                if (index + entity.Key.Length <= text.Length
-                    && string.Equals(
-                        text.Substring(index, entity.Key.Length),
-                        entity.Key,
-                        StringComparison.Ordinal))
+                if (index + entity.Key.Length <= end
+                    && SegmentEquals(text, index, entity.Key.Length, entity.Key))
                 {
                     entityLength = entity.Key.Length;
                     decoded = entity.Value;

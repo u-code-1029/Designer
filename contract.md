@@ -6,7 +6,7 @@
 
 이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 장비에 게시하고 장비에서 읽는 파일은 **UTF-8(BOM 없음) XML**이다.
 
-XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿에서 `{{{field_name}}}` 자리만 XML-safe 값으로 치환하거나 추출한다. 실제 장비 XML이 확정되면 [템플릿 폴더](#8-xml-템플릿과-변경-방법)의 12개 Dummy 파일을 실제 양식으로 바꾸고 placeholder 이름과 의미를 유지한다.
+XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿을 일반 텍스트로 취급하며 정확히 `{{{field_name}}}`인 자리만 XML-safe 값으로 치환하거나 추출한다. 태그·속성·주석·본문에 있는 일반 `field_name` 문자열과 `{{{{field_name}}}}` 같은 근접 표기는 placeholder가 아니다. 실제 장비 XML이 확정되면 [템플릿 폴더](#8-xml-템플릿과-변경-방법)의 12개 Dummy 파일을 실제 양식으로 바꾸고 placeholder 이름과 의미를 유지한다.
 
 ## 1. 공통 처리 순서
 
@@ -307,12 +307,14 @@ src/DrillFlow.Infrastructure/Communication/Templates/
 
 실제 양식으로 교체할 때:
 
-1. Action/방향에 맞는 파일 하나만 바꾼다.
-2. 해당 계약의 placeholder를 정확히 한 번씩 남긴다. 임의 placeholder를 추가하거나 필수 placeholder를 제거하지 않는다.
-3. 고정 태그·namespace·속성·공백은 실제 장비 정답지와 같게 작성하고, UTF-8 BOM 없이 4 MiB 미만으로 저장한다.
-4. 문자 필드는 codec이 XML escaping하고 숫자는 invariant scientific notation으로 치환한다.
-5. `InfrastructureXmlTemplateEquipmentMessageCodecTests`에 실제 fixture round-trip과 잘못된 응답 rejection 사례를 추가한다.
-6. XML에서 한 논리 필드를 여러 토큰으로 표현해야 한다면 `XmlTemplateEquipmentMessageCodec`의 field adapter와 이 문서를 함께 바꾼다.
+1. Action/방향에 맞는 소스 파일 하나를 바꾸고 앱을 다시 빌드한다. 템플릿은 assembly Embedded Resource이므로 빌드 산출물 옆의 XML을 수정해도 적용되지 않는다.
+2. `correlation_id`와 Action별 동적 request/response 필드는 정확한 `{{{field_name}}}` 토큰으로 적어도 한 번 남긴다. response의 `result`도 필수다. `type`과 `action`은 토큰으로 둘 수도 있고 해당 Action/방향 템플릿의 고정 문자열로 표현할 수도 있다.
+3. 같은 논리 값을 XML 여러 위치에 넣어야 하면 동일 placeholder를 반복해도 된다. 렌더링 시 모두 같은 값으로 치환하며, response/request 파싱 시 반복 위치의 XML-unescape 결과가 하나라도 다르면 전체 payload를 거부한다. 값 경계를 알 수 없는 인접 placeholder는 허용하지 않으며, 한 템플릿은 재귀 깊이와 처리량을 제한하기 위해 placeholder 출현을 최대 256개까지 허용한다.
+4. 임의 placeholder나 공백·대문자가 섞인 잘못된 토큰을 추가하지 않는다. 일반 `correlation_id` 같은 텍스트는 개수와 관계없이 그대로 유지된다.
+5. 고정 태그·namespace·속성·주석·공백은 실제 장비 정답지와 같게 작성하고, UTF-8 BOM 없이 4 MiB 미만으로 저장한다. 파서는 XML DOM을 해석하지 않고 placeholder 사이의 고정 텍스트가 정확히 같은지 비교한다. 고정 구분 문자열이 값 안에도 나타나면 뒤쪽 경계까지 탐색하되, 논리 계약까지 통과하는 해석이 정확히 하나일 때만 수락하고 탐색·비교·문자열 생성 예산을 넘는 비정상 payload는 거부한다.
+6. 문자 필드는 codec이 XML escaping하고 숫자는 invariant scientific notation으로 치환한다. 삽입한 값 안의 `{{{...}}}` 문자열은 다시 치환하지 않는다.
+7. `InfrastructureXmlTemplateEquipmentMessageCodecTests`에 실제 fixture round-trip, 반복값 일치 및 잘못된 응답 rejection 사례를 추가한다.
+8. 하나의 논리 값을 서로 다른 여러 field로 분해·결합해야 한다면 `XmlTemplateEquipmentMessageCodec`의 field adapter와 이 문서를 함께 바꾼다.
 
 ## 9. 코드 변경 지도
 

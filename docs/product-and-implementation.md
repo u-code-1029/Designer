@@ -172,7 +172,7 @@ Breakpoint, Stop, 활성화 여부와 실행 상태는 runner 이벤트로 카�
 
 ## 6. 파일 통신과 Response 테스트
 
-request와 response는 같은 통신 폴더의 서로 다른 설정 파일명을 사용하며 기본값은 `request.xml`, `response.xml`이다. 워크플로·Dialog·runner는 JSON과 같은 논리 message 객체를 다루지만 중간 JSON 파일은 만들지 않는다. 실제 wire payload는 UTF-8(BOM 없음) XML이며, Stage/Camera/Focus/Integration/Live/Abort 각각의 request/response 템플릿 12개에서 `{{{field_name}}}` placeholder를 치환하거나 추출한다. `type: "response"`, 현재 request와 동일한 `correlation_id`와 `action`, `0|1`인 `result`, Action별 필수 필드가 모두 유효한 response만 받아들인다.
+request와 response는 같은 통신 폴더의 서로 다른 설정 파일명을 사용하며 기본값은 `request.xml`, `response.xml`이다. 워크플로·Dialog·runner는 JSON과 같은 논리 message 객체를 다루지만 중간 JSON 파일은 만들지 않는다. 실제 wire payload는 UTF-8(BOM 없음) XML이며, Stage/Camera/Focus/Integration/Live/Abort 각각의 request/response 템플릿 12개를 일반 텍스트로 취급해 정확한 `{{{field_name}}}` placeholder만 치환하거나 추출한다. 일반 필드명 문자열은 그대로 두고, 같은 placeholder가 반복되면 모두 같은 값으로 치환하며 파싱 시에도 모든 위치의 값이 같아야 한다. `type`과 `action`은 placeholder 대신 Action/방향별 고정 텍스트로 표현할 수 있고, 둘 이상의 Action 템플릿과 동시에 일치하는 payload는 거부한다. 현재 request와 동일한 `correlation_id`와 `action`, `0|1`인 `result`, Action별 필수 필드가 모두 유효한 response만 받아들인다.
 
 파일 게시에는 같은 디렉터리의 temp 파일과 atomic replace/move를 사용한다. `.drillflow.exchange.lock`을 `FileShare.None`으로 열어 로컬 프로세스와 SMB 클라이언트의 전체 exchange를 직렬화한다. 설정한 request lifecycle의 게시 전 조건(장비 삭제 방식이면 기존 request 소멸)이 충족된 뒤 quiet interval만큼 기다리고 response baseline을 새로 확보한 다음 첫 request를 게시한다. 이 대기는 취소 가능하며 취소되면 request/temp 파일을 만들지 않고, matching response 대기는 실제 게시 뒤에 온전한 timeout 예산으로 새로 시작한다. polling은 파일 크기와 수정 시간이 안정된 뒤 읽고 일시적인 share violation을 재시도한다.
 
