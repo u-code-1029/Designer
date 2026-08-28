@@ -73,6 +73,27 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_DetectsResponseCopiedIntoConfiguredPathAfterRequestPublication()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(122);
+        var sourcePath = Path.Combine(directory.Path, "copied-stage-response.xml");
+        File.WriteAllBytes(sourcePath, _codec.SerializeResponse(StageResponse(122, 0.25, -0.5)));
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        File.Copy(sourcePath, ResponsePath(options), overwrite: true);
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(122, response.CorrelationId);
+        Assert.Equal(0.25, response.CurrentStageX);
+        Assert.Equal(-0.5, response.CurrentStageY);
+    }
+
+    [Fact]
     public async Task Exchange_WaitsConfiguredDelayBeforeInitialRequestPublication()
     {
         using var directory = new TempDirectory();
@@ -253,7 +274,7 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
-    public async Task Exchange_DoesNotAcceptUnchangedRetainedResponseBaseline()
+    public async Task Exchange_DoesNotAcceptRetainedResponseForDifferentCorrelation()
     {
         using var directory = new TempDirectory();
         var options = CreateOptions(directory.Path);
@@ -261,17 +282,115 @@ public sealed class InfrastructureFileTransportTests
         var stale = StageResponse(106, 1, 1);
         PublishResponse(options, stale);
         using var transport = CreateTransport(options);
-        var request = StageRequest(106);
+        var request = StageRequest(123);
 
         var exchange = transport.ExchangeAsync(request, CancellationToken.None);
         await WaitForRequestAsync(options, request);
         await Task.Delay(100);
         Assert.False(exchange.IsCompleted);
 
-        PublishResponse(options, StageResponse(106, 2, 3));
+        PublishResponse(options, StageResponse(123, 2, 3));
         var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(2, response.CurrentStageX);
         Assert.Equal(3, response.CurrentStageY);
+    }
+
+    [Fact]
+    public async Task Exchange_RetainModeDoesNotAcceptUnchangedMatchingResponse()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.ResponseTimeout = TimeSpan.FromMilliseconds(180);
+        options.ApplicationResponseLifecycle = ApplicationResponseFileLifecycle.RetainUntilOverwritten;
+        var responseBytes = _codec.SerializeResponse(StageResponse(125, 4, 5));
+        File.WriteAllBytes(ResponsePath(options), responseBytes);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(125);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+
+        await Assert.ThrowsAsync<EquipmentResponseTimeoutException>(() => exchange);
+        Assert.Equal(responseBytes, File.ReadAllBytes(ResponsePath(options)));
+    }
+
+    [Fact]
+    public async Task Exchange_DefaultLifecycleRemovesStaleResponseAndDetectsIdenticalCopy()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var responseBytes = _codec.SerializeResponse(StageResponse(124, 2, 3));
+        var responsePath = ResponsePath(options);
+        var sourcePath = Path.Combine(directory.Path, "identical-stage-response.xml");
+        File.WriteAllBytes(sourcePath, responseBytes);
+        File.Copy(sourcePath, responsePath, overwrite: true);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(124);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        Assert.False(File.Exists(responsePath));
+        File.Copy(sourcePath, responsePath, overwrite: true);
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(124, response.CorrelationId);
+        Assert.Equal(2, response.CurrentStageX);
+        Assert.Equal(3, response.CurrentStageY);
+        Assert.False(File.Exists(responsePath));
+    }
+
+    [Fact]
+    public async Task Exchange_PreExistingResponseDeleteFailureDoesNotBlockRequestOrLaterResponse()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var responsePath = ResponsePath(options);
+        File.WriteAllBytes(responsePath, _codec.SerializeResponse(StageResponse(126, 1, 1)));
+        using var responseLock = new FileStream(
+            responsePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(127);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        Assert.False(exchange.IsCompleted);
+
+        responseLock.Dispose();
+        PublishResponse(options, StageResponse(127, 6, 7));
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(127, response.CorrelationId);
+        Assert.Equal(6, response.CurrentStageX);
+        Assert.Equal(7, response.CurrentStageY);
+    }
+
+    [Fact]
+    public async Task Exchange_DeleteFailureDoesNotAcceptUnchangedMatchingStaleResponse()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.ResponseTimeout = TimeSpan.FromMilliseconds(180);
+        var responsePath = ResponsePath(options);
+        var responseBytes = _codec.SerializeResponse(StageResponse(128, 8, 9));
+        File.WriteAllBytes(responsePath, responseBytes);
+        using var responseLock = new FileStream(
+            responsePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+        using var transport = CreateTransport(options);
+        var request = StageRequest(128);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        responseLock.Dispose();
+
+        await Assert.ThrowsAsync<EquipmentResponseTimeoutException>(() => exchange);
+        Assert.Equal(responseBytes, File.ReadAllBytes(responsePath));
     }
 
     [Fact]

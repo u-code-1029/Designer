@@ -126,7 +126,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 .ConfigureAwait(false);
 
             // FileStream construction can outlive cancellation while the OS resolves an SMB
-            // path. Re-check before any request/baseline work so a shutdown-abandoned open can
+            // path. Re-check before any request preparation so a shutdown-abandoned open can
             // never come back later and publish a new command.
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -153,19 +153,43 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             // Hold both the in-process gate and the cross-process sidecar during this quiet
             // interval. This guarantees that every controller using the exchange directory sees
             // a gap between the preceding completed exchange and this request. The delay belongs
-            // only to the first publication; retries already have their own RetryDelay. Capture
-            // the retained response baseline afterwards so a late previous response written
-            // during the interval can never be mistaken for this request's response.
+            // only to the first publication; retries already have their own RetryDelay. A late
+            // previous response is normally excluded by Action/correlation matching; retain mode
+            // also keeps the previous bytes as a cross-workstation rollback safeguard below.
             if (_options.RequestPublishDelay > TimeSpan.Zero)
             {
                 await Task.Delay(_options.RequestPublishDelay, cancellationToken)
                     .ConfigureAwait(false);
             }
 
-            // A pre-existing retained response is only a baseline. Even if state was manually
-            // rolled back, unchanged bytes are never accepted as the response to this exchange.
-            var baselineResponse = await TryReadStableBytesAsync(responsePath, cancellationToken)
-                .ConfigureAwait(false);
+            // In the default delete-after-read mode, a response left by an interrupted previous
+            // run is stale by definition. Remove it before publishing so creation of the next
+            // response is unambiguous even when equipment writes byte-identical test data.
+            var preserveResponseBaseline = _options.ApplicationResponseLifecycle
+                                           == ApplicationResponseFileLifecycle.RetainUntilOverwritten;
+            if (!preserveResponseBaseline)
+            {
+                preserveResponseBaseline = !TryDeletePreExistingResponse(
+                    responsePath,
+                    request.CorrelationId,
+                    request.Action);
+            }
+
+            // Retain mode cannot remove the previous controller-owned response. Preserve its
+            // bytes as a baseline so a separate workstation or restored correlation store cannot
+            // accept an old matching ID without the equipment actually replacing the payload.
+            // Apply the same protection when default-mode preflight deletion was not possible.
+            var retainedResponseBaseline = preserveResponseBaseline
+                ? await TryReadStableBytesAsync(responsePath, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+
+            _logger.LogDebug(
+                "Polling equipment response file {ResponsePath} for {Action} request "
+                + "{CorrelationId}.",
+                responsePath,
+                request.Action,
+                request.CorrelationId);
 
             var retryCount = _options.RetryEnabled ? _options.MaximumRetryCount : 0;
             var attempt = 0;
@@ -189,7 +213,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     var responseBeforeRetry = await TryReadMatchingResponseOnceAsync(
                             responsePath,
                             request,
-                            baselineResponse,
+                            retainedResponseBaseline,
                             cancellationToken)
                         .ConfigureAwait(false);
                     if (responseBeforeRetry is not null)
@@ -229,7 +253,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 var response = await WaitForMatchingResponseAsync(
                         responsePath,
                         request,
-                        baselineResponse,
+                        retainedResponseBaseline,
                         cancellationToken)
                     .ConfigureAwait(false);
 
@@ -256,7 +280,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 var lateResponse = await TryReadMatchingResponseOnceAsync(
                         responsePath,
                         request,
-                        baselineResponse,
+                        retainedResponseBaseline,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (lateResponse is not null)
@@ -854,6 +878,78 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
     }
 
+    private bool TryDeletePreExistingResponse(
+        string responsePath,
+        int correlationId,
+        string requestCommand)
+    {
+        try
+        {
+            var existed = File.Exists(responsePath);
+            File.Delete(responsePath);
+            if (existed)
+            {
+                _logger.LogDebug(
+                    "Deleted pre-existing response file {ResponsePath} before publishing "
+                    + "{Command} request {CorrelationId}.",
+                    responsePath,
+                    requestCommand,
+                    correlationId);
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (IsRecoverableFileCleanupFailure(exception))
+        {
+            LogPreExistingResponseCleanupFailure(
+                exception,
+                responsePath,
+                correlationId,
+                requestCommand);
+            return false;
+        }
+    }
+
+    private void LogPreExistingResponseCleanupFailure(
+        Exception exception,
+        string responsePath,
+        int correlationId,
+        string requestCommand)
+    {
+        if (string.Equals(requestCommand, EquipmentActionNames.Live, StringComparison.Ordinal))
+        {
+            if (!ShouldLogFrameCleanupWarning(
+                    "pre-existing response",
+                    responsePath,
+                    out var suppressedCount))
+            {
+                return;
+            }
+
+            _logger.LogWarning(
+                "Could not remove pre-existing response file {ResponsePath} before publishing "
+                + "live request {CorrelationId}. {SuppressedCleanupWarningCount} repeated "
+                + "cleanup warning(s) were suppressed. Failure: {CleanupExceptionType}: "
+                + "{CleanupExceptionMessage}. Polling will continue and only a matching "
+                + "correlation ID can be accepted.",
+                responsePath,
+                correlationId,
+                suppressedCount,
+                exception.GetType().Name,
+                exception.Message);
+            return;
+        }
+
+        _logger.LogWarning(
+            exception,
+            "Could not remove pre-existing response file {ResponsePath} before publishing "
+            + "{Command} request {CorrelationId}. Polling will continue and only a response "
+            + "with the matching action and correlation ID can be accepted.",
+            responsePath,
+            requestCommand,
+            correlationId);
+    }
+
     private async Task<EquipmentResponseMessage> CompleteResponseAsync(
         string requestPath,
         string responsePath,
@@ -1017,12 +1113,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task<byte[]?> TryReadMatchingResponseOnceAsync(
         string responsePath,
         EquipmentRequestMessage expectedRequest,
-        byte[]? baselineResponse,
+        byte[]? retainedResponseBaseline,
         CancellationToken cancellationToken)
     {
         var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
             .ConfigureAwait(false);
-        if (payload is null || ByteArraysEqual(payload, baselineResponse))
+        if (payload is null || ByteArraysEqual(payload, retainedResponseBaseline))
         {
             return null;
         }
@@ -1038,29 +1134,38 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task<byte[]?> WaitForMatchingResponseAsync(
         string responsePath,
         EquipmentRequestMessage expectedRequest,
-        byte[]? baselineResponse,
+        byte[]? retainedResponseBaseline,
         CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + _options.ResponseTimeout;
         byte[]? lastRejectedPayload = null;
+        var observedStableResponse = false;
+        var observedUnchangedRetainedBaseline = false;
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (payload is not null
-                && !ByteArraysEqual(payload, baselineResponse))
+            if (payload is not null)
             {
-                if (_codec.TryDeserializeResponse(payload, expectedRequest, out _))
+                if (ByteArraysEqual(payload, retainedResponseBaseline))
                 {
-                    return payload;
+                    observedUnchangedRetainedBaseline = true;
                 }
-
-                if (!ByteArraysEqual(payload, lastRejectedPayload))
+                else
                 {
-                    LogRejectedResponse(responsePath, expectedRequest);
-                    lastRejectedPayload = payload;
+                    observedStableResponse = true;
+                    if (_codec.TryDeserializeResponse(payload, expectedRequest, out _))
+                    {
+                        return payload;
+                    }
+
+                    if (!ByteArraysEqual(payload, lastRejectedPayload))
+                    {
+                        LogRejectedResponse(responsePath, expectedRequest);
+                        lastRejectedPayload = payload;
+                    }
                 }
             }
 
@@ -1076,7 +1181,82 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        LogResponseWaitExpired(
+            responsePath,
+            expectedRequest,
+            observedStableResponse,
+            observedUnchangedRetainedBaseline);
         return null;
+    }
+
+    private void LogResponseWaitExpired(
+        string responsePath,
+        EquipmentRequestMessage expectedRequest,
+        bool observedStableResponse,
+        bool observedUnchangedRetainedBaseline)
+    {
+        if (observedStableResponse)
+        {
+            _logger.LogDebug(
+                "Response wait ended after at least one stable file was observed at "
+                + "{ResponsePath}, but none matched {Action} request {CorrelationId}.",
+                responsePath,
+                expectedRequest.Action,
+                expectedRequest.CorrelationId);
+            return;
+        }
+
+        if (observedUnchangedRetainedBaseline)
+        {
+            _logger.LogDebug(
+                "Response wait ended while {ResponsePath} still contained the unchanged "
+                + "pre-request response retained by configuration for {Action} request "
+                + "{CorrelationId}.",
+                responsePath,
+                expectedRequest.Action,
+                expectedRequest.CorrelationId);
+            return;
+        }
+
+        try
+        {
+            var info = new FileInfo(responsePath);
+            info.Refresh();
+            if (info.Exists)
+            {
+                _logger.LogDebug(
+                    "Response wait ended with a file present at {ResponsePath}, but it never "
+                    + "became a readable stable payload. Length: {ResponseLength}; last write "
+                    + "UTC: {ResponseLastWriteUtc}.",
+                    responsePath,
+                    info.Length,
+                    info.LastWriteTimeUtc);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Response wait ended without any readable file appearing at {ResponsePath} "
+                    + "for {Action} request {CorrelationId}.",
+                    responsePath,
+                    expectedRequest.Action,
+                    expectedRequest.CorrelationId);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            || exception is UnauthorizedAccessException
+            || exception is System.Security.SecurityException
+            || exception is NotSupportedException
+            || exception is ArgumentException)
+        {
+            _logger.LogDebug(
+                exception,
+                "Response wait ended and the final state of {ResponsePath} could not be queried "
+                + "for {Action} request {CorrelationId}.",
+                responsePath,
+                expectedRequest.Action,
+                expectedRequest.CorrelationId);
+        }
     }
 
     private void LogRejectedResponse(
@@ -1216,8 +1396,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             }
 
             // Live preview throughput is more important than retrying cleanup after the matching
-            // frame has already been secured. A later exchange will still use the retained
-            // response as its stale baseline, so one best-effort delete attempt is sufficient.
+            // frame has already been secured. A later default-mode exchange will make another
+            // pre-publication cleanup attempt, so one best-effort delete attempt is sufficient.
             if (string.Equals(requestCommand, EquipmentActionNames.Live, StringComparison.Ordinal))
             {
                 LogCleanupFailure(

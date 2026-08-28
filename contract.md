@@ -262,6 +262,8 @@ Designer Workflow 실행과 Live Interaction 장비 동작은 같은 파일명�
 
 request와 response filename은 서로 달라야 하고 경로가 아닌 leaf name이어야 한다. 게시에는 같은 폴더의 임시 파일과 atomic replace/move를 사용한다. 폴더별 `.drillflow.exchange.lock`과 프로세스 내부 gate가 exchange를 직렬화한다. 이 lock은 개별 exchange 충돌을 막지만 여러 운영자의 장기 장비 소유권까지 보장하지 않으므로 물리 장비/폴더에는 한 active controller만 연결한다.
 
+기본 `ApplicationResponseLifecycle=DeleteAfterRead`에서는 중단된 이전 실행이 남긴 response를 새 request 게시 직전에 best-effort로 먼저 삭제한다. response 감지는 로컬/SMB 변경 알림이 아니라 stable polling을 기준으로 하며, 현재 request와 동일한 `correlation_id`와 Action인지를 새 응답의 식별 기준으로 사용한다. 따라서 기본 모드에서는 같은 바이트의 테스트 XML을 다시 붙여넣어도 이전 파일과 같다는 이유로 누락하지 않는다. `RetainUntilOverwritten`에서는 파일을 사전 삭제하지 않고 게시 전 response 바이트를 baseline으로 보존한다. 다른 correlation/action 또는 그대로 남은 baseline은 무시하며, 장비가 새 correlation을 포함한 response payload로 실제 덮어써야 한다.
+
 ## 7. Response 테스트
 
 Designer의 “Response 테스트”와 Live의 1회/연속 테스트는 편집 가능한 **논리 JSON 초안**을 보여 주지만 게시 시에는 Action별 XML response 템플릿을 사용한다.

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Infrastructure.Communication;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -126,6 +127,47 @@ public sealed class InfrastructureResponseSimulatorTests
         Assert.Equal(77, response!.CorrelationId);
         Assert.Equal(EquipmentActionNames.Camera, response.Action);
         Assert.Equal(1, response.Result);
+    }
+
+    [Fact]
+    public async Task PublishedDraft_IsDetectedByWaitingFileTransport()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.RequestPublishDelay = TimeSpan.Zero;
+        var simulator = CreateSimulator(options);
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options),
+            NullLogger<FileEquipmentTransport>.Instance,
+            _codec);
+        var request = StageRequest(84);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        EquipmentRequestSnapshot? activeRequest = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while (DateTime.UtcNow < deadline && activeRequest is null)
+        {
+            activeRequest = await simulator.GetActiveRequestAsync(CancellationToken.None);
+            if (activeRequest is null)
+            {
+                await Task.Delay(10);
+            }
+        }
+
+        Assert.NotNull(activeRequest);
+        Assert.Equal(84, activeRequest!.CorrelationId);
+        var draft = await simulator.CreateDraftAsync(
+            new StageNode(),
+            null,
+            CancellationToken.None);
+        await simulator.PublishAsync(draft.Payload, CancellationToken.None);
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(84, response.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, response.Action);
+        Assert.False(File.Exists(Path.Combine(directory.Path, options.RequestFileName)));
+        Assert.False(File.Exists(Path.Combine(directory.Path, options.ResponseFileName)));
     }
 
     [Fact]
