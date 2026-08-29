@@ -60,6 +60,40 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
             cancellationToken);
     }
 
+    public async Task<LiveImageExchangeResult> RequestOmImageAsync(
+        CancellationToken cancellationToken = default)
+    {
+        string? requestedImagePath = null;
+        try
+        {
+            var response = await ExchangeAsync(
+                    EquipmentActionNames.Om,
+                    correlationId =>
+                    {
+                        requestedImagePath = CreateOwnedImagePath(
+                            EquipmentActionNames.Om,
+                            correlationId);
+                        return new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            [LiveInteractionProtocol.ImagePathParameter] = requestedImagePath,
+                        };
+                    },
+                    requireImagePath: true,
+                    cancellationToken,
+                    prepareOwnedImageDirectory: true)
+                .ConfigureAwait(false);
+
+            return new LiveImageExchangeResult(response, requestedImagePath!);
+        }
+        catch
+        {
+            // The OM request uses the same correlation-owned output path policy as live and
+            // integration images. Controller-owned alternate response paths are never removed.
+            TryDeleteOwnedImagePath(requestedImagePath);
+            throw;
+        }
+    }
+
     public Task<EquipmentResponseMessage> MoveStageAsync(
         string moveMode,
         double stageXMetres,

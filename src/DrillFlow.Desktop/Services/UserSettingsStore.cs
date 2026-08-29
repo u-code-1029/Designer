@@ -28,6 +28,7 @@ public sealed class UserSettingsStore : IUserSettingsStore
         {
             Language = string.IsNullOrWhiteSpace(_defaults.Language) ? "Auto" : _defaults.Language,
             Theme = ThemeSelection.Normalize(_defaults.Theme),
+            ValidateWorkflowOnEveryChange = _defaults.ValidateWorkflowOnEveryChange,
             Communication = (_defaults.Communication ?? new CommunicationSettings()).Clone()
         };
 

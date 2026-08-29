@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DrillFlow.Application.Communication;
@@ -10,6 +12,16 @@ namespace DrillFlow.Desktop.ViewModels;
 
 public sealed class ActionParameterViewModel : ObservableObject
 {
+    private static readonly IReadOnlyList<string> NoSuggestedValues = Array.Empty<string>();
+    private static readonly IReadOnlyList<string> MoveModeSuggestedValues =
+        new ReadOnlyCollection<string>(new[] { "relative", "absolute" });
+    private static readonly IReadOnlyList<string> LensModeSuggestedValues =
+        new ReadOnlyCollection<string>(new[] { "lens1", "lens2", "no_change" });
+    private static readonly IReadOnlyList<string> HttpMethodSuggestedValues =
+        new ReadOnlyCollection<string>(new[] { "GET", "POST" });
+    private static readonly IReadOnlyList<string> BooleanSuggestedValues =
+        new ReadOnlyCollection<string>(new[] { "true", "false" });
+
     private readonly ParameterBinding _binding;
     private readonly WorkflowNodeKind _ownerKind;
     private readonly ILocalizationService _localization;
@@ -28,6 +40,7 @@ public sealed class ActionParameterViewModel : ObservableObject
         _binding = binding;
         _ownerKind = ownerKind;
         _localization = localization;
+        SuggestedValues = GetSuggestedValues(name);
         _localization.LanguageChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(Description));
@@ -43,6 +56,14 @@ public sealed class ActionParameterViewModel : ObservableObject
     public string Description => _localization[LabelKey];
 
     public string Label => Name + " (" + Description + ")";
+
+    /// <summary>
+    /// Contract values offered by an editable selector. The editor deliberately
+    /// remains editable so diagnostic values and '=...' expressions can still be entered.
+    /// </summary>
+    public IReadOnlyList<string> SuggestedValues { get; }
+
+    public bool HasSuggestedValues => SuggestedValues.Count != 0;
 
     public string Value
     {
@@ -268,6 +289,23 @@ public sealed class ActionParameterViewModel : ObservableObject
         string.Equals(_localization.EffectiveLanguage, "en-US", StringComparison.OrdinalIgnoreCase)
             ? english
             : korean;
+
+    private static IReadOnlyList<string> GetSuggestedValues(string name)
+    {
+        switch (name)
+        {
+            case "move_mode":
+                return MoveModeSuggestedValues;
+            case "lens_mode":
+                return LensModeSuggestedValues;
+            case "method":
+                return HttpMethodSuggestedValues;
+            case "condition":
+                return BooleanSuggestedValues;
+            default:
+                return NoSuggestedValues;
+        }
+    }
 
     private static bool TryDouble(string raw, out double value) =>
         double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value)

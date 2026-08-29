@@ -5,11 +5,15 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>DrillFlow.Desktop</RootNamespace>
     <AssemblyName>DrillFlow.Desktop</AssemblyName>
-    <ApplicationIcon />
+    <ApplicationIcon>Assets\DrillFlow.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\DrillFlow.ico" />
+    <Resource Include="Assets\DrillFlow.png" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\DrillFlow.Core\DrillFlow.Core.csproj" />
     <ProjectReference Include="..\DrillFlow.Application\DrillFlow.Application.csproj" />
@@ -23,6 +27,7 @@
     <PackageReference Include="Serilog.Extensions.Hosting" />
     <PackageReference Include="Serilog.Sinks.Debug" />
     <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="System.Reactive" />
     <PackageReference Include="WPF-UI" />
     <PackageReference Include="WPF-UI.DependencyInjection" />
   </ItemGroup>

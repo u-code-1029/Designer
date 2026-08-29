@@ -3,8 +3,10 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      xmlns:controls="clr-namespace:DrillFlow.Desktop.Controls"
       xmlns:converters="clr-namespace:DrillFlow.Desktop.Converters"
       xmlns:behaviors="clr-namespace:DrillFlow.Desktop.Behaviors"
+      xmlns:viewModels="clr-namespace:DrillFlow.Desktop.ViewModels"
       xmlns:workflow="clr-namespace:DrillFlow.Core.Workflows;assembly=DrillFlow.Core"
       Background="{DynamicResource DrillCanvasBrush}"
       ShowsNavigationUI="False"
@@ -18,6 +20,35 @@
         <converters:NullToVisibilityConverter x:Key="NullToVisibility" />
         <converters:NullToVisibilityConverter x:Key="NullToVisibilityInverted" Invert="True" />
         <converters:StringToVisibilityConverter x:Key="StringToVisibility" />
+
+        <!-- Keep the designer command bar on WPF-UI's Fluent button template while
+             giving its icon-only commands a slightly larger, consistent hit target. -->
+        <Style x:Key="DesignerCommandBarButtonStyle"
+               TargetType="{x:Type ui:Button}"
+               BasedOn="{StaticResource {x:Type ui:Button}}">
+            <Setter Property="Height" Value="38" />
+            <Setter Property="MinWidth" Value="38" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="Margin" Value="1,0" />
+            <Setter Property="FontSize" Value="21" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="DesignerCommandBarGroupStyle" TargetType="Border">
+            <Setter Property="Padding" Value="2" />
+            <Setter Property="Background" Value="{DynamicResource DrillOpaqueSurfaceBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <CollectionViewSource x:Key="GroupedToolboxItems"
+                              Source="{Binding FilteredToolboxItems}">
+            <CollectionViewSource.GroupDescriptions>
+                <PropertyGroupDescription PropertyName="Category" />
+            </CollectionViewSource.GroupDescriptions>
+        </CollectionViewSource>
 
         <Style x:Key="WorkflowTerminalButtonStyle" TargetType="{x:Type Button}">
             <Setter Property="Padding" Value="12,5" />
@@ -76,19 +107,42 @@
 
         <DataTemplate x:Key="ToolboxItemTemplate">
             <Border Style="{StaticResource ToolboxItemStyle}"
+                    ToolTip="{Binding Description}"
                     IsEnabled="{Binding DataContext.IsWorkflowEditingEnabled, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
                     PreviewMouseLeftButtonDown="ToolboxItem_PreviewMouseLeftButtonDown"
                     PreviewMouseMove="ToolboxItem_PreviewMouseMove"
                     MouseLeftButtonDown="ToolboxItem_MouseLeftButtonDown">
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4" />
+                        <ColumnDefinition Width="8" />
                         <ColumnDefinition Width="32" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <ui:SymbolIcon Grid.Column="0" Symbol="{Binding Icon}" FontSize="20" Foreground="{DynamicResource DrillAccentBrush}" />
-                    <StackPanel Grid.Column="1">
+                    <Border Grid.Column="0"
+                            Width="2"
+                            Opacity="0.35"
+                            CornerRadius="1">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{DynamicResource DrillAccentBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Category}" Value="{x:Static viewModels:ToolboxItemCategory.Designer}">
+                                        <Setter Property="Background" Value="{DynamicResource DrillWarningBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                    </Border>
+                    <ui:SymbolIcon Grid.Column="2" Symbol="{Binding Icon}" FontSize="20" Foreground="{DynamicResource DrillAccentBrush}" />
+                    <StackPanel Grid.Column="3">
                         <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="{DynamicResource DrillTextBrush}" />
-                        <TextBlock Text="{Binding Description}" Style="{StaticResource CaptionTextStyle}" />
+                        <TextBlock Text="{Binding MetadataLabel}"
+                                   Margin="0,3,0,0"
+                                   FontFamily="Consolas"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource DrillSecondaryTextBrush}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -107,21 +161,41 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Border Background="{DynamicResource DrillAccentBrush}" CornerRadius="4" Padding="7,3">
                             <TextBlock Text="{Binding Title}"
                                        Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}"
                                        FontWeight="SemiBold" />
                         </Border>
-                        <TextBox x:Name="ConditionEditor"
-                                 Grid.Column="1"
-                                 Margin="8,0,0,0"
-                                 IsEnabled="{Binding IsEditingEnabled}"
-                                 Text="{Binding Condition.Value, UpdateSourceTrigger=PropertyChanged}"
-                                 behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
-                                 behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                                 behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.Id, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}"
-                                 GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                        <ComboBox x:Name="ConditionEditor"
+                                  Grid.Column="1"
+                                  Margin="8,0,0,0"
+                                  IsEditable="True"
+                                  IsTextSearchEnabled="True"
+                                  StaysOpenOnEdit="True"
+                                  ItemsSource="{Binding Condition.SuggestedValues}"
+                                  IsEnabled="{Binding IsEditingEnabled}"
+                                  Text="{Binding Condition.Value, UpdateSourceTrigger=PropertyChanged}"
+                                  behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
+                                  behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                  behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.Id, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}"
+                                  GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                        <ui:Button x:Name="ConditionExpressionButton"
+                                   Grid.Column="2"
+                                   Width="34"
+                                   MinWidth="34"
+                                   Margin="6,0,0,0"
+                                   Padding="0"
+                                   IsEnabled="{Binding IsEditingEnabled}"
+                                   Tag="{Binding ElementName=ConditionEditor}"
+                                   AutomationProperties.Name="{DynamicResource AddExpression}"
+                                   ToolTip="{DynamicResource AddExpressionHint}"
+                                   Click="AddExpression_Click">
+                            <TextBlock Text="fx"
+                                       FontFamily="Consolas"
+                                       FontWeight="SemiBold" />
+                        </ui:Button>
                     </Grid>
 
                     <ItemsControl ItemsSource="{Binding Children}"
@@ -143,6 +217,7 @@
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding Kind}" Value="{x:Static workflow:ConditionalBranchKind.Else}">
                     <Setter TargetName="ConditionEditor" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="ConditionExpressionButton" Property="Visibility" Value="Collapsed" />
                 </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
@@ -182,6 +257,13 @@
                                       Visibility="{Binding CanStopSelectedCurrentEquipmentAction, Converter={StaticResource BoolToVisibility}}">
                                 <MenuItem.Icon><ui:SymbolIcon Symbol="Stop20" /></MenuItem.Icon>
                             </MenuItem>
+                            <Separator Visibility="{Binding SelectedAction.HasBranches, Converter={StaticResource BoolToVisibility}}" />
+                            <MenuItem Header="{DynamicResource AddElseIf}"
+                                      Command="{Binding AddElseIfCommand}"
+                                      Visibility="{Binding SelectedAction.HasBranches, Converter={StaticResource BoolToVisibility}}" />
+                            <MenuItem Header="{DynamicResource AddElse}"
+                                      Command="{Binding AddElseCommand}"
+                                      Visibility="{Binding SelectedAction.HasBranches, Converter={StaticResource BoolToVisibility}}" />
                             <Separator />
                             <MenuItem Header="{DynamicResource CopyAction}"
                                       InputGestureText="Ctrl+C"
@@ -309,84 +391,93 @@
                                                    Visibility="{Binding HasLatestImage, Converter={StaticResource BoolToVisibility}}" />
                                     </StackPanel>
                                 </Expander.Header>
-                                <StackPanel Margin="0,8,0,0">
-                                <ItemsControl ItemsSource="{Binding LatestResult.SummaryFields}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Margin="0,2"
+                                <Grid Margin="0,8,0,0"
+                                      HorizontalAlignment="Center">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <Border Grid.Column="0"
+                                            Width="{Binding ResultImageFrameWidth}"
+                                            Height="{Binding ResultImageFrameHeight}"
+                                            Padding="4"
+                                            VerticalAlignment="Center"
+                                            Background="{DynamicResource DrillCanvasBrush}"
+                                            BorderBrush="{DynamicResource DrillBorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            ClipToBounds="True"
+                                            Visibility="{Binding HasLatestImagePath, Converter={StaticResource BoolToVisibility}}">
+                                        <Grid>
+                                            <TextBlock Text="{Binding LatestImageStatusText}"
+                                                       Margin="10"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"
+                                                       TextWrapping="Wrap"
+                                                       Style="{StaticResource CaptionTextStyle}"
+                                                       Visibility="{Binding LatestImageSource, Converter={StaticResource NullToVisibilityInverted}}" />
+                                            <ui:ProgressRing Width="22"
+                                                             Height="22"
+                                                             Margin="0,0,0,34"
+                                                             HorizontalAlignment="Center"
+                                                             VerticalAlignment="Center"
+                                                             IsIndeterminate="True"
+                                                             Foreground="{DynamicResource DrillAccentBrush}"
+                                                             Visibility="{Binding IsLatestImageLoading, Converter={StaticResource BoolToVisibility}}" />
+                                            <Image Source="{Binding LatestImageSource}"
+                                                   HorizontalAlignment="Stretch"
+                                                   VerticalAlignment="Stretch"
+                                                   Stretch="Uniform"
+                                                   SnapsToDevicePixels="True"
+                                                   Visibility="{Binding HasLatestImage, Converter={StaticResource BoolToVisibility}}" />
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Grid.Column="1"
+                                            Width="14"
+                                            Visibility="{Binding HasLatestImagePath, Converter={StaticResource BoolToVisibility}}" />
+
+                                    <ItemsControl Grid.Column="2"
+                                                  MinWidth="220"
                                                   MaxWidth="460"
-                                                  HorizontalAlignment="Stretch">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="10" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0"
-                                                           Text="{Binding Name}"
-                                                           MaxWidth="130"
-                                                           FontFamily="Consolas"
-                                                           FontSize="11"
-                                                           FontWeight="SemiBold"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Foreground="{DynamicResource DrillSecondaryTextBrush}" />
-                                                <TextBlock Grid.Column="2"
-                                                           Text="{Binding SummaryValue}"
-                                                           ToolTip="{Binding Value}"
-                                                           MaxWidth="300"
-                                                           FontFamily="Consolas"
-                                                           FontSize="11"
-                                                           TextWrapping="NoWrap"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Foreground="{DynamicResource DrillTextBrush}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <Border Margin="0,7,0,0"
-                                        Padding="4"
-                                        MinWidth="180"
-                                        MinHeight="96"
-                                        MaxWidth="320"
-                                        HorizontalAlignment="Center"
-                                        Background="{DynamicResource DrillCanvasBrush}"
-                                        BorderBrush="{DynamicResource DrillBorderBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="4"
-                                        ClipToBounds="True"
-                                        Visibility="{Binding HasLatestImagePath, Converter={StaticResource BoolToVisibility}}">
-                                    <Grid>
-                                        <TextBlock Text="{Binding LatestImageStatusText}"
-                                                   Margin="10"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   TextAlignment="Center"
-                                                   TextWrapping="Wrap"
-                                                   Style="{StaticResource CaptionTextStyle}"
-                                                   Visibility="{Binding LatestImageSource, Converter={StaticResource NullToVisibilityInverted}}" />
-                                        <ui:ProgressRing Width="22"
-                                                         Height="22"
-                                                         Margin="0,0,0,34"
-                                                         HorizontalAlignment="Center"
-                                                         VerticalAlignment="Center"
-                                                         IsIndeterminate="True"
-                                                         Foreground="{DynamicResource DrillAccentBrush}"
-                                                         Visibility="{Binding IsLatestImageLoading, Converter={StaticResource BoolToVisibility}}" />
-                                        <Image Source="{Binding LatestImageSource}"
-                                               MaxHeight="150"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"
-                                               Stretch="Uniform"
-                                               SnapsToDevicePixels="True"
-                                               RenderTransformOrigin="0.5,0.5"
-                                               Visibility="{Binding HasLatestImage, Converter={StaticResource BoolToVisibility}}">
-                                            <Image.RenderTransform>
-                                                <ScaleTransform ScaleX="{Binding ResultImageZoom}"
-                                                                ScaleY="{Binding ResultImageZoom}" />
-                                            </Image.RenderTransform>
-                                        </Image>
-                                    </Grid>
-                                </Border>
-                                </StackPanel>
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  ItemsSource="{Binding LatestResult.SummaryFields}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,2"
+                                                      MaxWidth="460"
+                                                      HorizontalAlignment="Stretch">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="10" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding Name}"
+                                                               MaxWidth="130"
+                                                               FontFamily="Consolas"
+                                                               FontSize="11"
+                                                               FontWeight="SemiBold"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Foreground="{DynamicResource DrillSecondaryTextBrush}" />
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding SummaryValue}"
+                                                               ToolTip="{Binding Value}"
+                                                               MaxWidth="300"
+                                                               FontFamily="Consolas"
+                                                               FontSize="11"
+                                                               TextWrapping="NoWrap"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Foreground="{DynamicResource DrillTextBrush}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Grid>
                             </Expander>
                         </Border>
 
@@ -454,12 +545,64 @@
         <DataTemplate x:Key="ParameterTemplate">
             <StackPanel Margin="0,0,0,12">
                 <TextBlock Text="{Binding Label}" Style="{StaticResource FieldLabelStyle}" />
-                <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
-                         IsEnabled="{Binding IsEditingEnabled}"
-                         behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
-                         behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                         behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
-                         GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="FreeFormEditor"
+                             Grid.Column="0"
+                             Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                             IsEnabled="{Binding IsEditingEnabled}"
+                             behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
+                             behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                             behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                             GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                    <ComboBox x:Name="SuggestedValueEditor"
+                              Grid.Column="0"
+                              Visibility="Collapsed"
+                              IsEditable="True"
+                              IsTextSearchEnabled="True"
+                              StaysOpenOnEdit="True"
+                              ItemsSource="{Binding SuggestedValues}"
+                              Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                              IsEnabled="{Binding IsEditingEnabled}"
+                              behaviors:ExpressionCompletionBehavior.IsEnabled="{Binding IsEditingEnabled}"
+                              behaviors:ExpressionCompletionBehavior.Source="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                              behaviors:ExpressionCompletionBehavior.OwnerNodeId="{Binding DataContext.SelectedAction.Id, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                              GotKeyboardFocus="Parameter_GotKeyboardFocus" />
+                    <ui:Button x:Name="FreeFormExpressionButton"
+                               Grid.Column="1"
+                               Width="34"
+                               MinWidth="34"
+                               Margin="6,0,0,0"
+                               Padding="0"
+                               IsEnabled="{Binding IsEditingEnabled}"
+                               Tag="{Binding ElementName=FreeFormEditor}"
+                               AutomationProperties.Name="{DynamicResource AddExpression}"
+                               ToolTip="{DynamicResource AddExpressionHint}"
+                               Click="AddExpression_Click">
+                        <TextBlock Text="fx"
+                                   FontFamily="Consolas"
+                                   FontWeight="SemiBold" />
+                    </ui:Button>
+                    <ui:Button x:Name="SuggestedExpressionButton"
+                               Grid.Column="1"
+                               Width="34"
+                               MinWidth="34"
+                               Margin="6,0,0,0"
+                               Padding="0"
+                               Visibility="Collapsed"
+                               IsEnabled="{Binding IsEditingEnabled}"
+                               Tag="{Binding ElementName=SuggestedValueEditor}"
+                               AutomationProperties.Name="{DynamicResource AddExpression}"
+                               ToolTip="{DynamicResource AddExpressionHint}"
+                               Click="AddExpression_Click">
+                        <TextBlock Text="fx"
+                                   FontFamily="Consolas"
+                                   FontWeight="SemiBold" />
+                    </ui:Button>
+                </Grid>
                 <TextBlock Text="{Binding ValidationMessage}"
                            Foreground="{DynamicResource DrillDangerBrush}"
                            FontSize="11"
@@ -467,6 +610,14 @@
                            TextWrapping="Wrap"
                            Visibility="{Binding ValidationMessage, Converter={StaticResource StringToVisibility}}" />
             </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasSuggestedValues}" Value="True">
+                    <Setter TargetName="FreeFormEditor" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="FreeFormExpressionButton" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="SuggestedValueEditor" Property="Visibility" Value="Visible" />
+                    <Setter TargetName="SuggestedExpressionButton" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
         </DataTemplate>
 
         <DataTemplate x:Key="RuntimeResultTemplate">
@@ -532,6 +683,8 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="12" />
             <RowDefinition Height="*" />
+            <RowDefinition x:Name="EquipmentMonitorSplitterRow" Height="0" />
+            <RowDefinition x:Name="EquipmentMonitorRow" Height="0" MinHeight="0" MaxHeight="420" />
             <RowDefinition Height="10" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -544,90 +697,136 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding DocumentDisplayName}" FontWeight="SemiBold" FontSize="15" />
-                    <TextBlock Text="{Binding DocumentPath}" Style="{StaticResource CaptionTextStyle}" MaxWidth="250" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding DocumentDisplayName}"
+                               FontWeight="SemiBold"
+                               FontSize="15"
+                               MaxWidth="250"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding DocumentPath}"
+                               Style="{StaticResource CaptionTextStyle}"
+                               MaxWidth="250"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
                 </StackPanel>
 
-                <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:Button Command="{Binding NewCommand}" ToolTip="{DynamicResource New}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentAdd24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding OpenCommand}" ToolTip="{DynamicResource Open}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding SaveCommand}" ToolTip="{DynamicResource Save}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="Save24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding SaveAsCommand}" ToolTip="{DynamicResource SaveAs}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="SaveCopy24" /></ui:Button.Icon>
-                        </ui:Button>
+                <ScrollViewer Grid.Column="2"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled"
+                              CanContentScroll="False">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- File -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding NewCommand}" ToolTip="{DynamicResource New}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentAdd24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding OpenCommand}" ToolTip="{DynamicResource Open}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding SaveCommand}" ToolTip="{DynamicResource Save}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="Save24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding SaveAsCommand}" ToolTip="{DynamicResource SaveAs}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="SaveCopy24" /></ui:Button.Icon>
+                                </ui:Button>
+                            </StackPanel>
+                        </Border>
+
                         <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
-                        <ui:Button Command="{Binding UndoCommand}" ToolTip="{DynamicResource Undo}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowUndo24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding RedoCommand}" ToolTip="{DynamicResource Redo}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowRedo24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding ValidateCommand}" ToolTip="{DynamicResource Validate}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="CheckmarkCircle24" /></ui:Button.Icon>
-                        </ui:Button>
+
+                        <!-- Editing and validation -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding UndoCommand}" ToolTip="{DynamicResource Undo}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowUndo24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding RedoCommand}" ToolTip="{DynamicResource Redo}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowRedo24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ValidateCommand}" ToolTip="{DynamicResource Validate}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="CheckmarkCircle24" /></ui:Button.Icon>
+                                </ui:Button>
+                            </StackPanel>
+                        </Border>
+
                         <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
-                        <ui:Button Command="{Binding RunCommand}" ToolTip="{DynamicResource Run}" Appearance="Primary" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="Play24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding ContinueCommand}" ToolTip="{DynamicResource Continue}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="PlayCircle24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding StepCommand}" ToolTip="{DynamicResource Step}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowStepOver20" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding StopCommand}" ToolTip="{DynamicResource Stop}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="Stop24" /></ui:Button.Icon>
-                        </ui:Button>
+
+                        <!-- Execution -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding RunCommand}" ToolTip="{DynamicResource Run}" Appearance="Primary">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="Play24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ContinueCommand}" ToolTip="{DynamicResource Continue}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="PlayCircle24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding StepCommand}" ToolTip="{DynamicResource Step}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowStepOver20" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding StopCommand}" ToolTip="{DynamicResource Stop}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="Stop24" /></ui:Button.Icon>
+                                </ui:Button>
+                            </StackPanel>
+                        </Border>
+
                         <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
-                        <ui:Button Command="{Binding ToggleBreakpointCommand}" ToolTip="{DynamicResource ToggleBreakpoint}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="Record24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding ClearBreakpointsCommand}" ToolTip="{DynamicResource ClearBreakpoints}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="DeleteDismiss24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding CollapseAllResultsCommand}" ToolTip="{DynamicResource CollapseAllResults}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ChevronDoubleUp20" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding ClearAllResultsCommand}" ToolTip="{DynamicResource ClearAllResults}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
-                        </ui:Button>
+
+                        <!-- Breakpoints, retained results, and response testing -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ToggleBreakpointCommand}" ToolTip="{DynamicResource ToggleBreakpoint}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="Record24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ClearBreakpointsCommand}" ToolTip="{DynamicResource ClearBreakpoints}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="DeleteDismiss24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding CollapseAllResultsCommand}" ToolTip="{DynamicResource CollapseAllResults}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ChevronDoubleUp20" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ClearAllResultsCommand}" ToolTip="{DynamicResource ClearAllResults}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding TestResponseCommand}" ToolTip="{DynamicResource ResponseTest}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentArrowDown20" /></ui:Button.Icon>
+                                </ui:Button>
+                            </StackPanel>
+                        </Border>
+
                         <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
-                        <ui:Button Command="{Binding TestResponseCommand}" ToolTip="{DynamicResource ResponseTest}" Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentArrowDown20" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Command="{Binding OpenExchangeFolderCommand}" ToolTip="{DynamicResource OpenExchangeFolder}">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
-                        <ui:Button Click="ZoomOut_Click"
-                                   ToolTip="{DynamicResource ZoomOut}"
-                                   Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ZoomOut24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Click="ResetZoom_Click"
-                                   ToolTip="{DynamicResource ResetZoom}"
-                                   Margin="0,0,4,0"
-                                   MinWidth="58">
-                            <TextBlock x:Name="CanvasZoomText"
-                                       Text="100%"
-                                       HorizontalAlignment="Center" />
-                        </ui:Button>
-                        <ui:Button Click="ZoomIn_Click"
-                                   ToolTip="{DynamicResource ZoomIn}"
-                                   Margin="0,0,4,0">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ZoomIn24" /></ui:Button.Icon>
-                        </ui:Button>
-                        <ui:Button Click="ResetView_Click"
-                                   ToolTip="{DynamicResource ResetView}">
-                            <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowReset24" /></ui:Button.Icon>
-                        </ui:Button>
+
+                        <!-- Exchange folder and canvas view -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding OpenExchangeFolderCommand}" ToolTip="{DynamicResource OpenExchangeFolder}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}"
+                                           Click="ZoomOut_Click"
+                                           ToolTip="{DynamicResource ZoomOut}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ZoomOut24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}"
+                                           Click="ResetZoom_Click"
+                                           ToolTip="{DynamicResource ResetZoom}"
+                                           MinWidth="58">
+                                    <TextBlock x:Name="CanvasZoomText"
+                                               Text="100%"
+                                               FontSize="12"
+                                               HorizontalAlignment="Center" />
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}"
+                                           Click="ZoomIn_Click"
+                                           ToolTip="{DynamicResource ZoomIn}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ZoomIn24" /></ui:Button.Icon>
+                                </ui:Button>
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}"
+                                           Click="ResetView_Click"
+                                           ToolTip="{DynamicResource ResetView}">
+                                    <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowReset24" /></ui:Button.Icon>
+                                </ui:Button>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -635,7 +834,7 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="ToolboxColumn" Width="230" MinWidth="190" />
+                <ColumnDefinition x:Name="ToolboxColumn" Width="260" MinWidth="210" />
                 <ColumnDefinition Width="6" />
                 <ColumnDefinition x:Name="WorkflowColumn" Width="*" MinWidth="390" />
                 <ColumnDefinition Width="6" />
@@ -646,59 +845,90 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition x:Name="EquipmentToolboxRow" Height="*" MinHeight="120" />
-                        <RowDefinition Height="8" />
-                        <RowDefinition x:Name="FlowToolboxRow" Height="*" MinHeight="120" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0">
                         <TextBlock Text="{DynamicResource Toolbox}" Style="{StaticResource SectionTitleStyle}" />
-                        <TextBlock Text="{DynamicResource DoubleClickHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,12" />
+                        <TextBlock Text="{DynamicResource DoubleClickHint}" Style="{StaticResource CaptionTextStyle}" Margin="0,0,0,8" />
                     </StackPanel>
 
-                    <Grid Grid.Row="1">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0"
-                                   Text="{DynamicResource EquipmentActions}"
-                                   FontWeight="SemiBold"
-                                   Margin="0,4,0,8" />
-                        <ScrollViewer x:Name="EquipmentToolboxScrollViewer"
-                                      Grid.Row="1"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      CanContentScroll="False"
-                                      PanningMode="VerticalOnly">
-                            <ItemsControl ItemsSource="{Binding EquipmentToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
-                        </ScrollViewer>
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                        <ui:TextBox Padding="30,5,34,5"
+                                    Text="{Binding ToolboxSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                    PlaceholderText="{DynamicResource ToolboxSearchPlaceholder}"
+                                    ClearButtonEnabled="True"
+                                    ToolTip="{DynamicResource ToolboxSearchHint}" />
+                        <Viewbox Width="16"
+                                 Height="16"
+                                 Margin="10,0,0,0"
+                                 HorizontalAlignment="Left"
+                                 VerticalAlignment="Center"
+                                 IsHitTestVisible="False">
+                            <Canvas Width="20" Height="20">
+                                <Ellipse Canvas.Left="3"
+                                         Canvas.Top="3"
+                                         Width="10"
+                                         Height="10"
+                                         Stroke="{DynamicResource DrillSecondaryTextBrush}"
+                                         StrokeThickness="1.6" />
+                                <Path Data="M11,11 L17,17"
+                                      Stroke="{DynamicResource DrillSecondaryTextBrush}"
+                                      StrokeThickness="1.6"
+                                      StrokeStartLineCap="Round" />
+                            </Canvas>
+                        </Viewbox>
                     </Grid>
 
-                    <GridSplitter Grid.Row="2"
-                                  Height="8"
-                                  HorizontalAlignment="Stretch"
-                                  VerticalAlignment="Stretch"
-                                  ResizeDirection="Rows"
-                                  ResizeBehavior="PreviousAndNext"
-                                  Background="Transparent" />
-
-                    <Grid Grid.Row="3">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0"
-                                   Text="{DynamicResource FlowActions}"
-                                   FontWeight="SemiBold"
-                                   Margin="0,4,0,8" />
-                        <ScrollViewer x:Name="FlowToolboxScrollViewer"
-                                      Grid.Row="1"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      CanContentScroll="False"
-                                      PanningMode="VerticalOnly">
-                            <ItemsControl ItemsSource="{Binding FlowToolboxItems}" ItemTemplate="{StaticResource ToolboxItemTemplate}" />
-                        </ScrollViewer>
+                    <Grid Grid.Row="2">
+                        <ListView x:Name="ToolboxListView"
+                                  ItemsSource="{Binding Source={StaticResource GroupedToolboxItems}}"
+                                  ItemTemplate="{StaticResource ToolboxItemTemplate}"
+                                  HorizontalContentAlignment="Stretch"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  ScrollViewer.CanContentScroll="True"
+                                  ScrollViewer.PanningMode="VerticalOnly"
+                                  VirtualizingPanel.IsVirtualizing="True"
+                                  VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListView.GroupStyle>
+                                <GroupStyle HidesIfEmpty="True">
+                                    <GroupStyle.HeaderTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="2,10,2,6"
+                                                    Padding="2,0,2,6"
+                                                    BorderBrush="{DynamicResource DrillBorderBrush}"
+                                                    BorderThickness="0,0,0,1">
+                                                <TextBlock Text="{Binding Items[0].CategoryTitle}"
+                                                           FontSize="11"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource DrillSecondaryTextBrush}" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </GroupStyle.HeaderTemplate>
+                                </GroupStyle>
+                            </ListView.GroupStyle>
+                        </ListView>
+                        <TextBlock Text="{DynamicResource ToolboxNoSearchResults}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=ToolboxListView}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </Grid>
                 </Grid>
             </Border>
@@ -915,9 +1145,11 @@
                                     <WrapPanel>
                                         <ui:Button Content="{DynamicResource AddElseIf}"
                                                    Command="{Binding DataContext.AddElseIfCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                                   Visibility="{Binding HasBranches, Converter={StaticResource BoolToVisibility}}"
                                                    Margin="0,0,6,6" />
                                         <ui:Button Content="{DynamicResource AddElse}"
                                                    Command="{Binding DataContext.AddElseCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
+                                                   Visibility="{Binding HasBranches, Converter={StaticResource BoolToVisibility}}"
                                                    Margin="0,0,6,6" />
                                         <ui:Button Content="{DynamicResource DeleteAction}"
                                                    Command="{Binding DataContext.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType={x:Type Page}}}"
@@ -975,9 +1207,9 @@
                             </TabItem.Header>
                             <ScrollViewer x:Name="ImageScrollViewer"
                                           VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled"
+                                          HorizontalScrollBarVisibility="Auto"
                                           CanContentScroll="False"
-                                          PanningMode="VerticalOnly">
+                                          PanningMode="Both">
                                 <Grid DataContext="{Binding SelectedAction}" Margin="12">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -990,10 +1222,11 @@
                                                Style="{StaticResource SectionTitleStyle}"
                                                TextWrapping="Wrap" />
                                     <Border Grid.Row="1"
-                                            MinHeight="220"
-                                            MaxHeight="420"
+                                            Width="{Binding ResultImageFrameWidth}"
+                                            Height="{Binding ResultImageFrameHeight}"
                                             Margin="0,4,0,12"
                                             Padding="8"
+                                            HorizontalAlignment="Center"
                                             Background="{DynamicResource DrillCanvasBrush}"
                                             BorderBrush="{DynamicResource DrillBorderBrush}"
                                             BorderThickness="1"
@@ -1009,18 +1242,12 @@
                                                        Style="{StaticResource CaptionTextStyle}"
                                                        Visibility="{Binding LatestImageSource, Converter={StaticResource NullToVisibilityInverted}}" />
                                             <Image Source="{Binding LatestImageSource}"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
+                                                   HorizontalAlignment="Stretch"
+                                                   VerticalAlignment="Stretch"
                                                    Stretch="Uniform"
                                                    SnapsToDevicePixels="True"
-                                                   RenderTransformOrigin="0.5,0.5"
                                                    ToolTip="{DynamicResource ResultImageZoomHint}"
-                                                   Visibility="{Binding HasLatestImage, Converter={StaticResource BoolToVisibility}}">
-                                                <Image.RenderTransform>
-                                                    <ScaleTransform ScaleX="{Binding ResultImageZoom}"
-                                                                    ScaleY="{Binding ResultImageZoom}" />
-                                                </Image.RenderTransform>
-                                            </Image>
+                                                   Visibility="{Binding HasLatestImage, Converter={StaticResource BoolToVisibility}}" />
                                         </Grid>
                                     </Border>
                                     <TextBlock Grid.Row="2"
@@ -1058,10 +1285,35 @@
             </Border>
         </Grid>
 
-        <ui:InfoBar Grid.Row="4"
-                    IsOpen="True"
-                    IsClosable="False"
-                    Title="{Binding RuntimeStatusText}"
-                    Message="{Binding StatusMessage}" />
+        <GridSplitter x:Name="EquipmentMonitorSplitter"
+                      Grid.Row="3"
+                      Height="6"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="True"
+                      Visibility="Collapsed"
+                      Background="Transparent" />
+
+        <controls:EquipmentCommunicationPanel x:Name="EquipmentMonitor"
+                                              Grid.Row="4"
+                                              ShowValidationTab="True"
+                                              ExpandedStateChanged="EquipmentMonitor_ExpandedStateChanged" />
+
+        <Grid Grid.Row="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ui:InfoBar Grid.Column="0"
+                        Margin="0,0,8,0"
+                        IsOpen="True"
+                        IsClosable="False"
+                        Title="{Binding RuntimeStatusText}"
+                        Message="{Binding StatusMessage}" />
+            <controls:EquipmentActivityStatus Grid.Column="1"
+                                              DataContext="{Binding DataContext, ElementName=EquipmentMonitor}" />
+        </Grid>
     </Grid>
 </Page>

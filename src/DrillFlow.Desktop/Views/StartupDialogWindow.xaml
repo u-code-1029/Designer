@@ -3,6 +3,7 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  Title="DrillFlow Designer"
+                 Icon="/DrillFlow.Desktop;component/Assets/DrillFlow.ico"
                  Width="600"
                  Height="300"
                  MinWidth="520"
@@ -22,7 +23,13 @@
                      ShowMinimize="False"
                      ShowMaximize="False"
                      ShowClose="False"
-                     CanMaximize="False" />
+                     CanMaximize="False">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Width="16"
+                              Height="16"
+                              Source="/DrillFlow.Desktop;component/Assets/DrillFlow.png" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
 
         <Border Grid.Row="1"
                 Margin="24"

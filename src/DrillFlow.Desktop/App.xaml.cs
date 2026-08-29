@@ -107,6 +107,7 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<IUserSettingsStore, UserSettingsStore>();
                     services.AddSingleton<ILocalizationService, LocalizationService>();
                     services.AddSingleton<IApplicationThemeService, ApplicationThemeService>();
+                    services.AddSingleton<IWorkflowValidationPolicy, WorkflowValidationPolicy>();
                     services.AddSingleton<IWorkflowDocumentService, WorkflowDocumentService>();
                     services.AddSingleton<IWorkflowExecutionFacade, WorkflowExecutionFacade>();
                     services.AddSingleton<IFileDialogService, FileDialogService>();
@@ -118,6 +119,11 @@ public partial class App : System.Windows.Application
                     services.AddSingleton<IDefaultFileLauncher, DefaultFileLauncher>();
                     services.AddSingleton<IResponseSimulationDialogService, ResponseSimulationDialogService>();
                     services.AddSingleton<IExchangeFolderLauncher, ExchangeFolderLauncher>();
+                    services.AddSingleton<IEquipmentExchangePathLauncher, EquipmentExchangePathLauncher>();
+                    services.AddSingleton<IEquipmentScreenPopOutService, EquipmentScreenPopOutService>();
+                    services.AddSingleton<EquipmentCommunicationMonitorViewModel>();
+                    services.AddSingleton<IEquipmentExchangeTraceSink>(provider =>
+                        provider.GetRequiredService<EquipmentCommunicationMonitorViewModel>());
 
                     services.AddSingleton<MainWindowViewModel>();
                     services.AddSingleton<MainPageViewModel>();
@@ -287,6 +293,7 @@ public partial class App : System.Windows.Application
                     ? fallback.Language
                     : persisted.Language,
                 Theme = ThemeSelection.Normalize(persisted.Theme),
+                ValidateWorkflowOnEveryChange = persisted.ValidateWorkflowOnEveryChange,
                 Communication = persisted.Communication
             };
 

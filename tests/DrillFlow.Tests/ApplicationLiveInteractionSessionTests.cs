@@ -30,12 +30,13 @@ public sealed class ApplicationLiveInteractionSessionTests
         var lens = await session.ChangeLensAsync("no_change");
         var acb = await session.AutoContrastBrightnessAsync(7.5E-4);
         var integration = await session.IntegrateAsync(8E-4, 8);
+        var om = await session.RequestOmImageAsync();
 
         Assert.Equal(
-            new[] { 1, 2, 3, 4, 5, 6, 7 },
+            new[] { 1, 2, 3, 4, 5, 6, 7, 8 },
             transport.Requests.Select(item => item.CorrelationId));
         Assert.Equal(
-            new[] { "live", "stage", "camera", "focus", "lens", "acb", "integration" },
+            new[] { "live", "stage", "camera", "focus", "lens", "acb", "integration", "om" },
             transport.Requests.Select(item => item.Action));
 
         var liveRequest = transport.Requests[0];
@@ -60,6 +61,11 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.Equal(8E-4, transport.Requests[6].Parameters["hfw"]);
         Assert.Equal(8, transport.Requests[6].Parameters["frame_count"]);
         Assert.Equal(integration.RequestedImagePath, transport.Requests[6].Parameters["image_path"]);
+        Assert.Single(transport.Requests[7].Parameters);
+        Assert.Equal(om.RequestedImagePath, transport.Requests[7].Parameters["image_path"]);
+        Assert.Equal(
+            Path.Combine(directory.Path, ".drillflow-live", "om-8.bmp"),
+            om.RequestedImagePath);
 
         Assert.Equal(2, stage.CorrelationId);
         Assert.Equal(3, camera.CorrelationId);
@@ -97,6 +103,7 @@ public sealed class ApplicationLiveInteractionSessionTests
         var firstLive = await session.RequestFrameAsync(1E-3);
         var secondLive = await session.RequestFrameAsync(1E-3);
         var integration = await session.IntegrateAsync(1E-3, 4);
+        var om = await session.RequestOmImageAsync();
 
         Assert.Equal(
             Path.Combine(configuredLiveDirectory, "live-1.bmp"),
@@ -109,6 +116,9 @@ public sealed class ApplicationLiveInteractionSessionTests
             Path.Combine(directory.Path, ".drillflow-live", "integration-3.bmp"),
             integration.RequestedImagePath);
         Assert.Equal(
+            Path.Combine(directory.Path, ".drillflow-live", "om-4.bmp"),
+            om.RequestedImagePath);
+        Assert.Equal(
             firstLive.RequestedImagePath,
             transport.Requests[0].Parameters["image_path"]);
         Assert.Equal(
@@ -117,6 +127,9 @@ public sealed class ApplicationLiveInteractionSessionTests
         Assert.Equal(
             integration.RequestedImagePath,
             transport.Requests[2].Parameters["image_path"]);
+        Assert.Equal(
+            om.RequestedImagePath,
+            transport.Requests[3].Parameters["image_path"]);
     }
 
     [Theory]
@@ -414,6 +427,9 @@ public sealed class ApplicationLiveInteractionSessionTests
             case "integration":
                 properties["hfw"] = request.Parameters["hfw"];
                 properties["frame_count"] = request.Parameters["frame_count"];
+                properties["image_path"] = request.Parameters["image_path"];
+                break;
+            case "om":
                 properties["image_path"] = request.Parameters["image_path"];
                 break;
         }

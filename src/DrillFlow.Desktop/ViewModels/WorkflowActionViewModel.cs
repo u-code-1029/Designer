@@ -20,8 +20,10 @@ namespace DrillFlow.Desktop.ViewModels;
 public sealed class WorkflowActionViewModel : ObservableObject
 {
     internal const double MinimumResultImageZoom = 0.5;
-    internal const double MaximumResultImageZoom = 3.0;
+    internal const double MaximumResultImageZoom = 2.0;
     internal const double ResultImageZoomStep = 0.25;
+    internal const double DefaultResultImageFrameWidth = 220.0;
+    internal const double DefaultResultImageFrameHeight = 140.0;
 
     private static readonly Regex AliasPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
     private readonly ILocalizationService _localization;
@@ -307,6 +309,8 @@ public sealed class WorkflowActionViewModel : ObservableObject
                 OnPropertyChanged(nameof(CanZoomResultImageIn));
                 OnPropertyChanged(nameof(CanZoomResultImageOut));
                 OnPropertyChanged(nameof(ResultImageZoomText));
+                OnPropertyChanged(nameof(ResultImageFrameWidth));
+                OnPropertyChanged(nameof(ResultImageFrameHeight));
             }
         }
     }
@@ -316,6 +320,10 @@ public sealed class WorkflowActionViewModel : ObservableObject
     public bool CanZoomResultImageOut => HasLatestImage && ResultImageZoom > MinimumResultImageZoom;
 
     public string ResultImageZoomText => ResultImageZoom.ToString("P0");
+
+    public double ResultImageFrameWidth => DefaultResultImageFrameWidth * ResultImageZoom;
+
+    public double ResultImageFrameHeight => DefaultResultImageFrameHeight * ResultImageZoom;
 
     public bool IsLatestImageLoading => _isLatestImageLoading;
 

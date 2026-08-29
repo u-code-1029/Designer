@@ -1,0 +1,139 @@
+<ui:FluentWindow x:Class="DrillFlow.Desktop.Views.EquipmentScreenWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:viewModels="clr-namespace:DrillFlow.Desktop.ViewModels"
+                 Title="{DynamicResource EquipmentScreenWindowTitle}"
+                 Icon="/DrillFlow.Desktop;component/Assets/DrillFlow.ico"
+                 Width="1120"
+                 Height="720"
+                 MinWidth="720"
+                 MinHeight="480"
+                 WindowStartupLocation="CenterOwner"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="None">
+    <ui:FluentWindow.Resources>
+        <ControlTemplate x:Key="PreviewToggleVectorIconTemplate" TargetType="Control">
+            <Grid>
+                <Path x:Name="PlayMark"
+                      Data="M6,3.5 L16,10 6,16.5 Z"
+                      Fill="{TemplateBinding Foreground}"
+                      Stretch="Uniform"
+                      Margin="4" />
+                <Path x:Name="PauseMark"
+                      Data="M5,3 H8 V17 H5 Z M12,3 H15 V17 H12 Z"
+                      Fill="{TemplateBinding Foreground}"
+                      Stretch="Uniform"
+                      Margin="4"
+                      Visibility="Collapsed" />
+            </Grid>
+            <ControlTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsPreviewPlaying}" Value="True">
+                    <Setter TargetName="PlayMark" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="PauseMark" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+    </ui:FluentWindow.Resources>
+
+    <Grid Background="{DynamicResource DrillCanvasBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0"
+                     Title="{DynamicResource EquipmentScreenWindowTitle}"
+                     ShowMinimize="True"
+                     ShowMaximize="True"
+                     ShowClose="True"
+                     CanMaximize="True">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Width="16"
+                              Height="16"
+                              Source="/DrillFlow.Desktop;component/Assets/DrillFlow.png" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <Grid Grid.Row="1" Background="{DynamicResource DrillCanvasBrush}">
+            <Image Source="{Binding LatestFrameSource}"
+                   Stretch="Uniform"
+                   RenderOptions.BitmapScalingMode="HighQuality" />
+
+            <Border HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="16"
+                    Padding="10,6"
+                    Background="{DynamicResource DrillSurfaceBrush}"
+                    BorderBrush="{DynamicResource DrillBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="14">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{DynamicResource DrillSecondaryTextBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static viewModels:EquipmentScreenConnectionState.Connecting}">
+                                        <Setter Property="Fill" Value="{DynamicResource DrillWarningBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static viewModels:EquipmentScreenConnectionState.Connected}">
+                                        <Setter Property="Fill" Value="{DynamicResource DrillSuccessBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static viewModels:EquipmentScreenConnectionState.Faulted}">
+                                        <Setter Property="Fill" Value="{DynamicResource DrillDangerBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock Text="{Binding ConnectionStateText}"
+                               Foreground="{DynamicResource DrillTextBrush}"
+                               FontWeight="SemiBold" />
+                </StackPanel>
+            </Border>
+
+            <ui:Button HorizontalAlignment="Right"
+                       VerticalAlignment="Top"
+                       Margin="16"
+                       Width="40"
+                       Height="36"
+                       Padding="0"
+                       Command="{Binding TogglePreviewCommand}"
+                       ToolTip="{Binding PreviewToggleToolTip}"
+                       AutomationProperties.Name="{Binding PreviewToggleToolTip}">
+                <Control Width="22"
+                         Height="22"
+                         Foreground="{DynamicResource DrillTextBrush}"
+                         Template="{StaticResource PreviewToggleVectorIconTemplate}" />
+            </ui:Button>
+
+            <TextBlock Text="{Binding PopOutPreviewMessage}"
+                       MaxWidth="420"
+                       Margin="30"
+                       Padding="16,11"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource DrillTextBrush}"
+                       Background="{DynamicResource DrillSurfaceBrush}"
+                       FontSize="15">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsPopOutPreviewActive}" Value="True" />
+                                    <Condition Binding="{Binding HasLatestFrame}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

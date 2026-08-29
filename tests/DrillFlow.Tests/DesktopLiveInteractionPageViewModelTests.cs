@@ -159,9 +159,11 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal("relative", viewModel.StageMoveMode);
+        Assert.Equal(new[] { "relative", "absolute" }, viewModel.MoveModeOptions);
         Assert.Equal("0E0", viewModel.StageInputXText);
         Assert.Equal("relative", viewModel.CameraMoveMode);
         Assert.Equal("no_change", viewModel.LensMode);
+        Assert.Equal(new[] { "lens1", "lens2", "no_change" }, viewModel.LensModeOptions);
         Assert.Equal("50E-6", viewModel.FocusRangeText);
         Assert.Equal("13", viewModel.FocusStepsText);
         Assert.Equal(8, viewModel.IntegrationFrameCount);
@@ -691,6 +693,85 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await viewModel.ShutdownAsync();
     }
 
+    [Fact]
+    public async Task AcquireOmImage_PausesLiveDisplaysDecodedNavigationImageAndResumesLive()
+    {
+        var session = new InteractiveMoveSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.IsOmPanelVisible);
+        await viewModel.AcquireOmImageCommand.ExecuteAsync(null)
+            .WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(session.FirstFrameCanceled.Task.IsCompleted);
+        Assert.True(session.OmStartedAfterFrameCancellation);
+        Assert.Equal(1, session.OmCallCount);
+        Assert.Equal(1, session.MaximumConcurrentEquipmentCalls);
+        Assert.True(viewModel.HasOmImage);
+        Assert.NotNull(viewModel.OmImageSource);
+        Assert.Equal(session.LastOmImagePath, viewModel.OmImagePath);
+        Assert.Equal(706, viewModel.LastCorrelationId);
+        Assert.True(viewModel.IsStreamingRequested);
+        await WaitUntilAsync(() => !File.Exists(session.LastOmImagePath));
+
+        viewModel.IsOmPanelVisible = false;
+        Assert.False(viewModel.IsOmPanelVisible);
+        Assert.True(viewModel.HasOmImage);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task CancelNonLiveOmRequest_CancelsOmAndResumesLiveWithoutReplacingImage()
+    {
+        var session = new InteractiveMoveSession { BlockOm = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        var acquisition = viewModel.AcquireOmImageCommand.ExecuteAsync(null);
+        await session.OmStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.True(viewModel.IsNonLiveRequestPending);
+
+        viewModel.CancelNonLiveRequestCommand.Execute(null);
+        await session.OmCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await acquisition.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(viewModel.HasOmImage);
+        Assert.True(viewModel.IsStreamingRequested);
+        Assert.Equal(1, session.MaximumConcurrentEquipmentCalls);
+
+        viewModel.StopCommand.Execute(null);
+        await session.SecondFrameCanceled.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task Shutdown_CancelsAndDrainsPendingOmRequestWithoutRestartingLiveFrames()
+    {
+        var session = new InteractiveMoveSession { BlockOm = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        var acquisition = viewModel.AcquireOmImageCommand.ExecuteAsync(null);
+        await session.OmStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        await viewModel.ShutdownAsync().WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        await acquisition.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(session.OmCanceled.Task.IsCompleted);
+        Assert.Equal(1, session.FrameCallCount);
+        Assert.False(viewModel.IsStreamingRequested);
+        Assert.False(viewModel.IsNonLiveRequestPending);
+    }
+
     private static LiveInteractionPageViewModel CreateViewModel(
         ILiveInteractionSession session,
         IEquipmentResponseSimulator simulator)
@@ -828,6 +909,12 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             }
         }
 
+        public Task<LiveImageExchangeResult> RequestOmImageAsync(
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
         public Task<EquipmentResponseMessage> MoveStageAsync(
             string moveMode,
             double stageXMetres,
@@ -910,6 +997,9 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                         })));
         }
 
+        public Task<LiveImageExchangeResult> RequestOmImageAsync(
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<EquipmentResponseMessage> MoveStageAsync(
             string moveMode,
             double stageXMetres,
@@ -968,6 +1058,10 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         public TaskCompletionSource<bool> CaptureCanceled { get; } = NewSignal();
 
+        public TaskCompletionSource<bool> OmStarted { get; } = NewSignal();
+
+        public TaskCompletionSource<bool> OmCanceled { get; } = NewSignal();
+
         public bool BlockMove { get; set; }
 
         public bool FailMove { get; set; }
@@ -976,9 +1070,17 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         public bool FailCapture { get; set; }
 
+        public bool BlockOm { get; set; }
+
+        public bool FailOm { get; set; }
+
         public int FrameCallCount => Volatile.Read(ref _frameCalls);
 
         public int MoveCallCount { get; private set; }
+
+        public int OmCallCount { get; private set; }
+
+        public string LastOmImagePath { get; private set; } = string.Empty;
 
         public double LastStageMoveXMetres { get; private set; }
 
@@ -1005,6 +1107,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         public bool MoveStartedAfterFrameCancellation { get; private set; }
 
         public bool CaptureStartedAfterFrameCancellation { get; private set; }
+
+        public bool OmStartedAfterFrameCancellation { get; private set; }
 
         public int MaximumConcurrentEquipmentCalls =>
             Volatile.Read(ref _maximumConcurrentEquipmentCalls);
@@ -1040,6 +1144,56 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                 {
                     SecondFrameCanceled.TrySetResult(true);
                 }
+            }
+        }
+
+        public async Task<LiveImageExchangeResult> RequestOmImageAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnterCall();
+            try
+            {
+                OmCallCount++;
+                OmStartedAfterFrameCancellation = FirstFrameCanceled.Task.IsCompleted;
+                OmStarted.TrySetResult(true);
+                if (FailOm)
+                {
+                    throw new LiveEquipmentActionFailedException(
+                        new EquipmentResponseMessage(706, "om", 1));
+                }
+
+                if (BlockOm)
+                {
+                    try
+                    {
+                        await Task.Delay(Timeout.Infinite, cancellationToken);
+                    }
+                    finally
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            OmCanceled.TrySetResult(true);
+                        }
+                    }
+                }
+
+                LastOmImagePath = Path.GetTempFileName();
+                File.WriteAllBytes(LastOmImagePath, new byte[] { 1, 2, 3 });
+                return new LiveImageExchangeResult(
+                    new EquipmentResponseMessage(
+                        706,
+                        "om",
+                        0,
+                        new Dictionary<string, object?>
+                        {
+                            ["image_path"] = LastOmImagePath,
+                        }),
+                    LastOmImagePath);
+            }
+            finally
+            {
+                ExitCall();
             }
         }
 

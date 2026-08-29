@@ -19,6 +19,7 @@ public sealed class SettingsPageViewModel : ObservableObject
     private readonly IUserSettingsStore _settingsStore;
     private readonly ILocalizationService _localization;
     private readonly IApplicationThemeService _themeService;
+    private readonly IWorkflowValidationPolicy _validationPolicy;
     private readonly EquipmentCommunicationOptions _liveOptions;
     private readonly IWorkflowExecutionFacade _execution;
     private readonly LiveInteractionPageViewModel _liveInteraction;
@@ -27,6 +28,7 @@ public sealed class SettingsPageViewModel : ObservableObject
     private readonly ILogger<SettingsPageViewModel> _logger;
     private string _language = "Auto";
     private string _theme = ThemeSelection.System;
+    private bool _validateWorkflowOnEveryChange = true;
     private string _exchangeFolder = string.Empty;
     private string _liveImageFolder = string.Empty;
     private string _requestFileName = "request.xml";
@@ -50,6 +52,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         IUserSettingsStore settingsStore,
         ILocalizationService localization,
         IApplicationThemeService themeService,
+        IWorkflowValidationPolicy validationPolicy,
         IOptions<EquipmentCommunicationOptions> liveOptions,
         IWorkflowExecutionFacade execution,
         LiveInteractionPageViewModel liveInteraction,
@@ -60,6 +63,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         _settingsStore = settingsStore;
         _localization = localization;
         _themeService = themeService;
+        _validationPolicy = validationPolicy;
         _liveOptions = liveOptions.Value;
         _execution = execution;
         _liveInteraction = liveInteraction;
@@ -156,6 +160,18 @@ public sealed class SettingsPageViewModel : ObservableObject
             if (SetProperty(ref _theme, normalized))
             {
                 _themeService.ApplyTheme(normalized);
+            }
+        }
+    }
+
+    public bool ValidateWorkflowOnEveryChange
+    {
+        get => _validateWorkflowOnEveryChange;
+        set
+        {
+            if (SetProperty(ref _validateWorkflowOnEveryChange, value))
+            {
+                _validationPolicy.Apply(value);
             }
         }
     }
@@ -329,6 +345,7 @@ public sealed class SettingsPageViewModel : ObservableObject
 
         Language = preferences.Language;
         Theme = preferences.Theme;
+        ValidateWorkflowOnEveryChange = preferences.ValidateWorkflowOnEveryChange;
         ExchangeFolder = communication.ExchangeFolder;
         LiveImageFolder = communication.ResolveLiveImageFolder();
         RequestFileName = communication.RequestFileName;
@@ -367,6 +384,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             Language = Language,
             Theme = Theme,
+            ValidateWorkflowOnEveryChange = ValidateWorkflowOnEveryChange,
             Communication = communication
         };
 

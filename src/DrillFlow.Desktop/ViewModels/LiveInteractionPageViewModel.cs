@@ -129,6 +129,9 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private string _focusValidationMessage = string.Empty;
     private int _integrationFrameCount = 8;
     private ImageSource? _liveImageSource;
+    private ImageSource? _omImageSource;
+    private string _omImagePath = string.Empty;
+    private bool _isOmPanelVisible = true;
     private string _imagePath = string.Empty;
     private int _imagePixelWidth;
     private int _imagePixelHeight;
@@ -206,6 +209,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         CancelNonLiveRequestCommand = new RelayCommand(
             CancelNonLiveRequest,
             () => CanCancelNonLiveRequest);
+        AcquireOmImageCommand = new AsyncRelayCommand(AcquireOmImageAsync, CanAcquireOmImage);
         CaptureCommand = new AsyncRelayCommand(CaptureAsync, CanCapture);
         ExecuteStageMoveCommand = new AsyncRelayCommand(ExecuteStageMoveAsync, CanExecuteStageMove);
         ExecuteCameraMoveCommand = new AsyncRelayCommand(ExecuteCameraMoveAsync, CanExecuteCameraMove);
@@ -238,6 +242,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     public IRelayCommand StopCommand { get; }
 
     public IRelayCommand CancelNonLiveRequestCommand { get; }
+
+    public IAsyncRelayCommand AcquireOmImageCommand { get; }
 
     public IAsyncRelayCommand CaptureCommand { get; }
 
@@ -439,6 +445,19 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     }
 
     public int[] IntegrationFrameCountOptions { get; } = { 1, 2, 4, 8, 16, 32, 64 };
+
+    public string[] MoveModeOptions { get; } =
+    {
+        LiveInteractionProtocol.RelativeMoveMode,
+        LiveInteractionProtocol.AbsoluteMoveMode
+    };
+
+    public string[] LensModeOptions { get; } =
+    {
+        LiveInteractionProtocol.Lens1Mode,
+        LiveInteractionProtocol.Lens2Mode,
+        LiveInteractionProtocol.NoLensChangeMode
+    };
 
     public string StageMoveMode
     {
@@ -681,6 +700,32 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     }
 
     public bool HasImage => LiveImageSource is not null;
+
+    public ImageSource? OmImageSource
+    {
+        get => _omImageSource;
+        private set
+        {
+            if (SetProperty(ref _omImageSource, value))
+            {
+                OnPropertyChanged(nameof(HasOmImage));
+            }
+        }
+    }
+
+    public bool HasOmImage => OmImageSource is not null;
+
+    public string OmImagePath
+    {
+        get => _omImagePath;
+        private set => SetProperty(ref _omImagePath, value ?? string.Empty);
+    }
+
+    public bool IsOmPanelVisible
+    {
+        get => _isOmPanelVisible;
+        set => SetProperty(ref _isOmPanelVisible, value);
+    }
 
     /// <summary>
     /// True only when the displayed image was requested with the current HFW. Movement remains
@@ -1113,6 +1158,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         var autoContrastBrightnessTask =
             ExecuteAutoContrastBrightnessCommand.ExecutionTask ?? Task.CompletedTask;
         var focusTask = ExecuteFocusCommand.ExecutionTask ?? Task.CompletedTask;
+        var omImageTask = AcquireOmImageCommand.ExecutionTask ?? Task.CompletedTask;
         var singleFrameResponseTask = GenerateSingleFrameResponseCommand.ExecutionTask
                                       ?? Task.CompletedTask;
         var pendingOperations = Task.WhenAll(
@@ -1125,6 +1171,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             lensTask,
             autoContrastBrightnessTask,
             focusTask,
+            omImageTask,
             singleFrameResponseTask);
         var completedWithinBudget = await LiveInteractionShutdownDrain
             .WaitForCompletionAsync(pendingOperations, ShutdownDrainTimeout);
@@ -1907,6 +1954,127 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
             operationCancellation.Dispose();
             IsMoving = false;
+            SetExclusiveOperation(false);
+            RefreshCommands();
+            if (completed || resumeAfterCancellation)
+            {
+                ResumeStreamingAfterExclusiveOperation(
+                    resumeStreaming || resumeAfterCancellation);
+            }
+            else
+            {
+                SetRestartWhenStreamStops(false);
+            }
+        }
+    }
+
+    private bool CanAcquireOmImage() => CanExecuteManualEquipmentAction();
+
+    private async Task AcquireOmImageAsync()
+    {
+        if (!CanAcquireOmImage())
+        {
+            return;
+        }
+
+        var activationGeneration = _activationGeneration;
+        var completed = false;
+        var resumeStreaming = false;
+        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _shutdownCancellation.Token);
+        _capturePostResponseCancellation = operationCancellation;
+        LiveImageExchangeResult? imageExchange = null;
+        NonLiveRequestState? requestState = null;
+        SetExclusiveOperation(true);
+        RefreshCommands();
+        try
+        {
+            resumeStreaming = await PauseStreamingForExclusiveOperationAsync();
+            if (!CanPublishExclusiveCommand(activationGeneration))
+            {
+                return;
+            }
+
+            IsCapturing = true;
+            SetStatus("LiveStatusOmCapturing");
+            requestState = BeginNonLiveRequest(operationCancellation);
+            imageExchange = await _session.RequestOmImageAsync(operationCancellation.Token);
+            MarkNonLiveResponseReceived(requestState);
+            var response = imageExchange.Response;
+            ApplyCorrelationResponse(response);
+            if (_isShuttingDown
+                || !_isPageActive
+                || activationGeneration != _activationGeneration)
+            {
+                return;
+            }
+
+            LiveImageDecodeResult image;
+            using (var imageIoTimeout = LiveImageIoTimeout.CreateSource(
+                       _communicationOptions.ResponseTimeout))
+            using (var imageIoCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                       operationCancellation.Token,
+                       imageIoTimeout.Token))
+            {
+                try
+                {
+                    image = await LiveImageFileLoader.LoadAsync(
+                        response.ImagePath!,
+                        _imageDecoder,
+                        imageIoCancellation.Token);
+                }
+                catch (OperationCanceledException exception) when (
+                    LiveImageIoTimeout.IsTimeout(
+                        imageIoTimeout,
+                        operationCancellation.Token))
+                {
+                    throw LiveImageIoTimeout.CreateException(
+                        _communicationOptions.ResponseTimeout,
+                        exception);
+                }
+            }
+
+            if (_isShuttingDown
+                || !_isPageActive
+                || activationGeneration != _activationGeneration)
+            {
+                return;
+            }
+
+            OmImagePath = response.ImagePath ?? string.Empty;
+            OmImageSource = image.ImageSource;
+            SetStatus("LiveStatusOmCaptured", response.CorrelationId);
+            completed = true;
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            if (requestState?.ResumeLiveWhenCanceled == true)
+            {
+                SetStatus("LiveStatusNonLiveRequestCanceled");
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "OM navigation image acquisition failed.");
+            SetStatusError("LiveStatusOmCaptureFailed", exception.Message);
+        }
+        finally
+        {
+            var resumeAfterCancellation = FinishNonLiveRequest(requestState);
+            if (imageExchange is not null)
+            {
+                // The decoded ImageSource owns its bytes. Delete only the correlation-owned
+                // output; a controller-owned alternate response image remains untouched.
+                TryDeleteOwnedResponseImage(imageExchange);
+            }
+
+            if (ReferenceEquals(_capturePostResponseCancellation, operationCancellation))
+            {
+                _capturePostResponseCancellation = null;
+            }
+
+            operationCancellation.Dispose();
+            IsCapturing = false;
             SetExclusiveOperation(false);
             RefreshCommands();
             if (completed || resumeAfterCancellation)
@@ -2868,6 +3036,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         StartCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
         CaptureCommand.NotifyCanExecuteChanged();
+        AcquireOmImageCommand.NotifyCanExecuteChanged();
         MoveToTargetCommand.NotifyCanExecuteChanged();
         ExecuteStageMoveCommand.NotifyCanExecuteChanged();
         ExecuteCameraMoveCommand.NotifyCanExecuteChanged();

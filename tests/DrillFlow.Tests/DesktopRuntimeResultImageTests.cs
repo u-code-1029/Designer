@@ -171,6 +171,17 @@ public sealed class DesktopRuntimeResultImageTests
             action.AddResult(CreateExecutionResult(imagePath));
             await WaitUntilAsync(() => action.HasLatestImage);
 
+            Assert.Equal(WorkflowActionViewModel.DefaultResultImageFrameWidth, action.ResultImageFrameWidth);
+            Assert.Equal(WorkflowActionViewModel.DefaultResultImageFrameHeight, action.ResultImageFrameHeight);
+
+            action.ZoomResultImageIn();
+            Assert.Equal(
+                WorkflowActionViewModel.DefaultResultImageFrameWidth * 1.25,
+                action.ResultImageFrameWidth);
+            Assert.Equal(
+                WorkflowActionViewModel.DefaultResultImageFrameHeight * 1.25,
+                action.ResultImageFrameHeight);
+
             for (var index = 0; index < 20; index++)
             {
                 action.ZoomResultImageOut();

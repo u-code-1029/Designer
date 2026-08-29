@@ -44,6 +44,57 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_ReportsPublishedRequestAndMatchedResponseToTraceSink()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var traceSink = new RecordingTraceSink();
+        using var transport = CreateTransport(options, traceSink: traceSink);
+        var request = StageRequest(133, 1E-3, -2E-3);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        var published = await traceSink.RequestPublished.Task.WithTimeoutAsync(
+            TimeSpan.FromSeconds(3));
+
+        Assert.Equal(RequestPath(options), published.FilePath);
+        Assert.Same(request, published.Request);
+        Assert.Equal(1, published.Attempt);
+
+        PublishResponse(options, StageResponse(133, 0.25, -0.5));
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+        var matched = await traceSink.ResponseMatched.Task.WithTimeoutAsync(
+            TimeSpan.FromSeconds(3));
+
+        Assert.Equal(ResponsePath(options), matched.FilePath);
+        Assert.Same(response, matched.Response);
+        Assert.Equal(133, matched.Response.CorrelationId);
+        Assert.Equal(EquipmentActionNames.Stage, matched.Response.Action);
+        Assert.Equal(new[] { "request", "response" }, traceSink.NotificationOrder);
+    }
+
+    [Fact]
+    public async Task Exchange_TraceSinkFailuresDoNotInterruptPhysicalExchange()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var traceSink = new ThrowingTraceSink();
+        using var transport = CreateTransport(options, traceSink: traceSink);
+        var request = StageRequest(134);
+
+        var exchange = transport.ExchangeAsync(request, CancellationToken.None);
+        await WaitForRequestAsync(options, request);
+        PublishResponse(options, StageResponse(134, 0.125, -0.25));
+
+        var response = await exchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(134, response.CorrelationId);
+        Assert.Equal(1, traceSink.RequestPublishedCount);
+        Assert.Equal(1, traceSink.ResponseMatchedCount);
+        Assert.Equal(0, traceSink.ExchangeStoppedCount);
+    }
+
+    [Fact]
     public async Task Exchange_DetectsWhitespaceVariedStageResponseWithPaddedScientificExponents()
     {
         using var directory = new TempDirectory();
@@ -700,12 +751,17 @@ public sealed class InfrastructureFileTransportTests
 
     private FileEquipmentTransport CreateTransport(
         EquipmentCommunicationOptions options,
-        ILogger<FileEquipmentTransport>? logger = null)
+        ILogger<FileEquipmentTransport>? logger = null,
+        IEquipmentExchangeTraceSink? traceSink = null)
     {
-        return new FileEquipmentTransport(
-            Options.Create(options),
-            logger ?? NullLogger<FileEquipmentTransport>.Instance,
-            _codec);
+        var effectiveLogger = logger ?? NullLogger<FileEquipmentTransport>.Instance;
+        return traceSink is null
+            ? new FileEquipmentTransport(Options.Create(options), effectiveLogger, _codec)
+            : new FileEquipmentTransport(
+                Options.Create(options),
+                effectiveLogger,
+                _codec,
+                traceSink);
     }
 
     private async Task<byte[]> WaitForRequestAsync(
@@ -971,6 +1027,134 @@ public sealed class InfrastructureFileTransportTests
             {
             }
         }
+    }
+
+    private sealed class RecordingTraceSink : IEquipmentExchangeTraceSink
+    {
+        private readonly object _gate = new object();
+        private readonly List<string> _notificationOrder = new List<string>();
+
+        public TaskCompletionSource<PublishedRequestTrace> RequestPublished { get; } =
+            new TaskCompletionSource<PublishedRequestTrace>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<MatchedResponseTrace> ResponseMatched { get; } =
+            new TaskCompletionSource<MatchedResponseTrace>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<string> NotificationOrder
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _notificationOrder.ToArray();
+                }
+            }
+        }
+
+        public void OnRequestPublished(
+            string filePath,
+            EquipmentRequestMessage request,
+            int attempt)
+        {
+            lock (_gate)
+            {
+                _notificationOrder.Add("request");
+            }
+
+            RequestPublished.TrySetResult(new PublishedRequestTrace(filePath, request, attempt));
+        }
+
+        public void OnResponseMatched(
+            string filePath,
+            EquipmentResponseMessage response)
+        {
+            lock (_gate)
+            {
+                _notificationOrder.Add("response");
+            }
+
+            ResponseMatched.TrySetResult(new MatchedResponseTrace(filePath, response));
+        }
+
+        public void OnExchangeStopped(
+            string filePath,
+            EquipmentRequestMessage request,
+            string reason)
+        {
+        }
+    }
+
+    private sealed class ThrowingTraceSink : IEquipmentExchangeTraceSink
+    {
+        private int _requestPublishedCount;
+        private int _responseMatchedCount;
+        private int _exchangeStoppedCount;
+
+        public int RequestPublishedCount => Volatile.Read(ref _requestPublishedCount);
+
+        public int ResponseMatchedCount => Volatile.Read(ref _responseMatchedCount);
+
+        public int ExchangeStoppedCount => Volatile.Read(ref _exchangeStoppedCount);
+
+        public void OnRequestPublished(
+            string filePath,
+            EquipmentRequestMessage request,
+            int attempt)
+        {
+            Interlocked.Increment(ref _requestPublishedCount);
+            throw new InvalidOperationException("request trace failure");
+        }
+
+        public void OnResponseMatched(
+            string filePath,
+            EquipmentResponseMessage response)
+        {
+            Interlocked.Increment(ref _responseMatchedCount);
+            throw new InvalidOperationException("response trace failure");
+        }
+
+        public void OnExchangeStopped(
+            string filePath,
+            EquipmentRequestMessage request,
+            string reason)
+        {
+            Interlocked.Increment(ref _exchangeStoppedCount);
+            throw new InvalidOperationException("stopped trace failure");
+        }
+    }
+
+    private sealed class PublishedRequestTrace
+    {
+        public PublishedRequestTrace(
+            string filePath,
+            EquipmentRequestMessage request,
+            int attempt)
+        {
+            FilePath = filePath;
+            Request = request;
+            Attempt = attempt;
+        }
+
+        public string FilePath { get; }
+
+        public EquipmentRequestMessage Request { get; }
+
+        public int Attempt { get; }
+    }
+
+    private sealed class MatchedResponseTrace
+    {
+        public MatchedResponseTrace(string filePath, EquipmentResponseMessage response)
+        {
+            FilePath = filePath;
+            Response = response;
+        }
+
+        public string FilePath { get; }
+
+        public EquipmentResponseMessage Response { get; }
     }
 
     private sealed class TempDirectory : IDisposable

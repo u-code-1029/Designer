@@ -20,6 +20,10 @@ public interface ILiveInteractionSession
         double horizontalFieldWidthMetres,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Requests one navigation image using the canonical <c>om</c> action.</summary>
+    Task<LiveImageExchangeResult> RequestOmImageAsync(
+        CancellationToken cancellationToken = default);
+
     Task<EquipmentResponseMessage> MoveStageAsync(
         string moveMode,
         double stageXMetres,

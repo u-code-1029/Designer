@@ -5,6 +5,8 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -19,7 +21,7 @@ using Wpf.Ui.Controls;
 
 namespace DrillFlow.Desktop.ViewModels;
 
-public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionSource
+public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionSource, IDisposable
 {
     private static readonly TimeSpan CloseStopTimeout = TimeSpan.FromSeconds(2);
 
@@ -33,9 +35,12 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private readonly IResponseSimulationDialogService _responseSimulationDialogs;
     private readonly IExchangeFolderLauncher _exchangeFolderLauncher;
     private readonly IDefaultFileLauncher _defaultFileLauncher;
+    private readonly IWorkflowValidationPolicy _validationPolicy;
     private readonly WorkflowValidator _workflowValidator;
     private readonly ExpressionCompletionProvider _expressionCompletions = new();
     private readonly ILogger<MainPageViewModel> _logger;
+    private readonly Subject<string> _toolboxSearchChanges = new();
+    private readonly IDisposable _toolboxSearchSubscription;
     private readonly Stack<string> _undo = new();
     private readonly Stack<string> _redo = new();
     private readonly HashSet<WorkflowActionViewModel> _selectedActions = new();
@@ -54,6 +59,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private bool _clipboardIsCut;
     private CutActionRuntimeSnapshot? _cutRuntimeSnapshot;
     private object? _explicitPasteTarget;
+    private string _toolboxSearchText = string.Empty;
+    private bool _isValidationCurrent;
 
     public MainPageViewModel(
         ILocalizationService localization,
@@ -66,6 +73,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         IResponseSimulationDialogService responseSimulationDialogs,
         IExchangeFolderLauncher exchangeFolderLauncher,
         IDefaultFileLauncher defaultFileLauncher,
+        IWorkflowValidationPolicy validationPolicy,
         WorkflowValidator workflowValidator,
         ILogger<MainPageViewModel> logger)
     {
@@ -79,31 +87,39 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _responseSimulationDialogs = responseSimulationDialogs;
         _exchangeFolderLauncher = exchangeFolderLauncher;
         _defaultFileLauncher = defaultFileLauncher ?? throw new ArgumentNullException(nameof(defaultFileLauncher));
+        _validationPolicy = validationPolicy ?? throw new ArgumentNullException(nameof(validationPolicy));
         _workflowValidator = workflowValidator;
         _logger = logger;
 
         Actions = new ObservableCollection<WorkflowActionViewModel>();
         Actions.CollectionChanged += OnRootActionsChanged;
+        ValidationIssues = new ObservableCollection<WorkflowValidationIssueViewModel>();
+        ValidationIssues.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasValidationIssues));
+            OnPropertyChanged(nameof(ValidationSummaryText));
+        };
 
-        EquipmentToolboxItems = new ObservableCollection<ToolboxItemViewModel>
+        ToolboxItems = new ObservableCollection<ToolboxItemViewModel>
         {
-            new(WorkflowNodeKind.Stage, "ActionStage", "ToolboxStageDescription", SymbolRegular.ArrowMove20, localization),
-            new(WorkflowNodeKind.Camera, "ActionCamera", "ToolboxCameraDescription", SymbolRegular.Camera20, localization),
-            new(WorkflowNodeKind.Focus, "ActionFocus", "ToolboxFocusDescription", SymbolRegular.ScanCamera20, localization),
-            new(WorkflowNodeKind.Integration, "ActionIntegration", "ToolboxIntegrationDescription", SymbolRegular.ImageMultiple20, localization),
-            new(WorkflowNodeKind.Live, "ActionLive", "ToolboxLiveDescription", SymbolRegular.Live20, localization),
-            new(WorkflowNodeKind.Om, "ActionOm", "ToolboxOmDescription", SymbolRegular.Microscope20, localization),
-            new(WorkflowNodeKind.Lens, "ActionLens", "ToolboxLensDescription", SymbolRegular.CameraSwitch20, localization),
-            new(WorkflowNodeKind.AutoContrastBrightness, "ActionAcb", "ToolboxAcbDescription", SymbolRegular.BrightnessHigh20, localization),
-            new(WorkflowNodeKind.Abort, "ActionAbort", "ToolboxAbortDescription", SymbolRegular.Stop20, localization)
+            new(WorkflowNodeKind.Stage, "ActionStage", "ToolboxStageDescription", SymbolRegular.ArrowMove20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Camera, "ActionCamera", "ToolboxCameraDescription", SymbolRegular.Camera20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Focus, "ActionFocus", "ToolboxFocusDescription", SymbolRegular.ScanCamera20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Integration, "ActionIntegration", "ToolboxIntegrationDescription", SymbolRegular.ImageMultiple20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Live, "ActionLive", "ToolboxLiveDescription", SymbolRegular.Live20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Om, "ActionOm", "ToolboxOmDescription", SymbolRegular.Microscope20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Lens, "ActionLens", "ToolboxLensDescription", SymbolRegular.CameraSwitch20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.AutoContrastBrightness, "ActionAcb", "ToolboxAcbDescription", SymbolRegular.BrightnessHigh20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Abort, "ActionAbort", "ToolboxAbortDescription", SymbolRegular.Stop20, ToolboxItemCategory.Equipment, localization),
+            new(WorkflowNodeKind.Http, "ActionHttp", "ToolboxHttpDescription", SymbolRegular.Globe20, ToolboxItemCategory.Designer, localization),
+            new(WorkflowNodeKind.Delay, "ActionDelay", "ToolboxDelayDescription", SymbolRegular.Timer20, ToolboxItemCategory.Designer, localization),
+            new(WorkflowNodeKind.Repeat, "ActionRepeat", "ToolboxRepeatDescription", SymbolRegular.ArrowRepeatAll20, ToolboxItemCategory.Designer, localization),
+            new(WorkflowNodeKind.Conditional, "ActionConditional", "ToolboxConditionalDescription", SymbolRegular.BranchCompare20, ToolboxItemCategory.Designer, localization)
         };
-        FlowToolboxItems = new ObservableCollection<ToolboxItemViewModel>
-        {
-            new(WorkflowNodeKind.Http, "ActionHttp", "ToolboxHttpDescription", SymbolRegular.Globe20, localization),
-            new(WorkflowNodeKind.Delay, "ActionDelay", "ToolboxDelayDescription", SymbolRegular.Timer20, localization),
-            new(WorkflowNodeKind.Repeat, "ActionRepeat", "ToolboxRepeatDescription", SymbolRegular.ArrowRepeatAll20, localization),
-            new(WorkflowNodeKind.Conditional, "ActionConditional", "ToolboxConditionalDescription", SymbolRegular.BranchCompare20, localization)
-        };
+        FilteredToolboxItems = new ObservableCollection<ToolboxItemViewModel>(ToolboxItems);
+        _toolboxSearchSubscription = _toolboxSearchChanges
+            .Throttle(TimeSpan.FromMilliseconds(500))
+            .Subscribe(searchText => Dispatch(() => ApplyToolboxFilter(searchText)));
 
         NewCommand = new AsyncRelayCommand(NewAsync, () => IsWorkflowEditingEnabled);
         OpenCommand = new AsyncRelayCommand(OpenAsync, () => IsWorkflowEditingEnabled);
@@ -116,12 +132,11 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             () => !IsExecutionBusy && !_liveInteraction.IsInteractionActive);
         RunCommand = new AsyncRelayCommand(
             RunAsync,
-            () => Actions.Count > 0 && IsWorkflowEditingEnabled && IsWorkflowValid);
+            () => Actions.Count > 0 && IsWorkflowEditingEnabled);
         RunSelectedCommand = new AsyncRelayCommand(
             RunSelectedAsync,
-            () => SelectedAction is { IsNodeEnabled: true, HasValidationError: false }
-                  && IsWorkflowEditingEnabled
-                  && IsWorkflowValid);
+            () => SelectedAction is { IsNodeEnabled: true }
+                  && IsWorkflowEditingEnabled);
         TestResponseCommand = new AsyncRelayCommand(
             TestResponseAsync,
             () => SelectedAction is not null
@@ -160,20 +175,39 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         AddToolboxItemCommand = new RelayCommand<ToolboxItemViewModel>(AppendToolboxItem, item => item is not null && IsWorkflowEditingEnabled);
         AddElseIfCommand = new RelayCommand(AddElseIf, CanAddElseIf);
         AddElseCommand = new RelayCommand(AddElse, CanAddElse);
+        SelectValidationIssueCommand = new RelayCommand<WorkflowValidationIssueViewModel>(
+            SelectValidationIssue,
+            issue => issue?.ActionId is not null);
 
         _execution.RunStateChanged += OnRunStateChanged;
         _execution.NodeStateChanged += OnNodeStateChanged;
         _liveInteraction.PropertyChanged += OnLiveInteractionPropertyChanged;
         _localization.LanguageChanged += OnLanguageChanged;
+        _validationPolicy.Changed += OnValidationPolicyChanged;
 
         ReplaceDocument(new WorkflowDocument { Name = _localization["DocumentUntitled"] }, null, false);
     }
 
     public ObservableCollection<WorkflowActionViewModel> Actions { get; }
 
-    public ObservableCollection<ToolboxItemViewModel> EquipmentToolboxItems { get; }
+    public ObservableCollection<ToolboxItemViewModel> ToolboxItems { get; }
 
-    public ObservableCollection<ToolboxItemViewModel> FlowToolboxItems { get; }
+    public ObservableCollection<ToolboxItemViewModel> FilteredToolboxItems { get; }
+
+    public ObservableCollection<WorkflowValidationIssueViewModel> ValidationIssues { get; }
+
+    public string ToolboxSearchText
+    {
+        get => _toolboxSearchText;
+        set
+        {
+            var normalized = value ?? string.Empty;
+            if (SetProperty(ref _toolboxSearchText, normalized))
+            {
+                _toolboxSearchChanges.OnNext(normalized);
+            }
+        }
+    }
 
     public IAsyncRelayCommand NewCommand { get; }
 
@@ -232,6 +266,15 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     public IRelayCommand AddElseIfCommand { get; }
 
     public IRelayCommand AddElseCommand { get; }
+
+    public IRelayCommand<WorkflowValidationIssueViewModel> SelectValidationIssueCommand { get; }
+
+    public void Dispose()
+    {
+        _validationPolicy.Changed -= OnValidationPolicyChanged;
+        _toolboxSearchSubscription.Dispose();
+        _toolboxSearchChanges.Dispose();
+    }
 
     public WorkflowActionViewModel? SelectedAction
     {
@@ -321,6 +364,30 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                                             && !_liveInteraction.IsInteractionActive;
 
     public bool CanCompleteExpressions => IsWorkflowEditingEnabled;
+
+    public bool ValidateWorkflowOnEveryChange => _validationPolicy.ValidateOnEveryChange;
+
+    public bool IsValidationCurrent
+    {
+        get => _isValidationCurrent;
+        private set
+        {
+            if (SetProperty(ref _isValidationCurrent, value))
+            {
+                OnPropertyChanged(nameof(ValidationSummaryText));
+            }
+        }
+    }
+
+    public bool HasValidationIssues => ValidationIssues.Count > 0;
+
+    public string ValidationSummaryText => !IsValidationCurrent
+        ? _localization["WorkflowValidationNotCurrent"]
+        : HasValidationIssues
+            ? string.Format(
+                _localization["WorkflowValidationIssueCount"],
+                ValidationIssues.Count)
+            : _localization["WorkflowValidationNoIssues"];
 
     public bool IsWorkflowValid
     {
@@ -923,6 +990,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 : localErrors);
         }
 
+        UpdateValidationIssues(all, coreResult);
+        IsValidationCurrent = true;
+
         IsWorkflowValid = valid;
         RunSelectedCommand.NotifyCanExecuteChanged();
 
@@ -978,6 +1048,129 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         }
     }
 
+    private void UpdateValidationIssues(
+        IReadOnlyCollection<WorkflowActionViewModel> actions,
+        WorkflowValidationResult coreResult)
+    {
+        var items = new List<WorkflowValidationIssueViewModel>();
+        foreach (var action in actions)
+        {
+            foreach (var message in (action.ValidationErrorText ?? string.Empty)
+                         .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                items.Add(new WorkflowValidationIssueViewModel(
+                    action.Id,
+                    action.Alias,
+                    message,
+                    action.Alias,
+                    ValidationSeverity.Error));
+            }
+        }
+
+        foreach (var issue in coreResult.Issues.Where(candidate =>
+                     candidate.Severity == ValidationSeverity.Warning
+                     || !candidate.NodeId.HasValue))
+        {
+            var action = issue.NodeId.HasValue
+                ? actions.FirstOrDefault(candidate => candidate.Id == issue.NodeId.Value)
+                : null;
+            items.Add(new WorkflowValidationIssueViewModel(
+                issue.NodeId,
+                action?.Alias ?? _localization["Workflow"],
+                FormatValidationDetail(issue),
+                issue.Path,
+                issue.Severity));
+        }
+
+        ValidationIssues.Clear();
+        foreach (var item in items
+                     .GroupBy(candidate => string.Join(
+                         "|",
+                         candidate.ActionId?.ToString() ?? string.Empty,
+                         candidate.Message,
+                         candidate.Path), StringComparer.Ordinal)
+                     .Select(group => group.First()))
+        {
+            ValidationIssues.Add(item);
+        }
+    }
+
+    private async Task ShowValidationFailureDialogAsync()
+    {
+        var errors = ValidationIssues.Where(issue => issue.IsError).ToArray();
+        var details = errors
+            .Take(8)
+            .Select(issue => "• " + issue.ActionAlias + ": " + issue.Message)
+            .ToList();
+        if (errors.Length > details.Count)
+        {
+            details.Add(string.Format(
+                _localization["WorkflowValidationMoreIssues"],
+                errors.Length - details.Count));
+        }
+
+        var message = details.Count == 0
+            ? _localization["ValidationFailed"]
+            : _localization["WorkflowValidationRunBlocked"]
+              + Environment.NewLine
+              + Environment.NewLine
+              + string.Join(Environment.NewLine, details);
+        await _userDialogs.ShowMessageAsync(
+            _localization["WorkflowValidationDialogTitle"],
+            message);
+    }
+
+    private void SelectValidationIssue(WorkflowValidationIssueViewModel? issue)
+    {
+        if (issue?.ActionId is not Guid actionId)
+        {
+            return;
+        }
+
+        SelectAction(EnumerateActions().FirstOrDefault(action => action.Id == actionId));
+    }
+
+    private void ValidateAfterWorkflowEdit()
+    {
+        if (_validationPolicy.ValidateOnEveryChange)
+        {
+            ValidateWorkflow(false);
+            return;
+        }
+
+        MarkValidationStale();
+    }
+
+    private void MarkValidationStale()
+    {
+        foreach (var action in EnumerateActions())
+        {
+            action.SetValidationErrors(Array.Empty<string>());
+        }
+
+        IsValidationCurrent = false;
+        ValidationIssues.Clear();
+        IsWorkflowValid = true;
+    }
+
+    private void OnValidationPolicyChanged(object? sender, EventArgs e)
+    {
+        Dispatch(() =>
+        {
+            OnPropertyChanged(nameof(ValidateWorkflowOnEveryChange));
+            if (_validationPolicy.ValidateOnEveryChange)
+            {
+                ValidateWorkflow(false);
+            }
+            else
+            {
+                MarkValidationStale();
+            }
+
+            NotifyCommandStates();
+        });
+    }
+
     private async Task RunAsync()
     {
         if (!IsWorkflowEditingEnabled)
@@ -987,6 +1180,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
         if (!ValidateWorkflow(true))
         {
+            await ShowValidationFailureDialogAsync();
             return;
         }
 
@@ -1022,10 +1216,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return;
         }
 
-        if (!selected.Validate())
+        if (!ValidateWorkflow(true))
         {
-            StatusMessage = _localization["ValidationFailed"];
-            StatusIsError = true;
+            await ShowValidationFailureDialogAsync();
             return;
         }
 
@@ -1067,6 +1260,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                         validation.Issues.Count(candidate => candidate.Severity == ValidationSeverity.Error),
                         FormatValidationDetail(issue));
                 StatusIsError = true;
+                await ShowValidationFailureDialogAsync();
                 return;
             }
 
@@ -1534,7 +1728,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 or nameof(WorkflowActionViewModel.IsNodeEnabled))
             {
                 IsDirty = true;
-                ValidateWorkflow(false);
+                ValidateAfterWorkflowEdit();
                 NotifyCommandStates();
             }
             else if (eventArgs.PropertyName == nameof(WorkflowActionViewModel.HasBreakpoint))
@@ -1563,7 +1757,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 if (eventArgs.PropertyName == nameof(ActionParameterViewModel.Value))
                 {
                     IsDirty = true;
-                    ValidateWorkflow(false);
+                    ValidateAfterWorkflowEdit();
                 }
             };
         }
@@ -1591,7 +1785,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 if (eventArgs.PropertyName == nameof(ActionParameterViewModel.Value))
                 {
                     IsDirty = true;
-                    ValidateWorkflow(false);
+                    ValidateAfterWorkflowEdit();
                 }
             };
         }
@@ -1614,7 +1808,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _document.Nodes.Clear();
         _document.Nodes.AddRange(Actions.Select(action => action.Model));
         IsDirty = true;
-        ValidateWorkflow(false);
+        ValidateAfterWorkflowEdit();
         NotifyCommandStates();
     }
 
@@ -1622,7 +1816,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     {
         if (!_suppressCollectionSync)
         {
-            ValidateWorkflow(false);
+            ValidateAfterWorkflowEdit();
         }
     }
 
@@ -1735,8 +1929,20 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         OnPropertyChanged(nameof(DocumentName));
         OnPropertyChanged(nameof(DocumentDisplayName));
         OnPropertyChanged(nameof(RuntimeStatusText));
+        ApplyToolboxFilter(ToolboxSearchText);
         ValidateWorkflow(false);
         NotifyCommandStates();
+    }
+
+    private void ApplyToolboxFilter(string? searchText)
+    {
+        var matches = ToolboxItems.Where(item => item.MatchesSearch(searchText)).ToArray();
+
+        FilteredToolboxItems.Clear();
+        foreach (var item in matches)
+        {
+            FilteredToolboxItems.Add(item);
+        }
     }
 
     private IEnumerable<WorkflowActionViewModel> EnumerateActions()

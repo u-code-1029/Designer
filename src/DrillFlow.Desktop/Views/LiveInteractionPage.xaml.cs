@@ -9,18 +9,67 @@ using DrillFlow.Desktop.ViewModels;
 
 namespace DrillFlow.Desktop.Views;
 
-public partial class LiveInteractionPage : Page
+public partial class LiveInteractionPage : Page, IEquipmentPanelLayoutHost
 {
+    private const double DefaultEquipmentMonitorExpandedHeight = 220;
     private Point? _contextMenuPoint;
     private LiveImageTarget? _contextMoveTarget;
+    private double _equipmentMonitorExpandedHeight = DefaultEquipmentMonitorExpandedHeight;
 
-    public LiveInteractionPage(LiveInteractionPageViewModel viewModel)
+    public LiveInteractionPage(
+        LiveInteractionPageViewModel viewModel,
+        EquipmentCommunicationMonitorViewModel communicationMonitor)
     {
         InitializeComponent();
         DataContext = viewModel;
+        EquipmentMonitor.DataContext = communicationMonitor;
+    }
+
+    private void EquipmentMonitor_ExpandedStateChanged(object? sender, EventArgs e)
+    {
+        if (!EquipmentMonitor.IsPanelExpanded
+            && EquipmentMonitorRow.ActualHeight >= 150)
+        {
+            _equipmentMonitorExpandedHeight = EquipmentMonitorRow.ActualHeight;
+        }
+
+        var isExpanded = EquipmentMonitor.IsPanelExpanded;
+        EquipmentMonitorSplitterRow.Height = new GridLength(isExpanded ? 6 : 0);
+        EquipmentMonitorSplitter.Visibility = isExpanded
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        EquipmentMonitorRow.MinHeight = isExpanded ? 150 : 0;
+        EquipmentMonitorRow.Height = new GridLength(
+            isExpanded ? _equipmentMonitorExpandedHeight : 0);
     }
 
     private LiveInteractionPageViewModel ViewModel => (LiveInteractionPageViewModel)DataContext;
+
+    public bool IsEquipmentPanelExpanded
+    {
+        get => EquipmentMonitor.IsPanelExpanded;
+        set => EquipmentMonitor.IsPanelExpanded = value;
+    }
+
+    public bool IsCommunicationRegionVisible
+    {
+        get => EquipmentMonitor.IsCommunicationRegionVisible;
+        set => EquipmentMonitor.IsCommunicationRegionVisible = value;
+    }
+
+    public bool SupportsValidationRegion => false;
+
+    public bool IsValidationRegionVisible
+    {
+        get => false;
+        set { }
+    }
+
+    public bool IsPreviewRegionVisible
+    {
+        get => EquipmentMonitor.IsPreviewRegionVisible;
+        set => EquipmentMonitor.IsPreviewRegionVisible = value;
+    }
 
     private void Page_Loaded(object sender, RoutedEventArgs e)
     {

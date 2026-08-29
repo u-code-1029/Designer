@@ -1,13 +1,13 @@
+using DrillFlow.Application.Communication;
+using DrillFlow.Infrastructure.IO;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using DrillFlow.Application.Communication;
-using DrillFlow.Infrastructure.IO;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace DrillFlow.Infrastructure.Communication;
 
@@ -24,6 +24,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
     private readonly EquipmentCommunicationOptions _options;
     private readonly IEquipmentMessageCodec _codec;
+    private readonly IEquipmentExchangeTraceSink _traceSink;
     private readonly ILogger<FileEquipmentTransport> _logger;
     private readonly Func<DateTime> _utcNow;
     private readonly SemaphoreSlim _exchangeGate = new(1, 1);
@@ -38,7 +39,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     public FileEquipmentTransport(
         IOptions<EquipmentCommunicationOptions> options,
         ILogger<FileEquipmentTransport> logger)
-        : this(options, logger, new XmlTemplateEquipmentMessageCodec(), () => DateTime.UtcNow)
+        : this(
+            options,
+            logger,
+            new XmlTemplateEquipmentMessageCodec(),
+            NullEquipmentExchangeTraceSink.Instance,
+            () => DateTime.UtcNow)
     {
     }
 
@@ -46,7 +52,16 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         IOptions<EquipmentCommunicationOptions> options,
         ILogger<FileEquipmentTransport> logger,
         IEquipmentMessageCodec codec)
-        : this(options, logger, codec, () => DateTime.UtcNow)
+        : this(options, logger, codec, NullEquipmentExchangeTraceSink.Instance, () => DateTime.UtcNow)
+    {
+    }
+
+    public FileEquipmentTransport(
+        IOptions<EquipmentCommunicationOptions> options,
+        ILogger<FileEquipmentTransport> logger,
+        IEquipmentMessageCodec codec,
+        IEquipmentExchangeTraceSink traceSink)
+        : this(options, logger, codec, traceSink, () => DateTime.UtcNow)
     {
     }
 
@@ -54,7 +69,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         IOptions<EquipmentCommunicationOptions> options,
         ILogger<FileEquipmentTransport> logger,
         Func<DateTime> utcNow)
-        : this(options, logger, new XmlTemplateEquipmentMessageCodec(), utcNow)
+        : this(
+            options,
+            logger,
+            new XmlTemplateEquipmentMessageCodec(),
+            NullEquipmentExchangeTraceSink.Instance,
+            utcNow)
     {
     }
 
@@ -62,6 +82,16 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         IOptions<EquipmentCommunicationOptions> options,
         ILogger<FileEquipmentTransport> logger,
         IEquipmentMessageCodec codec,
+        Func<DateTime> utcNow)
+        : this(options, logger, codec, NullEquipmentExchangeTraceSink.Instance, utcNow)
+    {
+    }
+
+    internal FileEquipmentTransport(
+        IOptions<EquipmentCommunicationOptions> options,
+        ILogger<FileEquipmentTransport> logger,
+        IEquipmentMessageCodec codec,
+        IEquipmentExchangeTraceSink traceSink,
         Func<DateTime> utcNow)
     {
         if (options is null)
@@ -71,6 +101,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
+        _traceSink = traceSink ?? throw new ArgumentNullException(nameof(traceSink));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
         _options = options.Value;
 
@@ -236,6 +267,9 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 await PublishRequestAsync(requestPath, serializedRequest, cancellationToken)
                     .ConfigureAwait(false);
                 requestWasPublished = true;
+                TryTrace(
+                    () => _traceSink.OnRequestPublished(requestPath, request, attempt),
+                    request);
                 if (string.Equals(request.Action, EquipmentActionNames.Live, StringComparison.Ordinal))
                 {
                     _logger.LogTrace(
@@ -315,6 +349,16 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
         catch (Exception exception) when (cancellationToken.IsCancellationRequested)
         {
+            if (requestWasPublished && publishedRequestPath is not null)
+            {
+                TryTrace(
+                    () => _traceSink.OnExchangeStopped(
+                        publishedRequestPath,
+                        request,
+                        "Canceled"),
+                    request);
+            }
+
             if (requestWasPublished
                 && exchangeLock is not null
                 && publishedRequestPath is not null
@@ -341,6 +385,20 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 "The equipment exchange was canceled.",
                 exception,
                 cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            if (requestWasPublished && publishedRequestPath is not null)
+            {
+                TryTrace(
+                    () => _traceSink.OnExchangeStopped(
+                        publishedRequestPath,
+                        request,
+                        exception.Message),
+                    request);
+            }
+
+            throw;
         }
         finally
         {
@@ -985,6 +1043,10 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 "A validated equipment response snapshot could not be materialized.");
         }
 
+        TryTrace(
+            () => _traceSink.OnResponseMatched(responsePath, response),
+            request);
+
         // The response object is fully materialized before its source file is removed. Consumers
         // therefore never depend on the response pathname remaining present after this method.
         if (_options.ApplicationResponseLifecycle == ApplicationResponseFileLifecycle.DeleteAfterRead)
@@ -1010,6 +1072,23 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 response.CorrelationId);
         }
         return response;
+    }
+
+    private void TryTrace(Action trace, EquipmentRequestMessage request)
+    {
+        try
+        {
+            trace();
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Equipment exchange trace sink failed for {Action} request {CorrelationId}; "
+                + "the physical exchange will continue.",
+                request.Action,
+                request.CorrelationId);
+        }
     }
 
     private void TryDeleteCompletedRequest(
@@ -1690,6 +1769,32 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         Absent,
         Present,
         Unknown,
+    }
+
+    private sealed class NullEquipmentExchangeTraceSink : IEquipmentExchangeTraceSink
+    {
+        public static NullEquipmentExchangeTraceSink Instance { get; } =
+            new NullEquipmentExchangeTraceSink();
+
+        public void OnRequestPublished(
+            string filePath,
+            EquipmentRequestMessage request,
+            int attempt)
+        {
+        }
+
+        public void OnResponseMatched(
+            string filePath,
+            EquipmentResponseMessage response)
+        {
+        }
+
+        public void OnExchangeStopped(
+            string filePath,
+            EquipmentRequestMessage request,
+            string reason)
+        {
+        }
     }
 
     private sealed class CleanupWarningState

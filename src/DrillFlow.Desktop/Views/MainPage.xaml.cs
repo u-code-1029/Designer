@@ -8,18 +8,21 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using DrillFlow.Core.Workflows;
+using DrillFlow.Desktop.Behaviors;
 using DrillFlow.Desktop.ViewModels;
 
 namespace DrillFlow.Desktop.Views;
 
-public partial class MainPage : Page
+public partial class MainPage : Page, IEquipmentPanelLayoutHost
 {
     private const string DragFormat = "DrillFlow.WorkflowDragPayload";
     private const double MinimumCanvasZoom = 0.6;
     private const double MaximumCanvasZoom = 1.6;
     private const double CanvasZoomStep = 0.1;
+    private const double DefaultToolboxWidth = 260;
     private const double InsertionMarkerRestingHeight = 28;
     private const double InsertionMarkerActiveHeight = 32;
+    private const double DefaultEquipmentMonitorExpandedHeight = 220;
     private Point _dragStart;
     private readonly Dictionary<Border, long> _insertionFlashVersions = new();
     private FrameworkElement? _actionDragSource;
@@ -27,15 +30,46 @@ public partial class MainPage : Page
     private ModifierKeys _actionDragModifiers;
     private bool _actionWasSelectedOnMouseDown;
     private double _canvasZoom = 1.0;
+    private double _equipmentMonitorExpandedHeight = DefaultEquipmentMonitorExpandedHeight;
     private long _nextInsertionFlashVersion;
 
-    public MainPage(MainPageViewModel viewModel)
+    public MainPage(
+        MainPageViewModel viewModel,
+        EquipmentCommunicationMonitorViewModel communicationMonitor)
     {
         InitializeComponent();
         DataContext = viewModel;
+        EquipmentMonitor.DataContext = communicationMonitor;
+        EquipmentMonitor.ValidationDataContext = viewModel;
     }
 
     private MainPageViewModel ViewModel => (MainPageViewModel)DataContext;
+
+    public bool IsEquipmentPanelExpanded
+    {
+        get => EquipmentMonitor.IsPanelExpanded;
+        set => EquipmentMonitor.IsPanelExpanded = value;
+    }
+
+    public bool IsCommunicationRegionVisible
+    {
+        get => EquipmentMonitor.IsCommunicationRegionVisible;
+        set => EquipmentMonitor.IsCommunicationRegionVisible = value;
+    }
+
+    public bool SupportsValidationRegion => true;
+
+    public bool IsValidationRegionVisible
+    {
+        get => EquipmentMonitor.IsValidationRegionVisible;
+        set => EquipmentMonitor.IsValidationRegionVisible = value;
+    }
+
+    public bool IsPreviewRegionVisible
+    {
+        get => EquipmentMonitor.IsPreviewRegionVisible;
+        set => EquipmentMonitor.IsPreviewRegionVisible = value;
+    }
 
     private void ZoomOut_Click(object sender, RoutedEventArgs e) =>
         SetCanvasZoom(_canvasZoom - CanvasZoomStep);
@@ -47,20 +81,46 @@ public partial class MainPage : Page
 
     private void ResetView_Click(object sender, RoutedEventArgs e)
     {
-        ToolboxColumn.Width = new GridLength(230);
+        ToolboxColumn.Width = new GridLength(DefaultToolboxWidth);
         WorkflowColumn.Width = new GridLength(1, GridUnitType.Star);
         InspectorColumn.Width = new GridLength(380);
-        EquipmentToolboxRow.Height = new GridLength(1, GridUnitType.Star);
-        FlowToolboxRow.Height = new GridLength(1, GridUnitType.Star);
+        EquipmentMonitor.ResetLayout();
+        _equipmentMonitorExpandedHeight = DefaultEquipmentMonitorExpandedHeight;
+        ApplyEquipmentMonitorExpandedState();
 
-        EquipmentToolboxScrollViewer.ScrollToHome();
-        FlowToolboxScrollViewer.ScrollToHome();
+        if (ToolboxListView.Items.Count > 0)
+        {
+            ToolboxListView.ScrollIntoView(ToolboxListView.Items[0]);
+        }
         WorkflowCanvasScrollViewer.ScrollToHome();
         ParameterScrollViewer.ScrollToHome();
         ResultScrollViewer.ScrollToHome();
         ImageScrollViewer.ScrollToHome();
         InspectorTabControl.SelectedIndex = 0;
         SetCanvasZoom(1.0);
+    }
+
+    private void EquipmentMonitor_ExpandedStateChanged(object? sender, EventArgs e)
+    {
+        if (!EquipmentMonitor.IsPanelExpanded
+            && EquipmentMonitorRow.ActualHeight >= 150)
+        {
+            _equipmentMonitorExpandedHeight = EquipmentMonitorRow.ActualHeight;
+        }
+
+        ApplyEquipmentMonitorExpandedState();
+    }
+
+    private void ApplyEquipmentMonitorExpandedState()
+    {
+        var isExpanded = EquipmentMonitor.IsPanelExpanded;
+        EquipmentMonitorSplitterRow.Height = new GridLength(isExpanded ? 6 : 0);
+        EquipmentMonitorSplitter.Visibility = isExpanded
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        EquipmentMonitorRow.MinHeight = isExpanded ? 150 : 0;
+        EquipmentMonitorRow.Height = new GridLength(
+            isExpanded ? _equipmentMonitorExpandedHeight : 0);
     }
 
     private void SetCanvasZoom(double zoom)
@@ -529,6 +589,14 @@ public partial class MainPage : Page
         }
 
         ViewModel.CaptureUndoCheckpoint();
+    }
+
+    private void AddExpression_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: DependencyObject editor })
+        {
+            ExpressionCompletionBehavior.BeginExpression(editor);
+        }
     }
 
     private void Page_PreviewKeyDown(object sender, KeyEventArgs e)

@@ -4,6 +4,7 @@
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  xmlns:views="clr-namespace:DrillFlow.Desktop.Views"
                  Title="{Binding Title}"
+                 Icon="/DrillFlow.Desktop;component/Assets/DrillFlow.ico"
                  Width="1500"
                  Height="920"
                  MinWidth="1120"
@@ -11,6 +12,24 @@
                  WindowStartupLocation="CenterScreen"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="None">
+    <ui:FluentWindow.Resources>
+        <!--
+            Title-bar layout icons are geometry-based on purpose.  Symbol-font glyphs
+            depend on the Windows/locale font fallback chain and are not reliable on
+            every supported Windows 7+ installation.
+        -->
+        <Style x:Key="TitleBarLayoutButtonStyle"
+               TargetType="{x:Type ui:Button}"
+               BasedOn="{StaticResource {x:Type ui:Button}}">
+            <Setter Property="Width" Value="38" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Margin" Value="1,0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Appearance" Value="Secondary" />
+        </Style>
+    </ui:FluentWindow.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -22,7 +41,77 @@
                      ShowMinimize="True"
                      ShowMaximize="True"
                      ShowClose="True"
-                     CanMaximize="True" />
+                     CanMaximize="True">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="/DrillFlow.Desktop;component/Assets/DrillFlow.png"
+                              Width="16"
+                              Height="16" />
+            </ui:TitleBar.Icon>
+            <ui:TitleBar.TrailingContent>
+                <!-- VS Code-style direct view toggles: one click shows/hides each region. -->
+                <StackPanel x:Name="LayoutToggleButtons"
+                            Orientation="Horizontal"
+                            Margin="0,0,8,0"
+                            MouseEnter="LayoutToggleButtons_MouseEnter">
+                    <ui:Button x:Name="CommunicationRegionToggle"
+                               Style="{StaticResource TitleBarLayoutButtonStyle}"
+                               Click="CommunicationRegionToggle_Click"
+                               ToolTip="{DynamicResource LayoutCommunicationToggleHint}"
+                               AutomationProperties.Name="{DynamicResource LayoutCommunicationToggleHint}"
+                               AutomationProperties.HelpText="{DynamicResource CommunicationTerminalTitle}">
+                        <Grid Width="20" Height="20">
+                            <Path Data="M2.5,4.5 H17.5 V16.5 H2.5 Z M5.5,8 L8,10.5 5.5,13 M10.5,13 H14.5"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"
+                                  StrokeThickness="1.5"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" />
+                        </Grid>
+                    </ui:Button>
+
+                    <ui:Button x:Name="ValidationRegionToggle"
+                               Style="{StaticResource TitleBarLayoutButtonStyle}"
+                               Click="ValidationRegionToggle_Click"
+                               ToolTip="{DynamicResource LayoutValidationToggleHint}"
+                               AutomationProperties.Name="{DynamicResource LayoutValidationToggleHint}"
+                               AutomationProperties.HelpText="{DynamicResource WorkflowValidationResultsTitle}">
+                        <Grid Width="20" Height="20">
+                            <Ellipse Margin="2.5"
+                                     Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"
+                                     StrokeThickness="1.5" />
+                            <Path Data="M6,10.5 L9,13.5 14.5,7.5"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"
+                                  StrokeThickness="1.7"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" />
+                        </Grid>
+                    </ui:Button>
+
+                    <ui:Button x:Name="PreviewRegionToggle"
+                               Style="{StaticResource TitleBarLayoutButtonStyle}"
+                               Click="PreviewRegionToggle_Click"
+                               ToolTip="{DynamicResource LayoutPreviewToggleHint}"
+                               AutomationProperties.Name="{DynamicResource LayoutPreviewToggleHint}"
+                               AutomationProperties.HelpText="{DynamicResource EquipmentScreenTitle}">
+                        <Grid Width="20" Height="20">
+                            <Path Data="M2.5,4.5 H17.5 V15.5 H2.5 Z M4.5,13 L8,9.5 10.5,12 13.5,8.5 16.5,12"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}"
+                                  StrokeThickness="1.5"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" />
+                            <Ellipse Width="2.4"
+                                     Height="2.4"
+                                     Margin="0,0,8,8"
+                                     HorizontalAlignment="Right"
+                                     VerticalAlignment="Bottom"
+                                     Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ui:Button}}}" />
+                        </Grid>
+                    </ui:Button>
+                </StackPanel>
+            </ui:TitleBar.TrailingContent>
+        </ui:TitleBar>
 
         <ui:NavigationView x:Name="RootNavigation"
                            Grid.Row="1"
