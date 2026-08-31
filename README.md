@@ -67,6 +67,8 @@ In an Expression editor, `Ctrl+Space` opens context-aware completion for accessi
 
 See [contract.md](contract.md) for the current equipment request/response contract and format-change map,
 [docs/architecture.md](docs/architecture.md) for the agreed behavior and safety boundaries,
+[docs/codebase-map.md](docs/codebase-map.md) for the project/file responsibility tree, dependency rules, handshake call flow, settings timing, and extension map,
+[docs/configuration.md](docs/configuration.md) for configuration precedence, user-setting migration, apply timing, SignalR/JWT policy, and file-exchange defaults,
 [docs/xml-encoding-and-file-handshake.md](docs/xml-encoding-and-file-handshake.md) for the UTF-8/BOM policy and safe equipment file-publication procedure,
 [docs/product-and-implementation.md](docs/product-and-implementation.md) for the complete Korean product, event-flow, and implementation guide,
 and [docs/deployment.md](docs/deployment.md) for the Windows 7 release checklist.

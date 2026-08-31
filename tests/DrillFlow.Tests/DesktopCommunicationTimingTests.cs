@@ -77,9 +77,9 @@ public sealed class DesktopCommunicationTimingTests
                 + "\"PollingIntervalMilliseconds\":250}")
             .ToObject<CommunicationSettings>();
         Assert.NotNull(persisted);
-        Assert.Equal(12500, persisted!.ResponseTimeoutMilliseconds);
-        Assert.Equal(250, persisted.PollingIntervalMilliseconds);
-        Assert.Equal(100, persisted.RequestPublishDelayMilliseconds);
+        Assert.Equal(12.5d, persisted!.ResponseTimeoutSeconds);
+        Assert.Equal(0.25d, persisted.PollingIntervalSeconds);
+        Assert.Equal(0.1d, persisted.RequestPublishDelaySeconds);
 
         var options = new EquipmentCommunicationOptions();
         persisted.ApplyTo(options);
@@ -87,8 +87,58 @@ public sealed class DesktopCommunicationTimingTests
         Assert.Equal(TimeSpan.FromSeconds(12.5), options.ResponseTimeout);
         Assert.Equal(TimeSpan.FromSeconds(0.25), options.PollingInterval);
         Assert.Equal(TimeSpan.FromSeconds(0.1), options.RequestPublishDelay);
-        Assert.Equal(100, (int)JObject.FromObject(persisted)[
-            nameof(CommunicationSettings.RequestPublishDelayMilliseconds)]!);
+        var serialized = JObject.FromObject(persisted);
+        Assert.Equal(0.1d, (double)serialized[
+            nameof(CommunicationSettings.RequestPublishDelaySeconds)]!);
+        Assert.Null(serialized["ResponseTimeoutMilliseconds"]);
+        Assert.Null(serialized["PollingIntervalMilliseconds"]);
+        Assert.Null(serialized["RequestPublishDelayMilliseconds"]);
+    }
+
+    [Fact]
+    public void LegacyRetryMilliseconds_MigrateToSecondsWithoutBeingWrittenAgain()
+    {
+        var persisted = JObject.Parse(
+                "{\"RetryIntervalMilliseconds\":1250}")
+            .ToObject<CommunicationSettings>();
+
+        Assert.NotNull(persisted);
+        Assert.Equal(1.25d, persisted!.RetryDelaySeconds);
+
+        var serialized = JObject.FromObject(persisted);
+        Assert.Equal(1.25d, (double)serialized[nameof(CommunicationSettings.RetryDelaySeconds)]!);
+        Assert.Null(serialized["RetryIntervalMilliseconds"]);
+    }
+
+    [Fact]
+    public void RuntimeEquipmentOptions_RoundTripToEditableCommunicationSettings()
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = @"C:\Exchange",
+            LiveImageDirectory = @"\\controller\images\live",
+            RequestFileName = "in.xml",
+            ResponseFileName = "out.xml",
+            ResponseTimeout = TimeSpan.FromSeconds(12.5d),
+            RetryEnabled = true,
+            MaximumRetryCount = 3,
+            RetryDelay = TimeSpan.FromSeconds(0.75d),
+            PollingInterval = TimeSpan.FromSeconds(0.125d),
+            RequestPublishDelay = TimeSpan.FromSeconds(0.2d),
+            StableReadDelay = TimeSpan.FromSeconds(0.08d)
+        };
+
+        var editable = CommunicationSettings.FromOptions(options);
+        var roundTripped = new EquipmentCommunicationOptions();
+        editable.ApplyTo(roundTripped);
+
+        Assert.Equal(options.ExchangeDirectory, roundTripped.ExchangeDirectory);
+        Assert.Equal(options.LiveImageDirectory, roundTripped.LiveImageDirectory);
+        Assert.Equal(options.RequestFileName, roundTripped.RequestFileName);
+        Assert.Equal(options.ResponseFileName, roundTripped.ResponseFileName);
+        Assert.Equal(options.ResponseTimeout, roundTripped.ResponseTimeout);
+        Assert.Equal(options.RetryDelay, roundTripped.RetryDelay);
+        Assert.Equal(options.StableReadDelay, roundTripped.StableReadDelay);
     }
 
     [Fact]

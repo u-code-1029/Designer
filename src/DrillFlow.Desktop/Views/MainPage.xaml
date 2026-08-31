@@ -43,6 +43,14 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
+        <Style x:Key="DesignerCommandBarDividerStyle"
+               TargetType="Separator"
+               BasedOn="{StaticResource ToolbarSeparatorStyle}">
+            <Setter Property="Margin" Value="8,5" />
+            <Setter Property="Width" Value="1" />
+            <Setter Property="Opacity" Value="0.9" />
+        </Style>
+
         <CollectionViewSource x:Key="GroupedToolboxItems"
                               Source="{Binding FilteredToolboxItems}">
             <CollectionViewSource.GroupDescriptions>
@@ -710,11 +718,18 @@
                                VerticalAlignment="Center" />
                 </StackPanel>
 
-                <ScrollViewer Grid.Column="2"
-                              HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Disabled"
-                              CanContentScroll="False">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Grid Grid.Column="2" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <ScrollViewer Grid.Column="0"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <!-- File -->
                         <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
                             <StackPanel Orientation="Horizontal">
@@ -733,9 +748,9 @@
                             </StackPanel>
                         </Border>
 
-                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <Separator Style="{StaticResource DesignerCommandBarDividerStyle}" />
 
-                        <!-- Editing and validation -->
+                        <!-- Editing -->
                         <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
                             <StackPanel Orientation="Horizontal">
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding UndoCommand}" ToolTip="{DynamicResource Undo}">
@@ -744,13 +759,59 @@
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding RedoCommand}" ToolTip="{DynamicResource Redo}">
                                     <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowRedo24" /></ui:Button.Icon>
                                 </ui:Button>
-                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ValidateCommand}" ToolTip="{DynamicResource Validate}">
-                                    <ui:Button.Icon><ui:SymbolIcon Symbol="CheckmarkCircle24" /></ui:Button.Icon>
+                            </StackPanel>
+                        </Border>
+
+                        <Separator Style="{StaticResource DesignerCommandBarDividerStyle}" />
+
+                        <!-- Validation -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}"
+                                           Command="{Binding ValidateCommand}"
+                                           Click="ValidateWorkflow_Click"
+                                           ToolTip="{DynamicResource Validate}"
+                                           AutomationProperties.Name="{DynamicResource Validate}">
+                                    <Grid Width="24" Height="24">
+                                        <ui:SymbolIcon Symbol="CheckmarkCircle24"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center">
+                                            <ui:SymbolIcon.Style>
+                                                <Style TargetType="{x:Type ui:SymbolIcon}">
+                                                    <Setter Property="Foreground" Value="{DynamicResource DrillTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasValidationErrors}" Value="True">
+                                                            <Setter Property="Foreground" Value="{DynamicResource DrillDangerBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ui:SymbolIcon.Style>
+                                        </ui:SymbolIcon>
+                                        <Border MinWidth="18"
+                                                Height="18"
+                                                Padding="3,0"
+                                                Margin="0,-8,-10,0"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Top"
+                                                Background="{DynamicResource DrillDangerBrush}"
+                                                BorderBrush="{DynamicResource DrillOpaqueSurfaceBrush}"
+                                                BorderThickness="1.5"
+                                                CornerRadius="9"
+                                                Panel.ZIndex="1"
+                                                Visibility="{Binding HasValidationErrors, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="{Binding ValidationErrorBadgeText}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="10"
+                                                       FontWeight="Bold"
+                                                       Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" />
+                                        </Border>
+                                    </Grid>
                                 </ui:Button>
                             </StackPanel>
                         </Border>
 
-                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <Separator Style="{StaticResource DesignerCommandBarDividerStyle}" />
 
                         <!-- Execution -->
                         <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
@@ -770,9 +831,9 @@
                             </StackPanel>
                         </Border>
 
-                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        <Separator Style="{StaticResource DesignerCommandBarDividerStyle}" />
 
-                        <!-- Breakpoints, retained results, and response testing -->
+                        <!-- Breakpoints -->
                         <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
                             <StackPanel Orientation="Horizontal">
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ToggleBreakpointCommand}" ToolTip="{DynamicResource ToggleBreakpoint}">
@@ -781,26 +842,44 @@
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ClearBreakpointsCommand}" ToolTip="{DynamicResource ClearBreakpoints}">
                                     <ui:Button.Icon><ui:SymbolIcon Symbol="DeleteDismiss24" /></ui:Button.Icon>
                                 </ui:Button>
+                            </StackPanel>
+                        </Border>
+
+                        <Separator Style="{StaticResource DesignerCommandBarDividerStyle}" />
+
+                        <!-- Retained results -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding CollapseAllResultsCommand}" ToolTip="{DynamicResource CollapseAllResults}">
                                     <ui:Button.Icon><ui:SymbolIcon Symbol="ChevronDoubleUp20" /></ui:Button.Icon>
                                 </ui:Button>
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding ClearAllResultsCommand}" ToolTip="{DynamicResource ClearAllResults}">
                                     <ui:Button.Icon><ui:SymbolIcon Symbol="Delete24" /></ui:Button.Icon>
                                 </ui:Button>
+                            </StackPanel>
+                        </Border>
+
+                        <Separator Style="{StaticResource DesignerCommandBarDividerStyle}" />
+
+                        <!-- Response testing -->
+                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
+                            <StackPanel Orientation="Horizontal">
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding TestResponseCommand}" ToolTip="{DynamicResource ResponseTest}">
                                     <ui:Button.Icon><ui:SymbolIcon Symbol="DocumentArrowDown20" /></ui:Button.Icon>
                                 </ui:Button>
                             </StackPanel>
                         </Border>
 
-                        <Separator Style="{StaticResource ToolbarSeparatorStyle}" />
+                        </StackPanel>
+                    </ScrollViewer>
 
-                        <!-- Exchange folder and canvas view -->
-                        <Border Style="{StaticResource DesignerCommandBarGroupStyle}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}" Command="{Binding OpenExchangeFolderCommand}" ToolTip="{DynamicResource OpenExchangeFolder}">
-                                    <ui:Button.Icon><ui:SymbolIcon Symbol="FolderOpen24" /></ui:Button.Icon>
-                                </ui:Button>
+                    <Separator Grid.Column="1"
+                               Style="{StaticResource DesignerCommandBarDividerStyle}"
+                               Margin="10,5" />
+
+                    <!-- Canvas scale and layout stay anchored at the right edge. -->
+                    <Border Grid.Column="2" Style="{StaticResource DesignerCommandBarGroupStyle}">
+                        <StackPanel Orientation="Horizontal">
                                 <ui:Button Style="{StaticResource DesignerCommandBarButtonStyle}"
                                            Click="ZoomOut_Click"
                                            ToolTip="{DynamicResource ZoomOut}">
@@ -825,10 +904,9 @@
                                            ToolTip="{DynamicResource ResetView}">
                                     <ui:Button.Icon><ui:SymbolIcon Symbol="ArrowReset24" /></ui:Button.Icon>
                                 </ui:Button>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+                </Grid>
             </Grid>
         </Border>
 
@@ -1305,6 +1383,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <ui:InfoBar Grid.Column="0"
                         Margin="0,0,8,0"
@@ -1312,7 +1391,17 @@
                         IsClosable="False"
                         Title="{Binding RuntimeStatusText}"
                         Message="{Binding StatusMessage}" />
-            <controls:EquipmentActivityStatus Grid.Column="1"
+            <ui:Button Grid.Column="1"
+                       Style="{StaticResource DesignerCommandBarButtonStyle}"
+                       Margin="0,0,8,0"
+                       Command="{Binding OpenExchangeFolderCommand}"
+                       ToolTip="{DynamicResource OpenExchangeFolder}"
+                       AutomationProperties.Name="{DynamicResource OpenExchangeFolder}">
+                <ui:Button.Icon>
+                    <ui:SymbolIcon Symbol="FolderOpen24" />
+                </ui:Button.Icon>
+            </ui:Button>
+            <controls:EquipmentActivityStatus Grid.Column="2"
                                               DataContext="{Binding DataContext, ElementName=EquipmentMonitor}" />
         </Grid>
     </Grid>

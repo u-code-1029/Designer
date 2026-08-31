@@ -168,7 +168,14 @@ public sealed class WorkflowRunner : IWorkflowRunner
         try
         {
             ChangeState(WorkflowRunState.Validating, "Validating workflow.");
-            var validation = _validator.Validate(document);
+            var validation = selectedActionId is Guid selectedIdForValidation
+                ? _validator.ValidateSelectedAction(
+                    document,
+                    selectedIdForValidation,
+                    Results.GetAllChronologically()
+                        .Select(result => result.ActionId)
+                        .Distinct())
+                : _validator.Validate(document);
             var errors = validation.Issues
                 .Where(issue => issue.Severity == ValidationSeverity.Error)
                 .ToArray();

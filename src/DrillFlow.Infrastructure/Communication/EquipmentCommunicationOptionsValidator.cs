@@ -16,6 +16,18 @@ public sealed class EquipmentCommunicationOptionsValidator
             throw new ArgumentNullException(nameof(options));
         }
 
+        return Validate(name, EquipmentCommunicationSnapshot.Capture(options));
+    }
+
+    internal ValidateOptionsResult Validate(
+        string? name,
+        EquipmentCommunicationSnapshot options)
+    {
+        if (options is null)
+        {
+            throw new ArgumentNullException(nameof(options));
+        }
+
         var failures = new List<string>();
 
         if (string.IsNullOrWhiteSpace(options.ExchangeDirectory))

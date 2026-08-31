@@ -79,6 +79,28 @@ public partial class MainPage : Page, IEquipmentPanelLayoutHost
     private void ZoomIn_Click(object sender, RoutedEventArgs e) =>
         SetCanvasZoom(_canvasZoom + CanvasZoomStep);
 
+    private void ValidateWorkflow_Click(object sender, RoutedEventArgs e)
+    {
+        // The bound command runs as part of the same button activation. Defer the
+        // panel decision until the freshly calculated validation collection is applied.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!ViewModel.HasValidationErrors)
+            {
+                return;
+            }
+
+            if (!EquipmentMonitor.IsPanelExpanded)
+            {
+                EquipmentMonitor.IsCommunicationRegionVisible = false;
+                EquipmentMonitor.IsPreviewRegionVisible = false;
+            }
+
+            EquipmentMonitor.IsValidationRegionVisible = true;
+            EquipmentMonitor.IsPanelExpanded = true;
+        }));
+    }
+
     private void ResetView_Click(object sender, RoutedEventArgs e)
     {
         ToolboxColumn.Width = new GridLength(DefaultToolboxWidth);

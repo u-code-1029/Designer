@@ -24,6 +24,10 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="16" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Text="{DynamicResource SettingsTitle}" Style="{StaticResource PageTitleStyle}" />
@@ -66,6 +70,11 @@
             <ui:Card Grid.Row="4" Padding="22" IsEnabled="{Binding CanEditSettings}">
                 <StackPanel>
                     <TextBlock Text="{DynamicResource CommunicationSettings}" Style="{StaticResource SectionTitleStyle}" />
+
+                    <TextBlock Text="{DynamicResource FileExchangeLocationsGroup}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,0,0,8" />
 
                     <TextBlock Text="{DynamicResource ExchangeFolder}" Style="{StaticResource FieldLabelStyle}" />
                     <Grid Margin="0,0,0,14">
@@ -145,6 +154,11 @@
                         </StackPanel>
                     </Grid>
 
+                    <TextBlock Text="{DynamicResource FileExchangeLifecycleGroup}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,4,0,8" />
+
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -185,6 +199,11 @@
                         </StackPanel>
                     </Grid>
 
+                    <TextBlock Text="{DynamicResource FileExchangeTimingGroup}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,4,0,8" />
+
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -212,8 +231,17 @@
                                        Style="{StaticResource FieldLabelStyle}" />
                             <TextBox Text="{Binding RequestPublishDelaySeconds, UpdateSourceTrigger=PropertyChanged}" />
                         </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource StableReadDelay}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding StableReadDelaySeconds, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
                     </Grid>
 
+                    <TextBlock Text="{DynamicResource FileExchangeRetryGroup}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,4,0,8" />
                     <CheckBox Content="{DynamicResource RetryEnabled}"
                               IsChecked="{Binding RetryEnabled}"
                               Margin="0,0,0,10" />
@@ -236,7 +264,7 @@
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <TextBlock Text="{DynamicResource RetryInterval}" Style="{StaticResource FieldLabelStyle}" />
-                            <TextBox Text="{Binding RetryIntervalMilliseconds, UpdateSourceTrigger=PropertyChanged}"
+                            <TextBox Text="{Binding RetryDelaySeconds, UpdateSourceTrigger=PropertyChanged}"
                                      IsEnabled="{Binding RetryEnabled}" />
                         </StackPanel>
                     </Grid>
@@ -265,7 +293,158 @@
                 </StackPanel>
             </ui:Card>
 
-            <ui:InfoBar Grid.Row="6"
+            <ui:Card Grid.Row="6" Padding="22" IsEnabled="{Binding CanEditSettings}">
+                <StackPanel>
+                    <TextBlock Text="{DynamicResource RealtimeVideoSettings}"
+                               Style="{StaticResource SectionTitleStyle}" />
+                    <CheckBox Content="{DynamicResource RealtimeVideoEnabled}"
+                              IsChecked="{Binding RealtimeVideo.Enabled, Mode=TwoWay}"
+                              Margin="0,0,0,12" />
+                    <ui:InfoBar Title="{DynamicResource RealtimeVideoFutureConnectionTitle}"
+                                Message="{DynamicResource RealtimeVideoFutureConnectionHint}"
+                                Severity="Informational"
+                                IsClosable="False"
+                                IsOpen="True"
+                                Margin="0,0,0,18" />
+
+                    <TextBlock Text="{DynamicResource SignalRConnectionSettings}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,0,0,8" />
+                    <TextBlock Text="{DynamicResource SignalRHubEndpoint}"
+                               Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding RealtimeVideo.HubEndpoint, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="https://controller.example.com/equipment-screen"
+                             Margin="0,0,0,14" />
+
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource SignalRStreamMethod}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.StreamMethod, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource SignalRTransport}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox ItemsSource="{Binding RealtimeVideo.TransportChoices}"
+                                      SelectedItem="{Binding RealtimeVideo.Transport, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      IsEditable="True" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource SignalRServerTimeout}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.ServerTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource SignalRKeepAliveInterval}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.KeepAliveIntervalSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="{DynamicResource SignalRAuthenticationSettings}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,0,0,8" />
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource AuthenticationMode}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox ItemsSource="{Binding RealtimeVideo.AuthenticationModeChoices}"
+                                      SelectedItem="{Binding RealtimeVideo.AuthenticationMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      IsEditable="True" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource JwtCredentialName}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.CredentialName, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Text="{DynamicResource JwtTokenEnvironmentVariable}"
+                               Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding RealtimeVideo.TokenEnvironmentVariable, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,4" />
+                    <TextBlock Text="{DynamicResource JwtSecretStorageHint}"
+                               Style="{StaticResource CaptionTextStyle}"
+                               Margin="0,0,0,18" />
+
+                    <TextBlock Text="{DynamicResource SignalRRetrySettings}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,0,0,8" />
+                    <CheckBox Content="{DynamicResource SignalRRetryEnabled}"
+                              IsChecked="{Binding RealtimeVideo.RetryEnabled, Mode=TwoWay}"
+                              Margin="0,0,0,10" />
+                    <Grid Margin="0,0,0,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource SignalRInitialConnectAttempts}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.InitialConnectMaximumAttempts, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding RealtimeVideo.RetryEnabled}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource SignalRReconnectDelays}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.ReconnectDelaysSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding RealtimeVideo.RetryEnabled}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="{DynamicResource RealtimeFrameSettings}"
+                               Style="{StaticResource FieldLabelStyle}"
+                               FontSize="15"
+                               Margin="0,0,0,8" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource MaximumFrameBytes}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.MaximumFrameBytes, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource FrameBufferCapacity}"
+                                       Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RealtimeVideo.BufferCapacity, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </ui:Card>
+
+            <ui:InfoBar Grid.Row="8"
+                        IsOpen="{Binding IsRestartRequired}"
+                        IsClosable="False"
+                        Severity="Warning"
+                        Title="{DynamicResource RestartRequiredTitle}"
+                        Message="{DynamicResource RealtimeVideoRestartRequiredMessage}" />
+
+            <ui:InfoBar Grid.Row="10"
                         IsOpen="True"
                         IsClosable="False"
                         Title="{Binding StatusMessage}" />

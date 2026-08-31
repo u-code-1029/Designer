@@ -55,6 +55,84 @@ public sealed class ApplicationWorkflowRunnerTests
     }
 
     [Fact]
+    public async Task RunSelectedAsync_IgnoresValidationErrorsOnUnrelatedActions()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var unrelated = new FocusNode
+        {
+            Key = "invalid_focus",
+            HorizontalFieldWidth = ParameterBinding.Literal("0")
+        };
+        var selected = new StageNode { Key = "selected_stage" };
+
+        await runner.RunSelectedAsync(Document(unrelated, selected), selected.Id);
+
+        Assert.Equal(WorkflowRunState.Completed, runner.State);
+        Assert.Equal("stage", Assert.Single(transport.Requests).Action);
+    }
+
+    [Fact]
+    public async Task RunSelectedAsync_RejectsSelectedActionValidationErrorBeforePublishing()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var unrelated = new StageNode { Key = "valid_stage" };
+        var selected = new StageNode
+        {
+            Key = "invalid_stage",
+            StageX = ParameterBinding.Literal("not-a-number")
+        };
+
+        var exception = await Assert.ThrowsAsync<WorkflowExecutionException>(() =>
+            runner.RunSelectedAsync(Document(unrelated, selected), selected.Id));
+
+        Assert.Contains("validation failed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(WorkflowRunState.Faulted, runner.State);
+        Assert.Empty(transport.Requests);
+    }
+
+    [Fact]
+    public async Task RunSelectedAsync_RejectsUnavailableExpressionResultBeforePublishing()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var source = new StageNode { Key = "source_stage" };
+        var selected = new IntegrationNode
+        {
+            Key = "selected_integration",
+            HorizontalFieldWidth = ParameterBinding.Expression(
+                "source_stage.result.current_stage_x")
+        };
+
+        var exception = await Assert.ThrowsAsync<WorkflowExecutionException>(() =>
+            runner.RunSelectedAsync(Document(source, selected), selected.Id));
+
+        Assert.Contains("no result", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(WorkflowRunState.Faulted, runner.State);
+        Assert.Empty(transport.Requests);
+    }
+
+    [Fact]
+    public async Task RunAsync_StillRejectsAnyWorkflowValidationError()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var invalid = new FocusNode
+        {
+            Key = "invalid_focus",
+            HorizontalFieldWidth = ParameterBinding.Literal("0")
+        };
+        var valid = new StageNode { Key = "valid_stage" };
+
+        await Assert.ThrowsAsync<WorkflowExecutionException>(() =>
+            runner.RunAsync(Document(invalid, valid)));
+
+        Assert.Equal(WorkflowRunState.Faulted, runner.State);
+        Assert.Empty(transport.Requests);
+    }
+
+    [Fact]
     public async Task RunAsync_AfterSelectedExecutionStartsFreshResultSession()
     {
         var transport = new FakeTransport(request => Task.FromResult(Response(request)));

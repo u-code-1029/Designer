@@ -1,4 +1,5 @@
 using DrillFlow.Application.Communication;
+using DrillFlow.Infrastructure.Communication.FileExchange;
 using DrillFlow.Infrastructure.IO;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,9 +23,11 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private static readonly TimeSpan FrameCleanupWarningInterval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan CanceledRequestCleanupTimeout = TimeSpan.FromSeconds(2);
 
-    private readonly EquipmentCommunicationOptions _options;
+    private readonly EquipmentCommunicationOptions _optionsSource;
+    private readonly EquipmentCommunicationOptionsValidator _optionsValidator = new();
     private readonly IEquipmentMessageCodec _codec;
     private readonly IEquipmentExchangeTraceSink _traceSink;
+    private readonly IStableEquipmentFileReader _stableFileReader;
     private readonly ILogger<FileEquipmentTransport> _logger;
     private readonly Func<DateTime> _utcNow;
     private readonly SemaphoreSlim _exchangeGate = new(1, 1);
@@ -93,6 +96,23 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         IEquipmentMessageCodec codec,
         IEquipmentExchangeTraceSink traceSink,
         Func<DateTime> utcNow)
+        : this(
+            options,
+            logger,
+            codec,
+            traceSink,
+            utcNow,
+            new StableEquipmentFileReader())
+    {
+    }
+
+    internal FileEquipmentTransport(
+        IOptions<EquipmentCommunicationOptions> options,
+        ILogger<FileEquipmentTransport> logger,
+        IEquipmentMessageCodec codec,
+        IEquipmentExchangeTraceSink traceSink,
+        Func<DateTime> utcNow,
+        IStableEquipmentFileReader stableFileReader)
     {
         if (options is null)
         {
@@ -103,9 +123,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
         _traceSink = traceSink ?? throw new ArgumentNullException(nameof(traceSink));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
-        _options = options.Value;
+        _stableFileReader = stableFileReader
+            ?? throw new ArgumentNullException(nameof(stableFileReader));
+        _optionsSource = options.Value;
 
-        var validation = new EquipmentCommunicationOptionsValidator().Validate(null, _options);
+        var initialSettings = EquipmentCommunicationSnapshot.Capture(_optionsSource);
+        var validation = _optionsValidator.Validate(null, initialSettings);
         if (validation.Failed)
         {
             throw new OptionsValidationException(
@@ -113,6 +136,21 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 typeof(EquipmentCommunicationOptions),
                 validation.Failures);
         }
+    }
+
+    private EquipmentCommunicationSnapshot CaptureValidatedSettings()
+    {
+        var settings = EquipmentCommunicationSnapshot.Capture(_optionsSource);
+        var validation = _optionsValidator.Validate(null, settings);
+        if (validation.Failed)
+        {
+            throw new OptionsValidationException(
+                EquipmentCommunicationOptions.SectionName,
+                typeof(EquipmentCommunicationOptions),
+                validation.Failures);
+        }
+
+        return settings;
     }
 
     public Task<EquipmentResponseMessage> ExchangeAsync(
@@ -138,6 +176,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         }
 
         ThrowIfDisposed();
+        var settings = CaptureValidatedSettings();
         await _exchangeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         FileStream? exchangeLock = null;
         string? publishedRequestPath = null;
@@ -148,12 +187,15 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         {
             ThrowIfDisposed();
             cancellationToken.ThrowIfCancellationRequested();
-            Directory.CreateDirectory(_options.ExchangeDirectory);
+            Directory.CreateDirectory(settings.ExchangeDirectory);
 
             var exchangeLockPath = Path.Combine(
-                _options.ExchangeDirectory,
+                settings.ExchangeDirectory,
                 EquipmentCommunicationOptions.ExchangeLockFileName);
-            exchangeLock = await AcquireExchangeLockAsync(exchangeLockPath, cancellationToken)
+            exchangeLock = await AcquireExchangeLockAsync(
+                    exchangeLockPath,
+                    settings,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             // FileStream construction can outlive cancellation while the OS resolves an SMB
@@ -161,8 +203,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             // never come back later and publish a new command.
             cancellationToken.ThrowIfCancellationRequested();
 
-            var requestPath = Path.Combine(_options.ExchangeDirectory, _options.RequestFileName);
-            var responsePath = Path.Combine(_options.ExchangeDirectory, _options.ResponseFileName);
+            var requestPath = Path.Combine(settings.ExchangeDirectory, settings.RequestFileName);
+            var responsePath = Path.Combine(settings.ExchangeDirectory, settings.ResponseFileName);
             var serializedRequest = _codec.SerializeRequest(request);
             if (serializedRequest.Length > EquipmentMessageLimits.MaximumWirePayloadBytes)
             {
@@ -178,6 +220,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             await EnsureRequestFileAbsentAsync(
                     requestPath,
                     EquipmentRequestDeletionWaitPhase.BeforeInitialPublish,
+                    settings,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -187,16 +230,16 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             // only to the first publication; retries already have their own RetryDelay. A late
             // previous response is normally excluded by Action/correlation matching; retain mode
             // also keeps the previous bytes as a cross-workstation rollback safeguard below.
-            if (_options.RequestPublishDelay > TimeSpan.Zero)
+            if (settings.RequestPublishDelay > TimeSpan.Zero)
             {
-                await Task.Delay(_options.RequestPublishDelay, cancellationToken)
+                await Task.Delay(settings.RequestPublishDelay, cancellationToken)
                     .ConfigureAwait(false);
             }
 
             // In the default delete-after-read mode, a response left by an interrupted previous
             // run is stale by definition. Remove it before publishing so creation of the next
             // response is unambiguous even when equipment writes byte-identical test data.
-            var preserveResponseBaseline = _options.ApplicationResponseLifecycle
+            var preserveResponseBaseline = settings.ApplicationResponseLifecycle
                                            == ApplicationResponseFileLifecycle.RetainUntilOverwritten;
             if (!preserveResponseBaseline)
             {
@@ -214,6 +257,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 ? await CaptureRetainedResponseBaselineAsync(
                         responsePath,
                         request,
+                        settings,
                         cancellationToken)
                     .ConfigureAwait(false)
                 : null;
@@ -225,7 +269,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 request.Action,
                 request.CorrelationId);
 
-            var retryCount = _options.RetryEnabled ? _options.MaximumRetryCount : 0;
+            var retryCount = settings.RetryEnabled ? settings.MaximumRetryCount : 0;
             var attempt = 0;
             while (true)
             {
@@ -233,14 +277,15 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
                 if (attempt > 0)
                 {
-                    if (_options.RetryDelay > TimeSpan.Zero)
+                    if (settings.RetryDelay > TimeSpan.Zero)
                     {
-                        await Task.Delay(_options.RetryDelay, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(settings.RetryDelay, cancellationToken).ConfigureAwait(false);
                     }
 
                     await EnsureRequestFileAbsentAsync(
                             requestPath,
                             EquipmentRequestDeletionWaitPhase.BeforeRetry,
+                            settings,
                             cancellationToken)
                         .ConfigureAwait(false);
 
@@ -248,6 +293,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             responsePath,
                             request,
                             retainedResponseBaseline,
+                            settings,
                             cancellationToken)
                         .ConfigureAwait(false);
                     if (responseBeforeRetry is not null)
@@ -257,6 +303,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                                 responsePath,
                                 responseBeforeRetry,
                                 request,
+                                settings,
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -264,7 +311,11 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
                 attempt++;
 
-                await PublishRequestAsync(requestPath, serializedRequest, cancellationToken)
+                await PublishRequestAsync(
+                        requestPath,
+                        serializedRequest,
+                        settings,
+                        cancellationToken)
                     .ConfigureAwait(false);
                 requestWasPublished = true;
                 TryTrace(
@@ -291,6 +342,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                         responsePath,
                         request,
                         retainedResponseBaseline,
+                        settings,
                         cancellationToken)
                     .ConfigureAwait(false);
 
@@ -301,6 +353,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             responsePath,
                             response,
                             request,
+                            settings,
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -311,6 +364,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 await EnsureRequestFileAbsentAsync(
                         requestPath,
                         EquipmentRequestDeletionWaitPhase.AfterResponseTimeout,
+                        settings,
                         cancellationToken)
                     .ConfigureAwait(false);
 
@@ -318,6 +372,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                         responsePath,
                         request,
                         retainedResponseBaseline,
+                        settings,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (lateResponse is not null)
@@ -327,6 +382,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             responsePath,
                             lateResponse,
                             request,
+                            settings,
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -336,7 +392,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     throw new EquipmentResponseTimeoutException(
                         request.CorrelationId,
                         attempt,
-                        _options.ResponseTimeout);
+                        settings.ResponseTimeout);
                 }
 
                 _logger.LogWarning(
@@ -372,7 +428,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     publishedRequestPath,
                     publishedRequestPayload,
                     request.CorrelationId,
-                    request.Action);
+                    request.Action,
+                    settings);
             }
 
             if (exception is OperationCanceledException)
@@ -444,7 +501,8 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         string requestPath,
         byte[] expectedPayload,
         int correlationId,
-        string command)
+        string command,
+        EquipmentCommunicationSnapshot settings)
     {
         var cleanupDeadline = DateTime.UtcNow + CanceledRequestCleanupTimeout;
         try
@@ -456,6 +514,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     expectedPayload,
                     correlationId,
                     command,
+                    settings,
                     cleanupDeadline),
                 CancellationToken.None);
             TrackCanceledRequestCleanup(cleanupTask, cleanupDeadline);
@@ -602,6 +661,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         byte[] expectedPayload,
         int correlationId,
         string command,
+        EquipmentCommunicationSnapshot settings,
         DateTime deadline)
     {
         try
@@ -634,8 +694,10 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             readBudget.CancelAfter(remainingBudget);
                             try
                             {
-                                currentPayload = await TryReadStableBytesAsync(
+                                currentPayload = await _stableFileReader.TryReadAsync(
                                         requestPath,
+                                        settings.StableReadDelay,
+                                        EquipmentMessageLimits.MaximumWirePayloadBytes,
                                         readBudget.Token)
                                     .ConfigureAwait(false);
                             }
@@ -682,14 +744,14 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                             return;
                         }
 
-                        var presence = GetFilePresence(requestPath);
-                        if (presence == FilePresence.Absent)
+                        var presence = _stableFileReader.GetPresence(requestPath);
+                        if (presence == EquipmentFilePresence.Absent)
                         {
                             return;
                         }
 
                         lastFailure = new IOException(
-                            presence == FilePresence.Present
+                            presence == EquipmentFilePresence.Present
                                 ? "The canceled request exists but could not be read as a stable file."
                                 : "The canceled request path could not be queried.");
                     }
@@ -718,9 +780,9 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                         return;
                     }
 
-                    var delay = remaining < _options.PollingInterval
+                    var delay = remaining < settings.PollingInterval
                         ? remaining
-                        : _options.PollingInterval;
+                        : settings.PollingInterval;
                     await Task.Delay(delay).ConfigureAwait(false);
                 }
             }
@@ -829,6 +891,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
     private async Task<FileStream> AcquireExchangeLockAsync(
         string lockFilePath,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
@@ -865,18 +928,18 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                         lockFilePath);
                 }
 
-                var remaining = _options.ResponseTimeout - elapsed.Elapsed;
+                var remaining = settings.ResponseTimeout - elapsed.Elapsed;
                 if (remaining <= TimeSpan.Zero)
                 {
                     throw new EquipmentExchangeLockTimeoutException(
                         lockFilePath,
-                        _options.ResponseTimeout,
+                        settings.ResponseTimeout,
                         exception);
                 }
 
-                var delay = remaining < _options.PollingInterval
+                var delay = remaining < settings.PollingInterval
                     ? remaining
-                    : _options.PollingInterval;
+                    : settings.PollingInterval;
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -891,6 +954,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task PublishRequestAsync(
         string requestPath,
         byte[] serializedRequest,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
         var tempPath = requestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -914,7 +978,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 stream.Flush(true);
             }
 
-            var deadline = DateTime.UtcNow + _options.ResponseTimeout;
+            var deadline = DateTime.UtcNow + settings.ResponseTimeout;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -925,11 +989,11 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 }
                 catch (IOException) when (DateTime.UtcNow < deadline)
                 {
-                    await Task.Delay(_options.PollingInterval, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(settings.PollingInterval, cancellationToken).ConfigureAwait(false);
                 }
                 catch (UnauthorizedAccessException) when (DateTime.UtcNow < deadline)
                 {
-                    await Task.Delay(_options.PollingInterval, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(settings.PollingInterval, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -1016,11 +1080,13 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         string responsePath,
         byte[] responseSnapshot,
         EquipmentRequestMessage request,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
         await EnsureRequestFileAbsentAsync(
                 requestPath,
                 EquipmentRequestDeletionWaitPhase.AfterMatchingResponse,
+                settings,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -1031,7 +1097,11 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         // response was detected. Cleanup remains deliberately best-effort; a share lock,
         // permission change, or equipment-side race must not discard a valid response or stop a
         // live-frame loop.
-        TryDeleteCompletedRequest(requestPath, request.CorrelationId, request.Action);
+        TryDeleteCompletedRequest(
+            requestPath,
+            request.CorrelationId,
+            request.Action,
+            settings);
 
         // Validation and materialization are deterministic for the immutable snapshot. Keeping
         // the second parse at this boundary makes the lifecycle explicit: detect a valid matching
@@ -1049,12 +1119,13 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
         // The response object is fully materialized before its source file is removed. Consumers
         // therefore never depend on the response pathname remaining present after this method.
-        if (_options.ApplicationResponseLifecycle == ApplicationResponseFileLifecycle.DeleteAfterRead)
+        if (settings.ApplicationResponseLifecycle == ApplicationResponseFileLifecycle.DeleteAfterRead)
         {
             await DeleteResponseAsync(
                     responsePath,
                     response.CorrelationId,
                     request.Action,
+                    settings,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -1094,9 +1165,10 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private void TryDeleteCompletedRequest(
         string requestPath,
         int correlationId,
-        string requestCommand)
+        string requestCommand,
+        EquipmentCommunicationSnapshot settings)
     {
-        if (_options.ApplicationRequestLifecycle
+        if (settings.ApplicationRequestLifecycle
             != ApplicationRequestFileLifecycle.DeleteAfterResponse)
         {
             return;
@@ -1121,9 +1193,10 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
     private async Task EnsureRequestFileAbsentAsync(
         string requestPath,
         EquipmentRequestDeletionWaitPhase phase,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
-        if (_options.EquipmentRequestLifecycle
+        if (settings.EquipmentRequestLifecycle
             != EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead)
         {
             return;
@@ -1134,7 +1207,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (GetFilePresence(requestPath) == FilePresence.Absent)
+            if (_stableFileReader.GetPresence(requestPath) == EquipmentFilePresence.Absent)
             {
                 return;
             }
@@ -1149,52 +1222,26 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     phase);
             }
 
-            var remaining = _options.ResponseTimeout - elapsed.Elapsed;
+            var remaining = settings.ResponseTimeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero)
             {
                 throw new EquipmentRequestDeletionTimeoutException(
                     requestPath,
                     phase,
-                    _options.ResponseTimeout);
+                    settings.ResponseTimeout);
             }
 
-            var delay = remaining < _options.PollingInterval
+            var delay = remaining < settings.PollingInterval
                 ? remaining
-                : _options.PollingInterval;
+                : settings.PollingInterval;
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private static FilePresence GetFilePresence(string filePath)
-    {
-        try
-        {
-            File.GetAttributes(filePath);
-            return FilePresence.Present;
-        }
-        catch (FileNotFoundException)
-        {
-            return FilePresence.Absent;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return FilePresence.Absent;
-        }
-        catch (IOException)
-        {
-            // A transient network/share failure is not evidence that the equipment has deleted
-            // the file. Failing closed avoids publishing into an uncertain pathname.
-            return FilePresence.Unknown;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return FilePresence.Unknown;
         }
     }
 
     private async Task<byte[]?> CaptureRetainedResponseBaselineAsync(
         string responsePath,
         EquipmentRequestMessage request,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
@@ -1202,12 +1249,16 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (GetFilePresence(responsePath) == FilePresence.Absent)
+            if (_stableFileReader.GetPresence(responsePath) == EquipmentFilePresence.Absent)
             {
                 return null;
             }
 
-            var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
+            var payload = await _stableFileReader.TryReadAsync(
+                    responsePath,
+                    settings.StableReadDelay,
+                    EquipmentMessageLimits.MaximumWirePayloadBytes,
+                    cancellationToken)
                 .ConfigureAwait(false);
             if (payload is not null)
             {
@@ -1216,7 +1267,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
 
             // The response can disappear between the first presence check and the stable read.
             // In that case there is no stale payload to preserve as the next exchange baseline.
-            if (GetFilePresence(responsePath) == FilePresence.Absent)
+            if (_stableFileReader.GetPresence(responsePath) == EquipmentFilePresence.Absent)
             {
                 return null;
             }
@@ -1232,18 +1283,18 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                     request.CorrelationId);
             }
 
-            var remaining = _options.ResponseTimeout - elapsed.Elapsed;
+            var remaining = settings.ResponseTimeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero)
             {
                 throw new TimeoutException(
                     $"The pre-existing equipment response at '{responsePath}' did not become "
-                    + $"readable or disappear within {_options.ResponseTimeout}. No request "
+                    + $"readable or disappear within {settings.ResponseTimeout}. No request "
                     + "was published.");
             }
 
-            var delay = remaining < _options.PollingInterval
+            var delay = remaining < settings.PollingInterval
                 ? remaining
-                : _options.PollingInterval;
+                : settings.PollingInterval;
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -1252,9 +1303,14 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         string responsePath,
         EquipmentRequestMessage expectedRequest,
         byte[]? retainedResponseBaseline,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
-        var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
+        var payload = await _stableFileReader.TryReadAsync(
+                responsePath,
+                settings.StableReadDelay,
+                EquipmentMessageLimits.MaximumWirePayloadBytes,
+                cancellationToken)
             .ConfigureAwait(false);
         if (payload is null || ByteArraysEqual(payload, retainedResponseBaseline))
         {
@@ -1273,16 +1329,21 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         string responsePath,
         EquipmentRequestMessage expectedRequest,
         byte[]? retainedResponseBaseline,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + _options.ResponseTimeout;
+        var deadline = DateTime.UtcNow + settings.ResponseTimeout;
         byte[]? lastRejectedPayload = null;
         var observedStableResponse = false;
         var observedUnchangedRetainedBaseline = false;
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var payload = await TryReadStableBytesAsync(responsePath, cancellationToken)
+            var payload = await _stableFileReader.TryReadAsync(
+                    responsePath,
+                    settings.StableReadDelay,
+                    EquipmentMessageLimits.MaximumWirePayloadBytes,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             if (payload is not null)
@@ -1313,9 +1374,9 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 break;
             }
 
-            var delay = remaining < _options.PollingInterval
+            var delay = remaining < settings.PollingInterval
                 ? remaining
-                : _options.PollingInterval;
+                : settings.PollingInterval;
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1409,87 +1470,6 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
             expectedRequest.CorrelationId);
     }
 
-    private async Task<byte[]?> TryReadStableBytesAsync(
-        string filePath,
-        CancellationToken cancellationToken)
-    {
-        FileSnapshot before;
-        try
-        {
-            before = FileSnapshot.Capture(filePath);
-            if (!before.Exists
-                || before.Length > EquipmentMessageLimits.MaximumWirePayloadBytes)
-            {
-                return null;
-            }
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-
-        await Task.Delay(_options.StableReadDelay, cancellationToken).ConfigureAwait(false);
-
-        try
-        {
-            var after = FileSnapshot.Capture(filePath);
-            if (!after.Exists
-                || !before.Equals(after)
-                || after.Length > EquipmentMessageLimits.MaximumWirePayloadBytes)
-            {
-                return null;
-            }
-
-            using (var stream = new FileStream(
-                       filePath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       // A response is considered publishable only after its writer has closed
-                       // the file. Denying write sharing makes an in-progress local or SMB write
-                       // fail this read attempt with a sharing violation, so the polling loop can
-                       // retry instead of parsing a payload that merely happened to keep the same
-                       // length and timestamp during StableReadDelay.
-                       FileShare.Read,
-                       4096,
-                       FileOptions.Asynchronous))
-            {
-                var bytes = new byte[(int)after.Length];
-                var offset = 0;
-                while (offset < bytes.Length)
-                {
-                    var read = await stream.ReadAsync(
-                            bytes,
-                            offset,
-                            bytes.Length - offset,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (read == 0)
-                    {
-                        return null;
-                    }
-
-                    offset += read;
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                var final = FileSnapshot.Capture(filePath);
-                return after.Equals(final) ? bytes : null;
-            }
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
     private static bool ByteArraysEqual(byte[]? left, byte[]? right)
     {
         if (ReferenceEquals(left, right))
@@ -1517,11 +1497,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         string responsePath,
         int correlationId,
         string requestCommand,
+        EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
         var maxDeleteWaitMilliseconds = Math.Min(
             2000d,
-            Math.Max(100d, _options.PollingInterval.TotalMilliseconds * 20d));
+            Math.Max(100d, settings.PollingInterval.TotalMilliseconds * 20d));
         var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(maxDeleteWaitMilliseconds);
         Exception? lastException = null;
 
@@ -1564,9 +1545,9 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 return;
             }
 
-            var delay = remaining < _options.PollingInterval
+            var delay = remaining < settings.PollingInterval
                 ? remaining
-                : _options.PollingInterval;
+                : settings.PollingInterval;
             try
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
@@ -1715,60 +1696,6 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         {
             throw new ObjectDisposedException(nameof(FileEquipmentTransport));
         }
-    }
-
-    private readonly struct FileSnapshot : IEquatable<FileSnapshot>
-    {
-        private FileSnapshot(bool exists, long length, DateTime lastWriteTimeUtc)
-        {
-            Exists = exists;
-            Length = length;
-            LastWriteTimeUtc = lastWriteTimeUtc;
-        }
-
-        public bool Exists { get; }
-
-        public long Length { get; }
-
-        private DateTime LastWriteTimeUtc { get; }
-
-        public static FileSnapshot Capture(string filePath)
-        {
-            var info = new FileInfo(filePath);
-            info.Refresh();
-            return info.Exists
-                ? new FileSnapshot(true, info.Length, info.LastWriteTimeUtc)
-                : new FileSnapshot(false, 0, default);
-        }
-
-        public bool Equals(FileSnapshot other)
-        {
-            return Exists == other.Exists
-                   && Length == other.Length
-                   && LastWriteTimeUtc == other.LastWriteTimeUtc;
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return obj is FileSnapshot other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                return (Exists.GetHashCode() * 397)
-                       ^ Length.GetHashCode()
-                       ^ LastWriteTimeUtc.GetHashCode();
-            }
-        }
-    }
-
-    private enum FilePresence
-    {
-        Absent,
-        Present,
-        Unknown,
     }
 
     private sealed class NullEquipmentExchangeTraceSink : IEquipmentExchangeTraceSink

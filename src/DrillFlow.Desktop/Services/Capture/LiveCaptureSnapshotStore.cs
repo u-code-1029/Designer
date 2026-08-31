@@ -9,40 +9,6 @@ using Microsoft.Extensions.Logging;
 
 namespace DrillFlow.Desktop.Services;
 
-/// <summary>
-/// Takes ownership of an equipment-produced capture before it can be replaced or deleted.
-/// Snapshots contain the source bytes without transcoding.
-/// </summary>
-public interface ILiveCaptureSnapshotStore
-{
-    Task<LiveCaptureSnapshot> AcquireAsync(
-        string sourceImagePath,
-        CancellationToken cancellationToken);
-}
-
-public sealed class LiveCaptureSnapshot : IDisposable
-{
-    private readonly Action<string> _release;
-    private string? _path;
-
-    internal LiveCaptureSnapshot(string path, Action<string> release)
-    {
-        _path = path ?? throw new ArgumentNullException(nameof(path));
-        _release = release ?? throw new ArgumentNullException(nameof(release));
-    }
-
-    public string Path => _path ?? throw new ObjectDisposedException(nameof(LiveCaptureSnapshot));
-
-    public void Dispose()
-    {
-        var path = Interlocked.Exchange(ref _path, null);
-        if (path is not null)
-        {
-            _release(path);
-        }
-    }
-}
-
 public sealed class LiveCaptureSnapshotStore : ILiveCaptureSnapshotStore, IDisposable
 {
     private const string SnapshotPrefix = "capture-";

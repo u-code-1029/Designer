@@ -63,6 +63,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
     public async Task<LiveImageExchangeResult> RequestOmImageAsync(
         CancellationToken cancellationToken = default)
     {
+        var ownedImageDirectory = CaptureOwnedImageDirectory(EquipmentActionNames.Om);
         string? requestedImagePath = null;
         try
         {
@@ -71,6 +72,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
                     correlationId =>
                     {
                         requestedImagePath = CreateOwnedImagePath(
+                            ownedImageDirectory,
                             EquipmentActionNames.Om,
                             correlationId);
                         return new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -80,7 +82,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
                     },
                     requireImagePath: true,
                     cancellationToken,
-                    prepareOwnedImageDirectory: true)
+                    ownedImageDirectory)
                 .ConfigureAwait(false);
 
             return new LiveImageExchangeResult(response, requestedImagePath!);
@@ -239,6 +241,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         int frameCount,
         CancellationToken cancellationToken)
     {
+        var ownedImageDirectory = CaptureOwnedImageDirectory(action);
         string? requestedImagePath = null;
         try
         {
@@ -246,7 +249,10 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
                     action,
                     correlationId =>
                     {
-                        requestedImagePath = CreateOwnedImagePath(action, correlationId);
+                        requestedImagePath = CreateOwnedImagePath(
+                            ownedImageDirectory,
+                            action,
+                            correlationId);
                         return new Dictionary<string, object?>(StringComparer.Ordinal)
                         {
                             [LiveInteractionProtocol.HorizontalFieldWidthParameter] =
@@ -257,7 +263,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
                     },
                     requireImagePath: true,
                     cancellationToken,
-                    prepareOwnedImageDirectory: true)
+                    ownedImageDirectory)
                 .ConfigureAwait(false);
 
             return new LiveImageExchangeResult(response, requestedImagePath!);
@@ -276,7 +282,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         Func<int, IReadOnlyDictionary<string, object?>?> parameterFactory,
         bool requireImagePath,
         CancellationToken cancellationToken,
-        bool prepareOwnedImageDirectory = false)
+        string? ownedImageDirectory = null)
     {
         ThrowIfDisposed();
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -286,9 +292,11 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
             SetBusy(true);
             var correlationId = await _correlationIds.NextAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (prepareOwnedImageDirectory)
+            if (ownedImageDirectory is not null)
             {
-                await EnsureOwnedImageDirectoryAsync(action, cancellationToken)
+                await EnsureOwnedImageDirectoryAsync(
+                        ownedImageDirectory,
+                        cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -367,21 +375,24 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         }
     }
 
-    private string CreateOwnedImagePath(string action, int correlationId)
+    private static string CreateOwnedImagePath(
+        string directory,
+        string action,
+        int correlationId)
     {
-        var directory = GetOwnedImageDirectory(action);
         return Path.Combine(directory, action + "-" + correlationId + ".bmp");
     }
 
-    private string GetOwnedImageDirectory(string action)
+    private string CaptureOwnedImageDirectory(string action)
     {
+        var communication = EquipmentCommunicationSnapshot.Capture(_communicationOptions);
         if (string.Equals(action, LiveInteractionProtocol.LiveAction, StringComparison.Ordinal))
         {
-            return _communicationOptions.LiveImageDirectory;
+            return communication.LiveImageDirectory;
         }
 
         return Path.Combine(
-            _communicationOptions.ExchangeDirectory,
+            communication.ExchangeDirectory,
             EquipmentCommunicationOptions.DefaultLiveImageDirectoryName);
     }
 
@@ -419,10 +430,9 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
     }
 
     private Task EnsureOwnedImageDirectoryAsync(
-        string action,
+        string directory,
         CancellationToken cancellationToken)
     {
-        var directory = GetOwnedImageDirectory(action);
         return Task.Run(
             () =>
             {

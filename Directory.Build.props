@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
-    <LangVersion>latest</LangVersion>
+    <!-- C# 13 is the solution language baseline. Runtime APIs remain constrained by net48/netstandard2.0. -->
+    <LangVersion>13.0</LangVersion>
     <Nullable>enable</Nullable>
     <Deterministic>true</Deterministic>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>

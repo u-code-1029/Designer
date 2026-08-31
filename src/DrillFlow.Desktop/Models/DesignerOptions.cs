@@ -1,6 +1,4 @@
-using System;
-using System.IO;
-using DrillFlow.Application.Communication;
+using DrillFlow.Application.RealtimeVideo;
 
 namespace DrillFlow.Desktop.Models;
 
@@ -12,121 +10,11 @@ public sealed class DesignerOptions
 
     public bool ValidateWorkflowOnEveryChange { get; set; } = true;
 
-    public CommunicationSettings Communication { get; set; } = new();
-}
-
-public static class ThemeSelection
-{
-    public const string System = "System";
-
-    public const string Light = "Light";
-
-    public const string Dark = "Dark";
-
-    public static string Normalize(string? value)
-    {
-        if (string.Equals(value, Light, StringComparison.OrdinalIgnoreCase))
-        {
-            return Light;
-        }
-
-        if (string.Equals(value, Dark, StringComparison.OrdinalIgnoreCase))
-        {
-            return Dark;
-        }
-
-        return System;
-    }
-}
-
-public sealed class CommunicationSettings
-{
-    public string ExchangeFolder { get; set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DrillFlow",
-        "Exchange");
-
     /// <summary>
-    /// Shared folder used to build Live request image_path values. Blank values from older
-    /// settings files intentionally resolve below the configured exchange folder.
+    /// Legacy per-user startup override. Deployment defaults come only from the top-level
+    /// EquipmentCommunication section; a null value must not replace those defaults.
     /// </summary>
-    public string LiveImageFolder { get; set; } = string.Empty;
+    public CommunicationSettings? Communication { get; set; }
 
-    public string RequestFileName { get; set; } = "request.xml";
-
-    public string ResponseFileName { get; set; } = "response.xml";
-
-    public string EquipmentRequestHandling { get; set; } = "RetainUntilOverwritten";
-
-    public string AppRequestHandling { get; set; } = "DeleteAfterResponse";
-
-    public string AppResponseHandling { get; set; } = "DeleteAfterRead";
-
-    public int ResponseTimeoutMilliseconds { get; set; } = 30000;
-
-    public bool RetryEnabled { get; set; }
-
-    public int MaximumRetryCount { get; set; } = 1;
-
-    public int RetryIntervalMilliseconds { get; set; } = 1000;
-
-    public int PollingIntervalMilliseconds { get; set; } = 50;
-
-    public int RequestPublishDelayMilliseconds { get; set; } = 100;
-
-    internal void ApplyTo(EquipmentCommunicationOptions options)
-    {
-        if (options is null)
-        {
-            throw new ArgumentNullException(nameof(options));
-        }
-
-        options.ExchangeDirectory = ExchangeFolder;
-        options.LiveImageDirectory = ResolveLiveImageFolder();
-        options.RequestFileName = RequestFileName;
-        options.ResponseFileName = ResponseFileName;
-        options.EquipmentRequestLifecycle = Enum.TryParse<EquipmentRequestFileLifecycle>(
-            EquipmentRequestHandling,
-            true,
-            out var requestLifecycle)
-            ? requestLifecycle
-            : (EquipmentRequestFileLifecycle)(-1);
-        options.ApplicationRequestLifecycle = Enum.TryParse<ApplicationRequestFileLifecycle>(
-            AppRequestHandling,
-            true,
-            out var applicationRequestLifecycle)
-            ? applicationRequestLifecycle
-            : (ApplicationRequestFileLifecycle)(-1);
-        options.ApplicationResponseLifecycle = Enum.TryParse<ApplicationResponseFileLifecycle>(
-            AppResponseHandling,
-            true,
-            out var responseLifecycle)
-            ? responseLifecycle
-            : (ApplicationResponseFileLifecycle)(-1);
-        options.ResponseTimeout = TimeSpan.FromMilliseconds(ResponseTimeoutMilliseconds);
-        options.RetryEnabled = RetryEnabled;
-        options.MaximumRetryCount = MaximumRetryCount;
-        options.RetryDelay = TimeSpan.FromMilliseconds(RetryIntervalMilliseconds);
-        options.PollingInterval = TimeSpan.FromMilliseconds(PollingIntervalMilliseconds);
-        options.RequestPublishDelay = TimeSpan.FromMilliseconds(
-            RequestPublishDelayMilliseconds);
-    }
-
-    internal string ResolveLiveImageFolder() =>
-        EquipmentCommunicationOptions.ResolveLiveImageDirectory(
-            ExchangeFolder,
-            LiveImageFolder);
-
-    public CommunicationSettings Clone() => (CommunicationSettings)MemberwiseClone();
-}
-
-public sealed class UserPreferences
-{
-    public string Language { get; set; } = "Auto";
-
-    public string Theme { get; set; } = ThemeSelection.System;
-
-    public bool ValidateWorkflowOnEveryChange { get; set; } = true;
-
-    public CommunicationSettings Communication { get; set; } = new();
+    public RealtimeVideoOptions RealtimeVideo { get; set; } = new();
 }

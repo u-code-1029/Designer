@@ -132,6 +132,42 @@ public sealed class ApplicationLiveInteractionSessionTests
             transport.Requests[3].Parameters["image_path"]);
     }
 
+    [Fact]
+    public async Task LiveImageDirectory_IsCapturedOnceForTheWholeImageExchange()
+    {
+        using var directory = new LiveSessionTestDirectory();
+        var initialImageDirectory = Path.Combine(directory.Path, "initial-live");
+        var changedImageDirectory = Path.Combine(directory.Path, "changed-live");
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = directory.Path,
+            LiveImageDirectory = initialImageDirectory,
+            RequestFileName = "request.xml",
+            ResponseFileName = "response.xml",
+        };
+        using var correlationIds = new BlockingCorrelationProvider();
+        var transport = new RecordingTransport((request, _) =>
+            Task.FromResult(ResponseFor(request)));
+        using var session = new LiveInteractionSession(
+            transport,
+            correlationIds,
+            Options.Create(options),
+            NullLogger<LiveInteractionSession>.Instance);
+
+        var exchangeTask = session.RequestFrameAsync(1E-3);
+        await correlationIds.Entered.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        options.LiveImageDirectory = changedImageDirectory;
+        correlationIds.Release();
+
+        var exchange = await exchangeTask;
+
+        Assert.Equal(
+            Path.Combine(initialImageDirectory, "live-1.bmp"),
+            exchange.RequestedImagePath);
+        Assert.True(Directory.Exists(initialImageDirectory));
+        Assert.False(Directory.Exists(changedImageDirectory));
+    }
+
     [Theory]
     [InlineData(0d)]
     [InlineData(-1E-3)]
@@ -457,6 +493,26 @@ public sealed class ApplicationLiveInteractionSessionTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(Interlocked.Increment(ref _value));
         }
+    }
+
+    private sealed class BlockingCorrelationProvider : ICorrelationIdProvider, IDisposable
+    {
+        private readonly SemaphoreSlim _release = new SemaphoreSlim(0, 1);
+        private readonly TaskCompletionSource<bool> _entered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+
+        public async Task<int> NextAsync(CancellationToken cancellationToken)
+        {
+            _entered.TrySetResult(true);
+            await _release.WaitAsync(cancellationToken);
+            return 1;
+        }
+
+        public void Release() => _release.Release();
+
+        public void Dispose() => _release.Dispose();
     }
 
     private sealed class RecordingTransport : IEquipmentFileTransport

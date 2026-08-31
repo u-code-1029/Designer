@@ -1,24 +1,15 @@
 using System;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
-using DrillFlow.Application;
-using DrillFlow.Application.Communication;
-using DrillFlow.Desktop.Models;
+using DrillFlow.Desktop.Behaviors;
+using DrillFlow.Desktop.Bootstrap;
 using DrillFlow.Desktop.Services;
-using DrillFlow.Desktop.ViewModels;
 using DrillFlow.Desktop.Views;
-using DrillFlow.Infrastructure;
-using DrillFlow.Infrastructure.Communication;
-using DrillFlow.Core.Validation;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Newtonsoft.Json.Linq;
 using Serilog;
-using Wpf.Ui.DependencyInjection;
 
 namespace DrillFlow.Desktop;
 
@@ -33,6 +24,7 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        ImmediateToolTipPolicy.Initialize();
 
         try
         {
@@ -49,94 +41,9 @@ public partial class App : System.Windows.Application
                 return;
             }
 
-            var logDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DrillFlow",
-                "Logs");
-            Directory.CreateDirectory(logDirectory);
-
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Debug()
-                .WriteTo.Debug()
-                .WriteTo.File(
-                    Path.Combine(logDirectory, "bootstrap-.log"),
-                    rollingInterval: RollingInterval.Day,
-                    retainedFileCountLimit: 14,
-                    shared: true)
-                // Serilog.Extensions.Hosting does not expose ReloadableLogger on its net462 asset;
-                // this early logger still serves as the bootstrap logger and is replaced by UseSerilog.
-                .CreateLogger();
-
-            var userSettingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DrillFlow",
-                "settings.json");
-
-            _host = Host.CreateDefaultBuilder()
-                .ConfigureAppConfiguration(configuration =>
-                {
-                    configuration.SetBasePath(AppDomain.CurrentDomain.BaseDirectory);
-                    configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
-                })
-                .UseSerilog((_, _, logger) => logger
-                    .MinimumLevel.Debug()
-                    .Enrich.FromLogContext()
-                    .WriteTo.Debug()
-                    .WriteTo.File(
-                        Path.Combine(logDirectory, "drillflow-.log"),
-                        rollingInterval: RollingInterval.Day,
-                        retainedFileCountLimit: 30,
-                        shared: true))
-                .ConfigureServices((context, services) =>
-                {
-                    services.Configure<DesignerOptions>(context.Configuration.GetSection("DrillFlow"));
-                    var designerOptions = LoadStartupOptions(
-                        userSettingsPath,
-                        context.Configuration.GetSection("DrillFlow").Get<DesignerOptions>()
-                        ?? new DesignerOptions());
-
-                    services.AddDrillFlowApplication();
-                    services.AddDrillFlowInfrastructure(context.Configuration);
-                    services.AddSingleton<WorkflowValidator>();
-                    services.PostConfigure<EquipmentCommunicationOptions>(options =>
-                    {
-                        var communication = designerOptions.Communication ?? new CommunicationSettings();
-                        ApplyCommunicationSettings(options, communication);
-                    });
-
-                    services.AddSingleton<IUserSettingsStore, UserSettingsStore>();
-                    services.AddSingleton<ILocalizationService, LocalizationService>();
-                    services.AddSingleton<IApplicationThemeService, ApplicationThemeService>();
-                    services.AddSingleton<IWorkflowValidationPolicy, WorkflowValidationPolicy>();
-                    services.AddSingleton<IWorkflowDocumentService, WorkflowDocumentService>();
-                    services.AddSingleton<IWorkflowExecutionFacade, WorkflowExecutionFacade>();
-                    services.AddSingleton<IFileDialogService, FileDialogService>();
-                    services.AddSingleton<IContentDialogGate, ContentDialogGate>();
-                    services.AddSingleton<IUserDialogService, UserDialogService>();
-                    services.AddSingleton<ITemporaryResponseImageService, TemporaryResponseImageService>();
-                    services.AddSingleton<ILiveCaptureSnapshotStore, LiveCaptureSnapshotStore>();
-                    services.AddSingleton<ILiveImageDecoder, LiveImageDecoder>();
-                    services.AddSingleton<IDefaultFileLauncher, DefaultFileLauncher>();
-                    services.AddSingleton<IResponseSimulationDialogService, ResponseSimulationDialogService>();
-                    services.AddSingleton<IExchangeFolderLauncher, ExchangeFolderLauncher>();
-                    services.AddSingleton<IEquipmentExchangePathLauncher, EquipmentExchangePathLauncher>();
-                    services.AddSingleton<IEquipmentScreenPopOutService, EquipmentScreenPopOutService>();
-                    services.AddSingleton<EquipmentCommunicationMonitorViewModel>();
-                    services.AddSingleton<IEquipmentExchangeTraceSink>(provider =>
-                        provider.GetRequiredService<EquipmentCommunicationMonitorViewModel>());
-
-                    services.AddSingleton<MainWindowViewModel>();
-                    services.AddSingleton<MainPageViewModel>();
-                    services.AddSingleton<LiveInteractionPageViewModel>();
-                    services.AddSingleton<SettingsPageViewModel>();
-
-                    services.AddSingleton<MainWindow>();
-                    services.AddSingleton<MainPage>();
-                    services.AddSingleton<LiveInteractionPage>();
-                    services.AddSingleton<SettingsPage>();
-                    services.AddNavigationViewPageProvider();
-                })
-                .Build();
+            var paths = DesktopApplicationPaths.CreateDefault();
+            DesktopLogging.ConfigureBootstrapLogger(paths);
+            _host = DesktopHostFactory.Create(paths);
 
             await _host.StartAsync().ConfigureAwait(true);
 
@@ -271,56 +178,4 @@ public partial class App : System.Windows.Application
         await window.ShowMessageAsync(title, message);
     }
 
-    private static DesignerOptions LoadStartupOptions(string userSettingsPath, DesignerOptions fallback)
-    {
-        try
-        {
-            if (!File.Exists(userSettingsPath))
-            {
-                return fallback;
-            }
-
-            var root = JObject.Parse(File.ReadAllText(userSettingsPath));
-            var persisted = (root["DrillFlow"] ?? root).ToObject<UserPreferences>();
-            if (persisted?.Communication is null)
-            {
-                return fallback;
-            }
-
-            var candidate = new DesignerOptions
-            {
-                Language = string.IsNullOrWhiteSpace(persisted.Language)
-                    ? fallback.Language
-                    : persisted.Language,
-                Theme = ThemeSelection.Normalize(persisted.Theme),
-                ValidateWorkflowOnEveryChange = persisted.ValidateWorkflowOnEveryChange,
-                Communication = persisted.Communication
-            };
-
-            var communicationOptions = new EquipmentCommunicationOptions();
-            ApplyCommunicationSettings(communicationOptions, candidate.Communication);
-            var validation = new EquipmentCommunicationOptionsValidator().Validate(null, communicationOptions);
-            if (validation.Failed)
-            {
-                Log.Warning(
-                    "Persisted communication settings are invalid and will not be applied at startup: {Failures}",
-                    string.Join("; ", validation.Failures));
-                return fallback;
-            }
-
-            return candidate;
-        }
-        catch (Exception exception)
-        {
-            Log.Warning(exception, "Could not apply persisted settings during startup");
-            return fallback;
-        }
-    }
-
-    private static void ApplyCommunicationSettings(
-        EquipmentCommunicationOptions options,
-        CommunicationSettings communication)
-    {
-        communication.ApplyTo(options);
-    }
 }

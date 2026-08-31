@@ -97,6 +97,9 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         ValidationIssues.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasValidationIssues));
+            OnPropertyChanged(nameof(HasValidationErrors));
+            OnPropertyChanged(nameof(ValidationErrorCount));
+            OnPropertyChanged(nameof(ValidationErrorBadgeText));
             OnPropertyChanged(nameof(ValidationSummaryText));
         };
 
@@ -380,6 +383,14 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     }
 
     public bool HasValidationIssues => ValidationIssues.Count > 0;
+
+    public int ValidationErrorCount => ValidationIssues.Count(issue => issue.IsError);
+
+    public bool HasValidationErrors => ValidationErrorCount > 0;
+
+    public string ValidationErrorBadgeText => ValidationErrorCount > 9
+        ? "9+"
+        : ValidationErrorCount.ToString();
 
     public string ValidationSummaryText => !IsValidationCurrent
         ? _localization["WorkflowValidationNotCurrent"]
@@ -1120,6 +1131,42 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             message);
     }
 
+    private async Task ShowSelectedValidationFailureDialogAsync(
+        WorkflowValidationResult validation)
+    {
+        var actions = EnumerateActions().ToArray();
+        var errors = validation.Issues
+            .Where(issue => issue.Severity == ValidationSeverity.Error)
+            .ToArray();
+        var details = errors
+            .Take(8)
+            .Select(issue =>
+            {
+                var action = issue.NodeId is Guid nodeId
+                    ? actions.FirstOrDefault(candidate => candidate.Id == nodeId)
+                    : null;
+                var alias = action?.Alias ?? _localization["Workflow"];
+                return "• " + alias + ": " + FormatValidationDetail(issue);
+            })
+            .ToList();
+        if (errors.Length > details.Count)
+        {
+            details.Add(string.Format(
+                _localization["WorkflowValidationMoreIssues"],
+                errors.Length - details.Count));
+        }
+
+        var message = details.Count == 0
+            ? _localization["ValidationFailed"]
+            : _localization["WorkflowValidationRunBlocked"]
+              + Environment.NewLine
+              + Environment.NewLine
+              + string.Join(Environment.NewLine, details);
+        await _userDialogs.ShowMessageAsync(
+            _localization["WorkflowValidationDialogTitle"],
+            message);
+    }
+
     private void SelectValidationIssue(WorkflowValidationIssueViewModel? issue)
     {
         if (issue?.ActionId is not Guid actionId)
@@ -1216,12 +1263,6 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return;
         }
 
-        if (!ValidateWorkflow(true))
-        {
-            await ShowValidationFailureDialogAsync();
-            return;
-        }
-
         try
         {
             // Preserve the complete document as the expression context while isolating the
@@ -1248,7 +1289,12 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                 node.HasBreakpoint = false;
             }
 
-            var validation = _workflowValidator.Validate(executionDocument);
+            var validation = _workflowValidator.ValidateSelectedAction(
+                executionDocument,
+                selected.Id,
+                _execution.Results.GetAllChronologically()
+                    .Select(result => result.ActionId)
+                    .Distinct());
             if (!validation.IsValid)
             {
                 var issue = validation.Issues.FirstOrDefault(candidate =>
@@ -1260,7 +1306,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
                         validation.Issues.Count(candidate => candidate.Severity == ValidationSeverity.Error),
                         FormatValidationDetail(issue));
                 StatusIsError = true;
-                await ShowValidationFailureDialogAsync();
+                await ShowSelectedValidationFailureDialogAsync(validation);
                 return;
             }
 

@@ -38,6 +38,238 @@ namespace DrillFlow.Core.Validation
             return new WorkflowValidationResult(state.Issues);
         }
 
+        /// <summary>
+        /// Validates only the action subtree scheduled by "Run only this Action" and the
+        /// actions whose parameter objects it references. Errors on unrelated actions remain
+        /// visible to the workflow editor, but do not prevent this isolated execution.
+        /// </summary>
+        /// <param name="runtimeResultActionIds">
+        /// Actions that already have a result in the current run. A selected action cannot use
+        /// an external action's result/last/results member until such a result exists.
+        /// </param>
+        public WorkflowValidationResult ValidateSelectedAction(
+            WorkflowDocument document,
+            Guid actionId,
+            IEnumerable<Guid>? runtimeResultActionIds = null)
+        {
+            if (document == null)
+            {
+                throw new ArgumentNullException(nameof(document));
+            }
+
+            if (actionId == Guid.Empty)
+            {
+                throw new ArgumentException("A selected action must have a non-empty ID.", nameof(actionId));
+            }
+
+            var fullValidation = Validate(document);
+            var allNodes = EnumerateNodesSafely(document.Nodes).ToArray();
+            var selected = allNodes.FirstOrDefault(node => node.Id == actionId);
+            if (selected == null)
+            {
+                return new WorkflowValidationResult(new[]
+                {
+                    new ValidationIssue(
+                        "selected_action.not_found",
+                        $"The selected action '{actionId}' does not exist in the workflow.",
+                        ValidationSeverity.Error,
+                        actionId,
+                        "selectedAction")
+                });
+            }
+
+            // A cycle/shared-instance error prevents the normal validator from safely walking
+            // parameters. Do not attempt a partial physical execution from a corrupt graph.
+            var structuralErrors = fullValidation.Issues
+                .Where(issue => issue.Severity == ValidationSeverity.Error
+                                && (issue.Code == "structure.cycle"
+                                    || issue.Code == "structure.shared_node"))
+                .ToArray();
+            if (structuralErrors.Length != 0)
+            {
+                return new WorkflowValidationResult(structuralErrors.Concat(new[]
+                {
+                    new ValidationIssue(
+                        "selected_action.graph_invalid",
+                        "The selected action cannot be validated while the workflow graph is structurally invalid.",
+                        ValidationSeverity.Error,
+                        selected.Id,
+                        "selectedAction")
+                }));
+            }
+
+            var executionNodes = EnumerateNodesSafely(new[] { selected }).ToArray();
+            var executionIds = new HashSet<Guid>(executionNodes.Select(node => node.Id));
+            var validationScopeIds = new HashSet<Guid>(executionIds);
+            var relevantKeys = new HashSet<string>(
+                executionNodes
+                    .Select(node => node.Key)
+                    .Where(key => !string.IsNullOrWhiteSpace(key)),
+                StringComparer.OrdinalIgnoreCase);
+            var runtimeResults = new HashSet<Guid>(runtimeResultActionIds ?? Enumerable.Empty<Guid>());
+            var runtimeIssues = new List<ValidationIssue>();
+
+            foreach (var consumer in executionNodes)
+            {
+                foreach (var binding in EnumerateExpressionBindings(consumer))
+                {
+                    ExpressionAnalysis analysis;
+                    try
+                    {
+                        analysis = _expressions.Analyze(binding.Binding.ExpressionText);
+                    }
+                    catch (ExpressionException)
+                    {
+                        // The normal validation result already contains the syntax issue on
+                        // the consuming action, which is part of validationScopeIds.
+                        continue;
+                    }
+
+                    foreach (var root in analysis.RootIdentifiers)
+                    {
+                        var referencedNodes = allNodes
+                            .Where(node => string.Equals(node.Key, root, StringComparison.OrdinalIgnoreCase))
+                            .ToArray();
+                        if (referencedNodes.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        relevantKeys.Add(root);
+                        var members = analysis.FirstLevelMemberReferences
+                            .Where(reference => string.Equals(
+                                reference.RootIdentifier,
+                                root,
+                                StringComparison.OrdinalIgnoreCase))
+                            .Select(reference => reference.MemberName)
+                            .ToArray();
+                        var referencesParameters = members.Length == 0
+                                                   || members.Any(member => string.Equals(
+                                                       member,
+                                                       "parameters",
+                                                       StringComparison.OrdinalIgnoreCase));
+                        var referencesResult = members.Any(IsRuntimeResultMember);
+
+                        if (referencesParameters)
+                        {
+                            foreach (var referencedNode in referencedNodes)
+                            {
+                                validationScopeIds.Add(referencedNode.Id);
+                            }
+                        }
+
+                        if (referencesResult
+                            && !referencedNodes.Any(node => executionIds.Contains(node.Id))
+                            && !referencedNodes.Any(node => runtimeResults.Contains(node.Id)))
+                        {
+                            runtimeIssues.Add(new ValidationIssue(
+                                "expression.result_unavailable",
+                                $"Action '{root}' has no result in the current run.",
+                                ValidationSeverity.Error,
+                                consumer.Id,
+                                binding.Path));
+                        }
+                    }
+                }
+            }
+
+            var ambiguousRelevantNodeIds = new HashSet<Guid>(
+                allNodes
+                    .Where(node => !string.IsNullOrWhiteSpace(node.Key))
+                    .GroupBy(node => node.Key, StringComparer.OrdinalIgnoreCase)
+                    .Where(group => group.Count() > 1 && relevantKeys.Contains(group.Key))
+                    .SelectMany(group => group)
+                    .Select(node => node.Id));
+
+            var scopedIssues = fullValidation.Issues.Where(issue =>
+                issue.NodeId is Guid nodeId
+                && (validationScopeIds.Contains(nodeId)
+                    || (issue.Code == "node.duplicate_key"
+                        && ambiguousRelevantNodeIds.Contains(nodeId))));
+
+            return new WorkflowValidationResult(scopedIssues.Concat(runtimeIssues)
+                .GroupBy(
+                    issue => string.Join("|", issue.Code, issue.NodeId, issue.Path, issue.Message),
+                    StringComparer.Ordinal)
+                .Select(group => group.First()));
+        }
+
+        private static bool IsRuntimeResultMember(string member)
+        {
+            return string.Equals(member, "result", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(member, "results", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(member, "last", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static IEnumerable<ExpressionBindingReference> EnumerateExpressionBindings(
+            WorkflowNode node)
+        {
+            foreach (var parameter in node.GetParameterBindings())
+            {
+                if (parameter.Value?.IsExpression == true)
+                {
+                    yield return new ExpressionBindingReference(
+                        parameter.Value,
+                        $"selectedAction.{node.Key}.{parameter.Key}");
+                }
+            }
+
+            if (node is not ConditionalNode conditional || conditional.Branches == null)
+            {
+                yield break;
+            }
+
+            for (var index = 0; index < conditional.Branches.Count; index++)
+            {
+                var condition = conditional.Branches[index]?.Condition;
+                if (condition?.IsExpression == true)
+                {
+                    yield return new ExpressionBindingReference(
+                        condition,
+                        $"selectedAction.{node.Key}.branches[{index}].condition");
+                }
+            }
+        }
+
+        private static IEnumerable<WorkflowNode> EnumerateNodesSafely(
+            IEnumerable<WorkflowNode>? roots)
+        {
+            if (roots == null)
+            {
+                yield break;
+            }
+
+            var pending = new Stack<WorkflowNode>(roots.Where(node => node != null).Reverse());
+            var visited = new HashSet<WorkflowNode>(ReferenceComparer<WorkflowNode>.Instance);
+            while (pending.Count != 0)
+            {
+                var node = pending.Pop();
+                if (!visited.Add(node))
+                {
+                    continue;
+                }
+
+                yield return node;
+                foreach (var child in node.GetChildren().Where(child => child != null).Reverse())
+                {
+                    pending.Push(child);
+                }
+            }
+        }
+
+        private sealed class ExpressionBindingReference
+        {
+            public ExpressionBindingReference(ParameterBinding binding, string path)
+            {
+                Binding = binding;
+                Path = path;
+            }
+
+            public ParameterBinding Binding { get; }
+
+            public string Path { get; }
+        }
+
         private sealed class State
         {
             private readonly ExpressionEngine _expressions;

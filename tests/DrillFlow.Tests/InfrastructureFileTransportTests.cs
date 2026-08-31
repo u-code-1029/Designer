@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Communication;
 using DrillFlow.Infrastructure.Communication;
+using DrillFlow.Infrastructure.Communication.FileExchange;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -616,6 +617,42 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task CanceledExchange_CleanupUsesTheExchangeSettingsSnapshot()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        var originalStableReadDelay = options.StableReadDelay;
+        var stableReader = new RecordingStableFileReader();
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options),
+            NullLogger<FileEquipmentTransport>.Instance,
+            _codec,
+            new RecordingTraceSink(),
+            () => DateTime.UtcNow,
+            stableReader);
+        using var cancellation = new CancellationTokenSource();
+        var request = LiveRequest(142);
+
+        var exchange = transport.ExchangeAsync(request, cancellation.Token);
+        await WaitForRequestAsync(options, request);
+        stableReader.ClearObservations();
+
+        // Detached cancellation cleanup belongs to the exchange that published these exact
+        // bytes. A later UI edit must not replace its stable-read timing with the new value.
+        options.StableReadDelay = TimeSpan.FromSeconds(5);
+        options.PollingInterval = TimeSpan.FromSeconds(5);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exchange);
+        await WaitForFileAbsentAsync(RequestPath(options));
+
+        Assert.NotEmpty(stableReader.ObservedStableReadDelays);
+        Assert.All(
+            stableReader.ObservedStableReadDelays,
+            delay => Assert.Equal(originalStableReadDelay, delay));
+    }
+
+    [Fact]
     public async Task CanceledExchange_PreservesAReplacedRequestOwnedByAnotherWriter()
     {
         using var directory = new TempDirectory();
@@ -747,6 +784,84 @@ public sealed class InfrastructureFileTransportTests
 
         Assert.Equal(114, response.CorrelationId);
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task Exchange_UsesOneImmutableSettingsSnapshotAndNextExchangeUsesLatestSettings()
+    {
+        using var originalDirectory = new TempDirectory();
+        using var updatedDirectory = new TempDirectory();
+        var options = CreateOptions(originalDirectory.Path);
+        var originalPaths = CreateOptions(originalDirectory.Path);
+        var stableReader = new RecordingStableFileReader();
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options),
+            NullLogger<FileEquipmentTransport>.Instance,
+            _codec,
+            new RecordingTraceSink(),
+            () => DateTime.UtcNow,
+            stableReader);
+        var firstRequest = StageRequest(140);
+
+        var firstExchange = transport.ExchangeAsync(firstRequest, CancellationToken.None);
+        await WaitForRequestAsync(originalPaths, firstRequest);
+
+        // Mutate every settings family after publication. The active exchange must continue with
+        // its already-validated snapshot rather than mixing these values into response waiting or
+        // cleanup. Deliberately long timings make any leaked StableReadDelay/PollingInterval
+        // observable as a test timeout.
+        options.ExchangeDirectory = updatedDirectory.Path;
+        options.LiveImageDirectory = Path.Combine(updatedDirectory.Path, "live-updated");
+        options.RequestFileName = "updated.request.xml";
+        options.ResponseFileName = "updated.response.xml";
+        options.EquipmentRequestLifecycle = EquipmentRequestFileLifecycle.EquipmentDeletesAfterRead;
+        options.ApplicationRequestLifecycle = ApplicationRequestFileLifecycle.RetainUntilOverwritten;
+        options.ApplicationResponseLifecycle = ApplicationResponseFileLifecycle.RetainUntilOverwritten;
+        options.ResponseTimeout = TimeSpan.FromSeconds(5);
+        options.RetryEnabled = true;
+        options.MaximumRetryCount = 2;
+        options.RetryDelay = TimeSpan.FromSeconds(2);
+        options.RequestPublishDelay = TimeSpan.FromSeconds(2);
+        options.PollingInterval = TimeSpan.FromSeconds(2);
+        options.StableReadDelay = TimeSpan.FromSeconds(2);
+
+        PublishResponse(originalPaths, StageResponse(140, 1, 2));
+        var firstResponse = await firstExchange.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(140, firstResponse.CorrelationId);
+        Assert.False(File.Exists(RequestPath(originalPaths)));
+        Assert.False(File.Exists(ResponsePath(originalPaths)));
+        Assert.NotEmpty(stableReader.ObservedStableReadDelays);
+        Assert.All(
+            stableReader.ObservedStableReadDelays,
+            delay => Assert.Equal(originalPaths.StableReadDelay, delay));
+
+        // Keep the updated paths and lifecycle policy, but use practical timings for the next
+        // exchange. Capturing again must observe these latest values.
+        options.ResponseTimeout = TimeSpan.FromSeconds(2);
+        options.RetryEnabled = false;
+        options.MaximumRetryCount = 1;
+        options.RetryDelay = TimeSpan.FromMilliseconds(25);
+        options.RequestPublishDelay = TimeSpan.Zero;
+        options.PollingInterval = TimeSpan.FromMilliseconds(25);
+        options.StableReadDelay = TimeSpan.FromMilliseconds(25);
+        stableReader.ClearObservations();
+
+        var secondRequest = StageRequest(141);
+        var secondExchange = transport.ExchangeAsync(secondRequest, CancellationToken.None);
+        await WaitForRequestAsync(options, secondRequest);
+        Assert.False(File.Exists(RequestPath(originalPaths)));
+
+        PublishResponse(options, StageResponse(141, 3, 4));
+        File.Delete(RequestPath(options));
+        var secondResponse = await secondExchange.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(141, secondResponse.CorrelationId);
+        Assert.True(File.Exists(ResponsePath(options)));
+        Assert.NotEmpty(stableReader.ObservedStableReadDelays);
+        Assert.All(
+            stableReader.ObservedStableReadDelays,
+            delay => Assert.Equal(options.StableReadDelay, delay));
     }
 
     private FileEquipmentTransport CreateTransport(
@@ -1122,6 +1237,55 @@ public sealed class InfrastructureFileTransportTests
         {
             Interlocked.Increment(ref _exchangeStoppedCount);
             throw new InvalidOperationException("stopped trace failure");
+        }
+    }
+
+    private sealed class RecordingStableFileReader : IStableEquipmentFileReader
+    {
+        private readonly object _sync = new object();
+        private readonly StableEquipmentFileReader _inner = new StableEquipmentFileReader();
+        private readonly List<TimeSpan> _observedStableReadDelays = new List<TimeSpan>();
+
+        public IReadOnlyList<TimeSpan> ObservedStableReadDelays
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _observedStableReadDelays.ToArray();
+                }
+            }
+        }
+
+        public EquipmentFilePresence GetPresence(string filePath)
+        {
+            return _inner.GetPresence(filePath);
+        }
+
+        public Task<byte[]?> TryReadAsync(
+            string filePath,
+            TimeSpan stableReadDelay,
+            int maximumPayloadBytes,
+            CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                _observedStableReadDelays.Add(stableReadDelay);
+            }
+
+            return _inner.TryReadAsync(
+                filePath,
+                stableReadDelay,
+                maximumPayloadBytes,
+                cancellationToken);
+        }
+
+        public void ClearObservations()
+        {
+            lock (_sync)
+            {
+                _observedStableReadDelays.Clear();
+            }
         }
     }
 

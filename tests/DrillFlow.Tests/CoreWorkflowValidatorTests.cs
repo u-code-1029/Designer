@@ -460,6 +460,78 @@ namespace DrillFlow.Tests
         }
 
         [Fact]
+        public void SelectedActionValidationIgnoresUnrelatedInvalidActions()
+        {
+            var unrelated = new FocusNode
+            {
+                Key = "invalid_focus",
+                HorizontalFieldWidth = ParameterBinding.Literal("0")
+            };
+            var selected = ValidStage("selected_stage");
+            var document = Document(unrelated, selected);
+
+            Assert.False(_validator.Validate(document).IsValid);
+            Assert.True(_validator.ValidateSelectedAction(document, selected.Id).IsValid);
+        }
+
+        [Fact]
+        public void SelectedActionValidationStillRejectsTheSelectedSubtree()
+        {
+            var selected = ValidStage("selected_stage");
+            selected.StageX = ParameterBinding.Literal("not-a-number");
+
+            var result = _validator.ValidateSelectedAction(Document(selected), selected.Id);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == selected.Id && issue.Code == "parameter.range_or_type");
+        }
+
+        [Fact]
+        public void SelectedActionValidationRequiresReferencedRuntimeResult()
+        {
+            var source = ValidStage("source_stage");
+            var selected = new IntegrationNode
+            {
+                Key = "selected_integration",
+                HorizontalFieldWidth = ParameterBinding.Expression(
+                    "source_stage.result.current_stage_x")
+            };
+            var document = Document(source, selected);
+
+            var unavailable = _validator.ValidateSelectedAction(document, selected.Id);
+            var available = _validator.ValidateSelectedAction(
+                document,
+                selected.Id,
+                new[] { source.Id });
+
+            Assert.Contains(
+                unavailable.Issues,
+                issue => issue.NodeId == selected.Id
+                         && issue.Code == "expression.result_unavailable");
+            Assert.True(available.IsValid);
+        }
+
+        [Fact]
+        public void SelectedActionValidationIncludesReferencedParameterActionErrors()
+        {
+            var source = ValidStage("source_stage");
+            source.StageX = ParameterBinding.Literal("not-a-number");
+            var selected = ValidStage("selected_stage");
+            selected.StageX = ParameterBinding.Expression("source_stage.parameters.stage_x");
+
+            var result = _validator.ValidateSelectedAction(
+                Document(source, selected),
+                selected.Id);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == source.Id && issue.Code == "parameter.range_or_type");
+        }
+
+        [Fact]
         public void RejectsUnknownTopLevelActionMembersButAllowsDynamicResultFields()
         {
             var first = ValidStage("first");

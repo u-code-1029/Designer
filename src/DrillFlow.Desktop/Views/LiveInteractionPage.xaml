@@ -95,7 +95,10 @@
         </ControlTemplate>
     </Page.Resources>
 
-    <Grid Margin="16" ClipToBounds="True">
+    <Grid Margin="16"
+          ClipToBounds="True"
+          HorizontalAlignment="Stretch"
+          VerticalAlignment="Stretch">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="12" />
@@ -191,18 +194,6 @@
                     <ui:Button Width="38"
                                Height="36"
                                Padding="0"
-                               Command="{Binding OpenExchangeFolderCommand}"
-                               Margin="0,0,4,0"
-                               ToolTip="{DynamicResource OpenExchangeFolder}"
-                               AutomationProperties.Name="{DynamicResource OpenExchangeFolder}">
-                        <Control Width="18"
-                                 Height="18"
-                                 Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ui:Button}}"
-                                 Template="{StaticResource FolderVectorIconTemplate}" />
-                    </ui:Button>
-                    <ui:Button Width="38"
-                               Height="36"
-                               Padding="0"
                                Command="{Binding GenerateSingleFrameResponseCommand}"
                                Margin="0,0,8,0"
                                ToolTip="{DynamicResource LiveGenerateSingleFrameResponseHint}"
@@ -273,53 +264,56 @@
                 <ColumnDefinition Width="360" MinWidth="320" />
             </Grid.ColumnDefinitions>
 
-            <ui:Card Grid.Column="0"
-                     Padding="0"
-                     HorizontalContentAlignment="Stretch"
-                     VerticalContentAlignment="Stretch">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
+            <Grid Grid.Column="0"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Stretch">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="10" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-                    <Border Grid.Row="0"
-                            Padding="12,9"
-                            BorderBrush="{DynamicResource DrillBorderBrush}"
-                            BorderThickness="0,0,0,1">
-                        <WrapPanel VerticalAlignment="Center">
-                            <CheckBox Content="{DynamicResource LiveShowOmNavigationImage}"
-                                      IsChecked="{Binding IsOmPanelVisible, Mode=TwoWay}"
-                                      VerticalAlignment="Center"
-                                      Margin="0,0,14,0" />
-                            <ui:Button Command="{Binding AcquireOmImageCommand}"
-                                       ToolTip="{DynamicResource LiveAcquireOmImageHint}"
-                                       AutomationProperties.Name="{DynamicResource LiveAcquireOmImage}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Control Width="18"
-                                             Height="18"
-                                             Margin="0,0,7,0"
-                                             Foreground="{DynamicResource DrillTextBrush}"
-                                             Template="{StaticResource ImageVectorIconTemplate}" />
-                                    <TextBlock Text="{DynamicResource LiveAcquireOmImage}"
-                                               VerticalAlignment="Center" />
-                                </StackPanel>
-                            </ui:Button>
-                        </WrapPanel>
-                    </Border>
+                <ui:Card Grid.Row="0"
+                         Padding="12,9"
+                         HorizontalContentAlignment="Stretch">
+                    <WrapPanel VerticalAlignment="Center">
+                        <CheckBox Content="{DynamicResource LiveShowOmNavigationImage}"
+                                  IsChecked="{Binding IsOmPanelVisible, Mode=TwoWay}"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,14,0" />
+                        <ui:Button Command="{Binding AcquireOmImageCommand}"
+                                   ToolTip="{DynamicResource LiveAcquireOmImageHint}"
+                                   AutomationProperties.Name="{DynamicResource LiveAcquireOmImage}">
+                            <StackPanel Orientation="Horizontal">
+                                <Control Width="18"
+                                         Height="18"
+                                         Margin="0,0,7,0"
+                                         Foreground="{DynamicResource DrillTextBrush}"
+                                         Template="{StaticResource ImageVectorIconTemplate}" />
+                                <TextBlock Text="{DynamicResource LiveAcquireOmImage}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ui:Button>
+                    </WrapPanel>
+                </ui:Card>
 
-                    <Grid Grid.Row="1">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                <Grid Grid.Row="2"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="180" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" MinWidth="240" />
+                    </Grid.ColumnDefinitions>
 
-                        <Grid Grid.Column="0"
-                              Margin="0,0,6,0"
-                              MinHeight="260"
+                    <ui:Card Grid.Column="0"
+                             Padding="0"
+                             HorizontalContentAlignment="Stretch"
+                             VerticalContentAlignment="Stretch"
+                             Visibility="{Binding IsOmPanelVisible, Converter={StaticResource BoolToVisibility}}">
+                        <Grid MinHeight="260"
                               Background="{DynamicResource DrillOpaqueSurfaceBrush}"
-                              ClipToBounds="True"
-                              Visibility="{Binding IsOmPanelVisible, Converter={StaticResource BoolToVisibility}}">
+                              ClipToBounds="True">
                             <Image Source="{Binding OmImageSource}"
                                    Stretch="Uniform"
                                    RenderOptions.BitmapScalingMode="HighQuality" />
@@ -365,142 +359,155 @@
                                            FontWeight="SemiBold" />
                             </Border>
                         </Grid>
+                    </ui:Card>
 
+                    <GridSplitter Grid.Column="1"
+                                  Width="8"
+                                  HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Stretch"
+                                  ResizeDirection="Columns"
+                                  ResizeBehavior="PreviousAndNext"
+                                  ShowsPreview="True"
+                                  Cursor="SizeWE"
+                                  Background="Transparent"
+                                  Visibility="{Binding IsOmPanelVisible, Converter={StaticResource BoolToVisibility}}" />
+
+                    <ui:Card Padding="0"
+                             HorizontalContentAlignment="Stretch"
+                             VerticalContentAlignment="Stretch">
+                        <ui:Card.Style>
+                            <Style TargetType="ui:Card">
+                                <Setter Property="Grid.Column" Value="2" />
+                                <Setter Property="Grid.ColumnSpan" Value="1" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsOmPanelVisible}" Value="False">
+                                        <Setter Property="Grid.Column" Value="0" />
+                                        <Setter Property="Grid.ColumnSpan" Value="3" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ui:Card.Style>
                         <Grid x:Name="ImageViewport"
                               MinHeight="260"
                               Background="{DynamicResource DrillOpaqueSurfaceBrush}"
                               MouseWheel="ImageViewport_MouseWheel"
                               ClipToBounds="True">
-                            <Grid.Style>
-                                <Style TargetType="Grid">
-                                    <Setter Property="Grid.Column" Value="1" />
-                                    <Setter Property="Grid.ColumnSpan" Value="1" />
-                                    <Setter Property="Margin" Value="6,0,0,0" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsOmPanelVisible}" Value="False">
-                                            <Setter Property="Grid.Column" Value="0" />
-                                            <Setter Property="Grid.ColumnSpan" Value="2" />
-                                            <Setter Property="Margin" Value="0" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Grid.Style>
-                    <Image x:Name="LiveImage"
-                           Source="{Binding LiveImageSource}"
-                           Stretch="Uniform"
-                           RenderOptions.BitmapScalingMode="HighQuality"
-                           MouseLeftButtonDown="LiveImage_MouseLeftButtonDown"
-                           PreviewMouseRightButtonDown="LiveImage_PreviewMouseRightButtonDown"
-                           ContextMenuOpening="LiveImage_ContextMenuOpening"
-                           SizeChanged="LiveImage_SizeChanged"
-                           Cursor="Cross">
-                        <Image.ContextMenu>
-                            <ContextMenu Closed="LiveImageContextMenu_Closed">
-                                <MenuItem x:Name="MoveHereMenuItem"
-                                          Header="{DynamicResource LiveMoveHere}"
-                                          Click="MoveHereMenuItem_Click"
-                                          AutomationProperties.Name="{DynamicResource LiveMoveHere}" />
-                            </ContextMenu>
-                        </Image.ContextMenu>
-                    </Image>
+                            <Image x:Name="LiveImage"
+                                   Source="{Binding LiveImageSource}"
+                                   Stretch="Uniform"
+                                   RenderOptions.BitmapScalingMode="HighQuality"
+                                   MouseLeftButtonDown="LiveImage_MouseLeftButtonDown"
+                                   PreviewMouseRightButtonDown="LiveImage_PreviewMouseRightButtonDown"
+                                   ContextMenuOpening="LiveImage_ContextMenuOpening"
+                                   SizeChanged="LiveImage_SizeChanged"
+                                   Cursor="Cross">
+                                <Image.ContextMenu>
+                                    <ContextMenu Closed="LiveImageContextMenu_Closed">
+                                        <MenuItem x:Name="MoveHereMenuItem"
+                                                  Header="{DynamicResource LiveMoveHere}"
+                                                  Click="MoveHereMenuItem_Click"
+                                                  AutomationProperties.Name="{DynamicResource LiveMoveHere}" />
+                                    </ContextMenu>
+                                </Image.ContextMenu>
+                            </Image>
 
-                    <Border IsHitTestVisible="False"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Padding="28"
-                            CornerRadius="10"
-                            Background="{DynamicResource DrillSubtleBrush}">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Visible" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding HasImage}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                        <StackPanel HorizontalAlignment="Center">
-                            <Control Width="38"
-                                     Height="38"
-                                     Foreground="{DynamicResource DrillSecondaryTextBrush}"
-                                     Template="{StaticResource ImageVectorIconTemplate}" />
-                            <TextBlock Text="{DynamicResource LiveNoImage}"
-                                       Margin="0,12,0,0"
-                                       Foreground="{DynamicResource DrillSecondaryTextBrush}"
-                                       TextAlignment="Center" />
-                        </StackPanel>
-                    </Border>
+                            <Border IsHitTestVisible="False"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Padding="28"
+                                    CornerRadius="10"
+                                    Background="{DynamicResource DrillSubtleBrush}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasImage}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel HorizontalAlignment="Center">
+                                    <Control Width="38"
+                                             Height="38"
+                                             Foreground="{DynamicResource DrillSecondaryTextBrush}"
+                                             Template="{StaticResource ImageVectorIconTemplate}" />
+                                    <TextBlock Text="{DynamicResource LiveNoImage}"
+                                               Margin="0,12,0,0"
+                                               Foreground="{DynamicResource DrillSecondaryTextBrush}"
+                                               TextAlignment="Center" />
+                                </StackPanel>
+                            </Border>
 
-                    <Border IsHitTestVisible="False"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Top"
-                            Margin="12"
-                            Padding="12,7"
-                            CornerRadius="7"
-                            Background="#CC202020"
-                            Visibility="{Binding IsFrameCalibrationPending, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Text="{DynamicResource LiveFrameCalibrationPending}"
-                                   Foreground="White"
-                                   TextAlignment="Center"
-                                   TextWrapping="Wrap" />
-                    </Border>
+                            <Border IsHitTestVisible="False"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Top"
+                                    Margin="12"
+                                    Padding="12,7"
+                                    CornerRadius="7"
+                                    Background="#CC202020"
+                                    Visibility="{Binding IsFrameCalibrationPending, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="{DynamicResource LiveFrameCalibrationPending}"
+                                           Foreground="White"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap" />
+                            </Border>
 
-                    <Canvas x:Name="TargetOverlay" IsHitTestVisible="False">
-                        <Ellipse x:Name="TargetCircle"
-                                 Width="28"
-                                 Height="28"
-                                 Stroke="{DynamicResource DrillDangerBrush}"
-                                 StrokeThickness="2"
-                                 Fill="#22FF3344"
-                                 Visibility="Collapsed" />
-                        <Line x:Name="TargetHorizontal"
-                              X1="-18" X2="18" Y1="0" Y2="0"
-                              Stroke="{DynamicResource DrillDangerBrush}"
-                              StrokeThickness="2"
-                              Visibility="Collapsed" />
-                        <Line x:Name="TargetVertical"
-                              X1="0" X2="0" Y1="-18" Y2="18"
-                              Stroke="{DynamicResource DrillDangerBrush}"
-                              StrokeThickness="2"
-                              Visibility="Collapsed" />
-                    </Canvas>
+                            <Canvas x:Name="TargetOverlay" IsHitTestVisible="False">
+                                <Ellipse x:Name="TargetCircle"
+                                         Width="28"
+                                         Height="28"
+                                         Stroke="{DynamicResource DrillDangerBrush}"
+                                         StrokeThickness="2"
+                                         Fill="#22FF3344"
+                                         Visibility="Collapsed" />
+                                <Line x:Name="TargetHorizontal"
+                                      X1="-18" X2="18" Y1="0" Y2="0"
+                                      Stroke="{DynamicResource DrillDangerBrush}"
+                                      StrokeThickness="2"
+                                      Visibility="Collapsed" />
+                                <Line x:Name="TargetVertical"
+                                      X1="0" X2="0" Y1="-18" Y2="18"
+                                      Stroke="{DynamicResource DrillDangerBrush}"
+                                      StrokeThickness="2"
+                                      Visibility="Collapsed" />
+                            </Canvas>
 
-                    <Border VerticalAlignment="Bottom"
-                            Margin="12"
-                            Padding="10,6"
-                            CornerRadius="6"
-                            Background="#B0000000"
-                            IsHitTestVisible="False">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{DynamicResource LiveDoubleClickHint}"
-                                       Foreground="White"
-                                       TextTrimming="CharacterEllipsis" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding ImageDimensionsText}"
-                                       Foreground="#CCFFFFFF"
-                                       Margin="16,0,0,0" />
+                            <Border VerticalAlignment="Bottom"
+                                    Margin="12"
+                                    Padding="10,6"
+                                    CornerRadius="6"
+                                    Background="#B0000000"
+                                    IsHitTestVisible="False">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{DynamicResource LiveDoubleClickHint}"
+                                               Foreground="White"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding ImageDimensionsText}"
+                                               Foreground="#CCFFFFFF"
+                                               Margin="16,0,0,0" />
+                                </Grid>
+                            </Border>
+                            <Border IsHitTestVisible="False"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top"
+                                    Margin="12"
+                                    Padding="10,6"
+                                    CornerRadius="6"
+                                    Background="#B0000000">
+                                <TextBlock Text="{DynamicResource LiveCcdCameraImage}"
+                                           Foreground="White"
+                                           FontWeight="SemiBold" />
+                            </Border>
                         </Grid>
-                    </Border>
-                    <Border IsHitTestVisible="False"
-                            HorizontalAlignment="Left"
-                            VerticalAlignment="Top"
-                            Margin="12"
-                            Padding="10,6"
-                            CornerRadius="6"
-                            Background="#B0000000">
-                        <TextBlock Text="{DynamicResource LiveCcdCameraImage}"
-                                   Foreground="White"
-                                   FontWeight="SemiBold" />
-                    </Border>
-                        </Grid>
-                    </Grid>
+                    </ui:Card>
                 </Grid>
-            </ui:Card>
+            </Grid>
 
             <ScrollViewer Grid.Column="2"
                           CanContentScroll="False"
@@ -1012,6 +1019,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <ui:InfoBar Grid.Column="0"
                         Margin="0,0,8,0"
@@ -1032,7 +1040,21 @@
                     </Style>
                 </ui:InfoBar.Style>
             </ui:InfoBar>
-            <controls:EquipmentActivityStatus Grid.Column="1"
+            <ui:Button Grid.Column="1"
+                       Width="38"
+                       Height="34"
+                       Padding="0"
+                       Margin="0,0,8,0"
+                       VerticalAlignment="Center"
+                       Command="{Binding OpenExchangeFolderCommand}"
+                       ToolTip="{DynamicResource OpenExchangeFolder}"
+                       AutomationProperties.Name="{DynamicResource OpenExchangeFolder}">
+                <Control Width="18"
+                         Height="18"
+                         Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ui:Button}}"
+                         Template="{StaticResource FolderVectorIconTemplate}" />
+            </ui:Button>
+            <controls:EquipmentActivityStatus Grid.Column="2"
                                               DataContext="{Binding DataContext, ElementName=EquipmentMonitor}" />
         </Grid>
     </Grid>

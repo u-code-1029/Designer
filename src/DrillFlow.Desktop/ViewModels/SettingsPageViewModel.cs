@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DrillFlow.Application.Communication;
+using DrillFlow.Application.RealtimeVideo;
 using DrillFlow.Desktop.Models;
 using DrillFlow.Desktop.Services;
 using Microsoft.Extensions.Logging;
@@ -39,9 +40,12 @@ public sealed class SettingsPageViewModel : ObservableObject
     private string _responseTimeoutSeconds = "30";
     private bool _retryEnabled;
     private string _maximumRetryCount = "1";
-    private string _retryIntervalMilliseconds = "1000";
+    private string _retryDelaySeconds = "1";
     private string _pollingIntervalSeconds = "0.05";
     private string _requestPublishDelaySeconds = "0.1";
+    private string _stableReadDelaySeconds = "0.05";
+    private RealtimeVideoOptions _activeRealtimeVideo = new();
+    private bool _isRestartRequired;
     private bool _isExecutionBusy;
     private string _validationMessage = string.Empty;
     private string _statusMessage = string.Empty;
@@ -70,6 +74,8 @@ public sealed class SettingsPageViewModel : ObservableObject
         _fileDialogs = fileDialogs;
         _exchangeFolderLauncher = exchangeFolderLauncher;
         _logger = logger;
+
+        RealtimeVideo = new RealtimeVideoSettingsViewModel();
 
         SaveCommand = new RelayCommand(Save, () => CanEditSettings);
         TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync, () => CanEditSettings);
@@ -117,6 +123,8 @@ public sealed class SettingsPageViewModel : ObservableObject
     public IRelayCommand BrowseLiveImageFolderCommand { get; }
 
     public IRelayCommand OpenLiveImageFolderCommand { get; }
+
+    public RealtimeVideoSettingsViewModel RealtimeVideo { get; }
 
     public string[] LanguageChoices { get; } = { "Auto", "ko-KR", "en-US" };
 
@@ -248,10 +256,10 @@ public sealed class SettingsPageViewModel : ObservableObject
         set => SetProperty(ref _maximumRetryCount, value);
     }
 
-    public string RetryIntervalMilliseconds
+    public string RetryDelaySeconds
     {
-        get => _retryIntervalMilliseconds;
-        set => SetProperty(ref _retryIntervalMilliseconds, value);
+        get => _retryDelaySeconds;
+        set => SetProperty(ref _retryDelaySeconds, value ?? string.Empty);
     }
 
     public string PollingIntervalSeconds
@@ -264,6 +272,18 @@ public sealed class SettingsPageViewModel : ObservableObject
     {
         get => _requestPublishDelaySeconds;
         set => SetProperty(ref _requestPublishDelaySeconds, value ?? string.Empty);
+    }
+
+    public string StableReadDelaySeconds
+    {
+        get => _stableReadDelaySeconds;
+        set => SetProperty(ref _stableReadDelaySeconds, value ?? string.Empty);
+    }
+
+    public bool IsRestartRequired
+    {
+        get => _isRestartRequired;
+        private set => SetProperty(ref _isRestartRequired, value);
     }
 
     public string ValidationMessage
@@ -356,13 +376,16 @@ public sealed class SettingsPageViewModel : ObservableObject
         EquipmentRequestHandling = communication.EquipmentRequestHandling;
         AppRequestHandling = communication.AppRequestHandling;
         AppResponseHandling = communication.AppResponseHandling;
-        ResponseTimeoutSeconds = FormatMillisecondsAsSeconds(communication.ResponseTimeoutMilliseconds);
+        ResponseTimeoutSeconds = FormatSeconds(communication.ResponseTimeoutSeconds);
         RetryEnabled = communication.RetryEnabled;
         MaximumRetryCount = communication.MaximumRetryCount.ToString(CultureInfo.InvariantCulture);
-        RetryIntervalMilliseconds = communication.RetryIntervalMilliseconds.ToString(CultureInfo.InvariantCulture);
-        PollingIntervalSeconds = FormatMillisecondsAsSeconds(communication.PollingIntervalMilliseconds);
-        RequestPublishDelaySeconds = FormatMillisecondsAsSeconds(
-            communication.RequestPublishDelayMilliseconds);
+        PollingIntervalSeconds = FormatSeconds(communication.PollingIntervalSeconds);
+        RequestPublishDelaySeconds = FormatSeconds(communication.RequestPublishDelaySeconds);
+        RetryDelaySeconds = FormatSeconds(communication.RetryDelaySeconds);
+        StableReadDelaySeconds = FormatSeconds(communication.StableReadDelaySeconds);
+
+        _activeRealtimeVideo = (preferences.RealtimeVideo ?? new RealtimeVideoOptions()).Clone();
+        RealtimeVideo.Load(_activeRealtimeVideo);
     }
 
     private void Save()
@@ -380,12 +403,14 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
 
         var communication = BuildSettings();
+        var realtimeVideo = BuildRealtimeVideoOptions();
         var preferences = new UserPreferences
         {
             Language = Language,
             Theme = Theme,
             ValidateWorkflowOnEveryChange = ValidateWorkflowOnEveryChange,
-            Communication = communication
+            Communication = communication,
+            RealtimeVideo = realtimeVideo
         };
 
         try
@@ -394,14 +419,18 @@ public sealed class SettingsPageViewModel : ObservableObject
             ApplyToLiveOptions(communication);
             // Display the millisecond-resolution value that was actually persisted/applied when
             // an operator entered more than three fractional second digits.
-            ResponseTimeoutSeconds = FormatMillisecondsAsSeconds(
-                communication.ResponseTimeoutMilliseconds);
-            PollingIntervalSeconds = FormatMillisecondsAsSeconds(
-                communication.PollingIntervalMilliseconds);
-            RequestPublishDelaySeconds = FormatMillisecondsAsSeconds(
-                communication.RequestPublishDelayMilliseconds);
+            ResponseTimeoutSeconds = FormatSeconds(communication.ResponseTimeoutSeconds);
+            PollingIntervalSeconds = FormatSeconds(communication.PollingIntervalSeconds);
+            RequestPublishDelaySeconds = FormatSeconds(communication.RequestPublishDelaySeconds);
+            RetryDelaySeconds = FormatSeconds(communication.RetryDelaySeconds);
+            StableReadDelaySeconds = FormatSeconds(communication.StableReadDelaySeconds);
             _localization.ApplyLanguage(Language, false);
-            StatusMessage = _localization["SettingsSaved"];
+            IsRestartRequired = !RealtimeVideoSettingsViewModel.AreEquivalent(
+                realtimeVideo,
+                _activeRealtimeVideo);
+            StatusMessage = IsRestartRequired
+                ? _localization["SettingsSavedRestartRequired"]
+                : _localization["SettingsSaved"];
             StatusIsError = false;
         }
         catch (Exception exception)
@@ -519,13 +548,24 @@ public sealed class SettingsPageViewModel : ObservableObject
                      RequestPublishDelaySeconds,
                      allowZero: true,
                      out _)
-                 || !int.TryParse(RetryIntervalMilliseconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var retryInterval)
+                 || !TryConvertSecondsToMilliseconds(
+                     RetryDelaySeconds,
+                     allowZero: true,
+                     out _)
+                 || !TryConvertSecondsToMilliseconds(
+                     StableReadDelaySeconds,
+                     allowZero: false,
+                     out _)
                  || !int.TryParse(MaximumRetryCount, NumberStyles.Integer, CultureInfo.InvariantCulture, out var retries)
-                 || retryInterval < 0
                  || retries < 0
                  || (RetryEnabled && retries == 0))
         {
             failure = _localization["PositiveNumberRequired"];
+        }
+        else if (!RealtimeVideo.TryBuild(out var realtimeVideo)
+                 || new RealtimeVideoOptionsValidator().Validate(null, realtimeVideo).Failed)
+        {
+            failure = _localization["RealtimeVideoValidationFailed"];
         }
 
         ValidationMessage = failure ?? string.Empty;
@@ -541,19 +581,39 @@ public sealed class SettingsPageViewModel : ObservableObject
         EquipmentRequestHandling = EquipmentRequestHandling,
         AppRequestHandling = AppRequestHandling,
         AppResponseHandling = AppResponseHandling,
-        ResponseTimeoutMilliseconds = ConvertSecondsToMilliseconds(
-            ResponseTimeoutSeconds,
-            allowZero: false),
+        ResponseTimeoutSeconds = ConvertSecondsToMilliseconds(
+                                     ResponseTimeoutSeconds,
+                                     allowZero: false)
+                                 / 1000d,
         RetryEnabled = RetryEnabled,
         MaximumRetryCount = int.Parse(MaximumRetryCount, CultureInfo.InvariantCulture),
-        RetryIntervalMilliseconds = int.Parse(RetryIntervalMilliseconds, CultureInfo.InvariantCulture),
-        PollingIntervalMilliseconds = ConvertSecondsToMilliseconds(
-            PollingIntervalSeconds,
-            allowZero: false),
-        RequestPublishDelayMilliseconds = ConvertSecondsToMilliseconds(
-            RequestPublishDelaySeconds,
-            allowZero: true)
+        RetryDelaySeconds = ConvertSecondsToMilliseconds(
+                                RetryDelaySeconds,
+                                allowZero: true)
+                            / 1000d,
+        PollingIntervalSeconds = ConvertSecondsToMilliseconds(
+                                     PollingIntervalSeconds,
+                                     allowZero: false)
+                                 / 1000d,
+        RequestPublishDelaySeconds = ConvertSecondsToMilliseconds(
+                                          RequestPublishDelaySeconds,
+                                          allowZero: true)
+                                      / 1000d,
+        StableReadDelaySeconds = ConvertSecondsToMilliseconds(
+                                     StableReadDelaySeconds,
+                                     allowZero: false)
+                                 / 1000d
     };
+
+    private RealtimeVideoOptions BuildRealtimeVideoOptions()
+    {
+        if (!RealtimeVideo.TryBuild(out var options))
+        {
+            throw new InvalidOperationException("The real-time video settings are invalid.");
+        }
+
+        return options;
+    }
 
     private void BrowseFolder()
     {
@@ -617,6 +677,9 @@ public sealed class SettingsPageViewModel : ObservableObject
 
     internal static string FormatMillisecondsAsSeconds(int milliseconds) =>
         (milliseconds / 1000m).ToString(CultureInfo.InvariantCulture);
+
+    internal static string FormatSeconds(double seconds) =>
+        seconds.ToString("G15", CultureInfo.InvariantCulture);
 
     private static int ConvertSecondsToMilliseconds(string value, bool allowZero)
     {

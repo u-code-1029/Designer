@@ -1,5 +1,6 @@
 using DrillFlow.Application.Execution;
 using DrillFlow.Application.LiveInteraction;
+using DrillFlow.Application.RealtimeVideo;
 using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Core.Validation;
@@ -16,6 +17,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<RunResultStore>();
         services.AddSingleton<IWorkflowRunner, WorkflowRunner>();
         services.AddSingleton<ILiveInteractionSession, LiveInteractionSession>();
+        services.AddRealtimeVideoOptions();
         return services;
     }
 }

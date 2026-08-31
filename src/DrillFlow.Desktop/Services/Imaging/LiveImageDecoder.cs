@@ -3,96 +3,10 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Extensions.Logging;
 
 namespace DrillFlow.Desktop.Services;
-
-public interface ILiveImageDecoder
-{
-    Task<LiveImageDecodeResult> DecodeAsync(
-        byte[] encodedImage,
-        CancellationToken cancellationToken);
-}
-
-public sealed class LiveImageDecodeResult
-{
-    public LiveImageDecodeResult(
-        ImageSource imageSource,
-        int originalPixelWidth,
-        int originalPixelHeight,
-        double originalDpiX,
-        double originalDpiY,
-        string detectedFileExtension)
-    {
-        ImageSource = imageSource ?? throw new ArgumentNullException(nameof(imageSource));
-        OriginalPixelWidth = originalPixelWidth;
-        OriginalPixelHeight = originalPixelHeight;
-        OriginalDpiX = originalDpiX;
-        OriginalDpiY = originalDpiY;
-        DetectedFileExtension = detectedFileExtension ?? throw new ArgumentNullException(nameof(detectedFileExtension));
-    }
-
-    public ImageSource ImageSource { get; }
-
-    public int OriginalPixelWidth { get; }
-
-    public int OriginalPixelHeight { get; }
-
-    public double OriginalDpiX { get; }
-
-    public double OriginalDpiY { get; }
-
-    public string DetectedFileExtension { get; }
-}
-
-public static class LiveImageSafetyLimits
-{
-    public const long MaximumEncodedBytes = 64L * 1024L * 1024L;
-    public const int MaximumPixelDimension = 16384;
-    public const long MaximumPixelCount = 64_000_000L;
-
-    public static void ValidateEncodedByteLength(long byteLength)
-    {
-        if (byteLength <= 0)
-        {
-            throw new InvalidDataException("The image file is empty.");
-        }
-
-        if (byteLength > MaximumEncodedBytes)
-        {
-            throw new LiveImageLimitExceededException(
-                $"The image file is {byteLength} bytes; the safe limit is {MaximumEncodedBytes} bytes (64 MiB).");
-        }
-    }
-
-    public static void ValidatePixelDimensions(int pixelWidth, int pixelHeight)
-    {
-        if (pixelWidth <= 0 || pixelHeight <= 0)
-        {
-            throw new InvalidDataException("The image has invalid pixel dimensions.");
-        }
-
-        var pixelCount = (long)pixelWidth * pixelHeight;
-        if (pixelWidth > MaximumPixelDimension
-            || pixelHeight > MaximumPixelDimension
-            || pixelCount > MaximumPixelCount)
-        {
-            throw new LiveImageLimitExceededException(
-                $"The image is {pixelWidth} x {pixelHeight} pixels ({pixelCount} pixels); "
-                + $"the safe limits are {MaximumPixelDimension} pixels per axis and {MaximumPixelCount} total pixels.");
-        }
-    }
-}
-
-public sealed class LiveImageLimitExceededException : Exception
-{
-    public LiveImageLimitExceededException(string message)
-        : base(message)
-    {
-    }
-}
 
 /// <summary>
 /// Serializes WIC work on one private STA thread. Frozen results can safely be consumed by WPF's

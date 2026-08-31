@@ -5,38 +5,6 @@ using Microsoft.Extensions.Logging;
 
 namespace DrillFlow.Desktop.Services;
 
-/// <summary>
-/// Creates short-lived images used by the response simulator. Implementations own the generated
-/// files and remove them when the application host is disposed.
-/// </summary>
-public interface ITemporaryResponseImageService
-{
-    TemporaryResponseImage CreateTemporaryImage();
-
-    /// <summary>
-    /// Releases an image created by this service. Unknown paths are ignored so callers cannot
-    /// delete controller-owned images accidentally.
-    /// </summary>
-    bool TryReleaseTemporaryImage(string path);
-}
-
-/// <summary>
-/// A generated response image whose frozen bitmap is safe to retain in the dialog even though the
-/// PNG file is not kept open.
-/// </summary>
-public sealed class TemporaryResponseImage
-{
-    public TemporaryResponseImage(string path, BitmapSource imageSource)
-    {
-        Path = path ?? throw new ArgumentNullException(nameof(path));
-        ImageSource = imageSource ?? throw new ArgumentNullException(nameof(imageSource));
-    }
-
-    public string Path { get; }
-
-    public BitmapSource ImageSource { get; }
-}
-
 public sealed class TemporaryResponseImageService : ITemporaryResponseImageService, IDisposable
 {
     public const int ImageWidth = 768;
@@ -226,7 +194,7 @@ public sealed class TemporaryResponseImageService : ITemporaryResponseImageServi
             }
         }
 
-        var bitmap = System.Windows.Media.Imaging.BitmapSource.Create(
+        var bitmap = BitmapSource.Create(
             ImageWidth,
             ImageHeight,
             96d,
@@ -253,8 +221,8 @@ public sealed class TemporaryResponseImageService : ITemporaryResponseImageServi
 
     private static void SavePng(string path, BitmapSource bitmap)
     {
-        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
-        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using (var stream = new System.IO.FileStream(
                    path,
                    System.IO.FileMode.CreateNew,
