@@ -405,6 +405,8 @@ src/DrillFlow.Infrastructure/Communication/Templates/
 
 실제 양식으로 교체할 때:
 
+response의 XML 요소에 고정 `Version` 속성이 있으면 템플릿과 장비 응답의 속성 값이 달라도 일치로 처리한다. 출력에는 템플릿의 값을 그대로 사용한다. 이 예외는 정확히 `Version`인 비접두사 속성 값에만 적용하며, 논리 placeholder가 있는 속성은 계속 검증한다. 속성 존재 여부와 나머지 양식은 아래 규칙을 유지한다. 자세한 경계는 [XML 인코딩과 파일 핸드셰이크](docs/xml-encoding-and-file-handshake.md)를 참조한다.
+
 1. Action/방향에 맞는 소스 파일을 바꾸고 앱을 다시 빌드한다. 성공 response에 추가 필드가 있는 Action은 `response.xml`과 `failure-response.xml`을 서로 다른 장비 성공/실패 정답지에 맞춰 함께 검토한다. 템플릿은 assembly Embedded Resource이므로 빌드 산출물 옆의 XML을 수정해도 적용되지 않는다.
 2. `correlation_id`와 Action별 동적 request/response 필드는 정확한 `{{{field_name}}}` 토큰으로 적어도 한 번 남긴다. response의 `result`도 필수다. `type`과 `action`은 토큰으로 둘 수도 있고 해당 Action/방향 템플릿의 고정 문자열로 표현할 수도 있다.
 3. 같은 논리 값을 XML 여러 위치에 넣어야 하면 동일 placeholder를 반복해도 된다. 렌더링 시 모두 같은 값으로 치환하며, response/request 파싱 시 반복 위치의 XML-unescape 결과가 하나라도 다르면 전체 payload를 거부한다. 값 경계를 알 수 없는 인접 placeholder는 허용하지 않으며, 한 템플릿은 재귀 깊이와 처리량을 제한하기 위해 placeholder 출현을 최대 256개까지 허용한다.

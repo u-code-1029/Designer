@@ -1505,6 +1505,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         private readonly IReadOnlyList<string> _renderLiterals;
         private readonly IReadOnlyList<string> _extractionLiterals;
         private readonly bool _ignoreResponseFormattingWhitespace;
+        private readonly HashSet<int> _ignoredResponseVersionAttributeOrdinals;
         private readonly IReadOnlyList<int> _materializationOrder;
 
         private TemplateDefinition(
@@ -1513,7 +1514,8 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             IReadOnlyList<string> placeholders,
             IReadOnlyList<string> renderLiterals,
             IReadOnlyList<string> extractionLiterals,
-            bool ignoreResponseFormattingWhitespace)
+            bool ignoreResponseFormattingWhitespace,
+            IEnumerable<int> ignoredResponseVersionAttributeOrdinals)
         {
             _action = action;
             _direction = direction;
@@ -1521,6 +1523,8 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             _renderLiterals = renderLiterals;
             _extractionLiterals = extractionLiterals;
             _ignoreResponseFormattingWhitespace = ignoreResponseFormattingWhitespace;
+            _ignoredResponseVersionAttributeOrdinals = new HashSet<int>(
+                ignoredResponseVersionAttributeOrdinals);
             _materializationOrder = Enumerable.Range(0, placeholders.Count)
                 .OrderBy(index => GetMaterializationPriority(placeholders[index]))
                 .ThenBy(index => index)
@@ -1625,10 +1629,52 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 direction,
                 "response",
                 StringComparison.Ordinal);
+            var ignoredVersionAttributes = new List<VersionAttributeValueRange>();
+            if (ignoreResponseFormattingWhitespace)
+            {
+                var placeholderIndex = 0;
+                foreach (var attribute in FindVersionAttributeValues(template))
+                {
+                    while (placeholderIndex < matches.Count
+                           && matches[placeholderIndex].Index + matches[placeholderIndex].Length
+                           <= attribute.Start)
+                    {
+                        placeholderIndex++;
+                    }
+
+                    // A Version attribute may carry a declared logical field. Keep those
+                    // occurrences strict so metadata tolerance cannot bypass field validation.
+                    if (placeholderIndex >= matches.Count
+                        || matches[placeholderIndex].Index >= attribute.End)
+                    {
+                        ignoredVersionAttributes.Add(attribute);
+                    }
+                }
+            }
+
             IReadOnlyList<string> extractionLiterals = ignoreResponseFormattingWhitespace
                 ? Array.AsReadOnly(
                     literals.Select(RemoveResponseFormattingWhitespace).ToArray())
                 : literals.AsReadOnly();
+            if (ignoredVersionAttributes.Count > 0)
+            {
+                // Scan the complete template rather than each literal: placeholders may split
+                // a start tag or a quoted attribute across multiple literal segments.
+                var comparisonTemplate = ExtractionText.CreateWhitespaceInsensitive(
+                    template,
+                    ignoredVersionAttributes);
+                var normalizedLiterals = new string[literals.Count];
+                for (var index = 0; index < normalizedLiterals.Length; index++)
+                {
+                    var start = index == 0
+                        ? 0
+                        : matches[index - 1].Index + matches[index - 1].Length;
+                    var end = index == matches.Count ? template.Length : matches[index].Index;
+                    normalizedLiterals[index] = comparisonTemplate.GetComparisonText(start, end);
+                }
+
+                extractionLiterals = Array.AsReadOnly(normalizedLiterals);
+            }
 
             for (var index = 1; index < extractionLiterals.Count - 1; index++)
             {
@@ -1646,7 +1692,8 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 placeholders.AsReadOnly(),
                 literals.AsReadOnly(),
                 extractionLiterals,
-                ignoreResponseFormattingWhitespace);
+                ignoreResponseFormattingWhitespace,
+                ignoredVersionAttributes.Select(attribute => attribute.Ordinal));
         }
 
         public string Render(IReadOnlyDictionary<string, string> values)
@@ -1686,7 +1733,14 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             }
 
             var extractionText = _ignoreResponseFormattingWhitespace
-                ? ExtractionText.CreateWhitespaceInsensitive(text)
+                ? ExtractionText.CreateWhitespaceInsensitive(
+                    text,
+                    _ignoredResponseVersionAttributeOrdinals.Count == 0
+                        ? Array.Empty<VersionAttributeValueRange>()
+                        : FindVersionAttributeValues(text)
+                            .Where(attribute => _ignoredResponseVersionAttributeOrdinals
+                                .Contains(attribute.Ordinal))
+                            .ToArray())
                 : ExtractionText.CreateExact(text);
             var comparisonText = extractionText.ComparisonText;
             var candidates = new List<IReadOnlyDictionary<string, string>>();
@@ -2211,6 +2265,146 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 : 0;
         }
 
+        private static IReadOnlyList<VersionAttributeValueRange> FindVersionAttributeValues(
+            string text)
+        {
+            var attributes = new List<VersionAttributeValueRange>();
+            var cursor = 0;
+            var ordinal = 0;
+            while (cursor < text.Length)
+            {
+                var opening = text.IndexOf('<', cursor);
+                if (opening < 0)
+                {
+                    break;
+                }
+
+                cursor = opening + 1;
+                if (StartsWithAt(text, opening, "<!--")
+                    || StartsWithAt(text, opening, "<![CDATA[")
+                    || StartsWithAt(text, opening, "<?"))
+                {
+                    var terminator = StartsWithAt(text, opening, "<!--")
+                        ? "-->"
+                        : StartsWithAt(text, opening, "<![CDATA[") ? "]]>" : "?>";
+                    var closing = text.IndexOf(terminator, cursor, StringComparison.Ordinal);
+                    cursor = closing < 0 ? text.Length : closing + terminator.Length;
+                    continue;
+                }
+
+                if (cursor >= text.Length)
+                {
+                    break;
+                }
+
+                if (text[cursor] == '/' || text[cursor] == '!')
+                {
+                    SkipXmlTag(text, ref cursor);
+                    continue;
+                }
+
+                // Skip the element name, then consume complete attributes. Quoted values in
+                // other attributes are skipped intact, even if they contain Version-like text.
+                while (cursor < text.Length
+                       && !IsXmlFormattingWhitespace(text[cursor])
+                       && text[cursor] != '>' && text[cursor] != '/')
+                {
+                    cursor++;
+                }
+
+                while (cursor < text.Length)
+                {
+                    SkipWhitespace(text, ref cursor, text.Length);
+                    if (cursor >= text.Length || text[cursor] == '>' || text[cursor] == '/')
+                    {
+                        SkipXmlTag(text, ref cursor);
+                        break;
+                    }
+
+                    var nameStart = cursor;
+                    while (cursor < text.Length
+                           && !IsXmlFormattingWhitespace(text[cursor])
+                           && text[cursor] != '=' && text[cursor] != '>' && text[cursor] != '/')
+                    {
+                        cursor++;
+                    }
+
+                    var nameLength = cursor - nameStart;
+                    SkipWhitespace(text, ref cursor, text.Length);
+                    if (cursor >= text.Length || text[cursor] != '=')
+                    {
+                        SkipXmlTag(text, ref cursor);
+                        break;
+                    }
+
+                    cursor++;
+                    SkipWhitespace(text, ref cursor, text.Length);
+                    if (cursor >= text.Length || text[cursor] != '"' && text[cursor] != '\'')
+                    {
+                        SkipXmlTag(text, ref cursor);
+                        break;
+                    }
+
+                    var quote = text[cursor++];
+                    var valueStart = cursor;
+                    var valueEnd = text.IndexOf(quote, valueStart);
+                    if (valueEnd < 0)
+                    {
+                        cursor = text.Length;
+                        break;
+                    }
+
+                    if (nameLength == "Version".Length
+                        && StartsWithAt(text, nameStart, "Version"))
+                    {
+                        attributes.Add(new VersionAttributeValueRange(valueStart, valueEnd, ordinal++));
+                    }
+
+                    cursor = valueEnd + 1;
+                }
+            }
+
+            return attributes;
+        }
+
+        private static bool StartsWithAt(string text, int index, string value) =>
+            index <= text.Length - value.Length
+            && string.CompareOrdinal(text, index, value, 0, value.Length) == 0;
+
+        private static void SkipXmlTag(string text, ref int cursor)
+        {
+            while (cursor < text.Length)
+            {
+                var character = text[cursor++];
+                if (character == '>')
+                {
+                    return;
+                }
+
+                if (character == '"' || character == '\'')
+                {
+                    var closing = text.IndexOf(character, cursor);
+                    cursor = closing < 0 ? text.Length : closing + 1;
+                }
+            }
+        }
+
+        private sealed class VersionAttributeValueRange
+        {
+            public VersionAttributeValueRange(int start, int end, int ordinal)
+            {
+                Start = start;
+                End = end;
+                Ordinal = ordinal;
+            }
+
+            public int Start { get; }
+
+            public int End { get; }
+
+            public int Ordinal { get; }
+        }
+
         private sealed class ExtractionText
         {
             private readonly int[]? _originalOffsets;
@@ -2232,12 +2426,15 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             public static ExtractionText CreateExact(string text) =>
                 new ExtractionText(text, text, null);
 
-            public static ExtractionText CreateWhitespaceInsensitive(string text)
+            public static ExtractionText CreateWhitespaceInsensitive(
+                string text,
+                IReadOnlyList<VersionAttributeValueRange> ignoredVersionAttributes)
             {
                 var characterCount = 0;
-                foreach (var character in text)
+                var attributeIndex = 0;
+                for (var index = 0; index < text.Length; index++)
                 {
-                    if (!IsXmlFormattingWhitespace(character))
+                    if (!ShouldIgnoreCharacter(text, index, ignoredVersionAttributes, ref attributeIndex))
                     {
                         characterCount++;
                     }
@@ -2246,9 +2443,14 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 var characters = new char[characterCount];
                 var originalOffsets = new int[characterCount];
                 var comparisonIndex = 0;
+                attributeIndex = 0;
                 for (var originalIndex = 0; originalIndex < text.Length; originalIndex++)
                 {
-                    if (IsXmlFormattingWhitespace(text[originalIndex]))
+                    if (ShouldIgnoreCharacter(
+                            text,
+                            originalIndex,
+                            ignoredVersionAttributes,
+                            ref attributeIndex))
                     {
                         continue;
                     }
@@ -2262,6 +2464,41 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     text,
                     new string(characters),
                     originalOffsets);
+            }
+
+            private static bool ShouldIgnoreCharacter(
+                string text,
+                int index,
+                IReadOnlyList<VersionAttributeValueRange> ignoredVersionAttributes,
+                ref int attributeIndex)
+            {
+                while (attributeIndex < ignoredVersionAttributes.Count
+                       && index >= ignoredVersionAttributes[attributeIndex].End)
+                {
+                    attributeIndex++;
+                }
+
+                return IsXmlFormattingWhitespace(text[index])
+                       || attributeIndex < ignoredVersionAttributes.Count
+                       && index >= ignoredVersionAttributes[attributeIndex].Start;
+            }
+
+            public string GetComparisonText(int originalStart, int originalEnd)
+            {
+                var start = GetComparisonOffset(originalStart);
+                var end = GetComparisonOffset(originalEnd);
+                return ComparisonText.Substring(start, end - start);
+            }
+
+            private int GetComparisonOffset(int originalOffset)
+            {
+                if (_originalOffsets is null)
+                {
+                    return originalOffset;
+                }
+
+                var index = Array.BinarySearch(_originalOffsets, originalOffset);
+                return index < 0 ? ~index : index;
             }
 
             public bool TryGetOriginalValueRange(

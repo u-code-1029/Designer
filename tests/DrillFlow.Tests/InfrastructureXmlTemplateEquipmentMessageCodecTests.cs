@@ -357,6 +357,123 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
             out _));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("2.5")]
+    [InlineData("release &amp; 3 &quot;beta&quot;")]
+    [InlineData(" \t2.0\r\n ")]
+    public void ResponseVersionAttributes_IgnoreValuesAndPreserveTemplateRendering(string version)
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVersionedTemplate);
+        foreach (var request in CreateRequests())
+        {
+            var original = codec.SerializeResponse(CreateResponse(request.CorrelationId, request.Action));
+            var xml = Encoding.UTF8.GetString(original)
+                .Replace("Version=\"1.0\"", "Version=\"" + version + "\"")
+                .Replace("Version='fields-1'", "Version='fields-2'");
+            var payload = Encoding.UTF8.GetBytes(xml);
+
+            Assert.True(codec.TryDeserializeResponse(payload, request, out var response));
+            Assert.NotNull(response);
+            Assert.Equal(request.CorrelationId, response!.CorrelationId);
+            Assert.Equal(request.Action, response.Action);
+            Assert.Equal(0, response.Result);
+            Assert.Equal(original, codec.SerializeResponse(response));
+            Assert.True(codec.TryDeserializeResponse(payload, out var withoutRequest));
+            Assert.Equal(request.CorrelationId, withoutRequest!.CorrelationId);
+        }
+    }
+
+    [Theory]
+    [InlineData("Version=\"1.0\"", "")]
+    [InlineData("Version=\"1.0\"", "version=\"1.0\"")]
+    [InlineData("Version=\"1.0\"", "Version=\"2\" Version=\"3\"")]
+    [InlineData("Version=\"1.0\"", "Version=\"<invalid\"")]
+    [InlineData("version=\"lower\"", "version=\"different\"")]
+    [InlineData("SchemaVersion=\"schema\"", "SchemaVersion=\"different\"")]
+    [InlineData("v:Version=\"namespaced\"", "v:Version=\"different\"")]
+    [InlineData("Label=\"Version='label'\"", "Label=\"Version='different'\"")]
+    [InlineData("<Version>element</Version>", "<Version>different</Version>")]
+    [InlineData("<!-- Version=\"comment\" -->", "<!-- Version=\"different\" -->")]
+    [InlineData("<![CDATA[Version=\"cdata\"]]>", "<![CDATA[Version=\"different\"]]>")]
+    [InlineData("<?vendor Version=\"processing\"?>", "<?vendor Version=\"different\"?>")]
+    [InlineData("<correlation_id Version='fields-1'>1</correlation_id>",
+        "<correlation_id Version='fields-2'>99</correlation_id>")]
+    [InlineData("<result>0</result>", "<result>2</result>")]
+    public void ResponseVersionException_PreservesOtherMatchingAndXmlValidation(
+        string originalText,
+        string replacement)
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVersionedTemplate);
+        var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
+        var xml = Encoding.UTF8.GetString(codec.SerializeResponse(
+            CreateResponse(request.CorrelationId, request.Action)));
+        Assert.Contains(originalText, xml, StringComparison.Ordinal);
+        xml = xml.Replace(originalText, replacement);
+
+        Assert.False(codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), request, out _));
+    }
+
+    [Fact]
+    public void RequestVersionAttributes_RemainExactAndUseTemplateValues()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadVersionedTemplate);
+        var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
+        var original = codec.SerializeRequest(request);
+        var xml = Encoding.UTF8.GetString(original);
+
+        Assert.Contains("Version=\"1.0\"", xml, StringComparison.Ordinal);
+        Assert.True(codec.TryDeserializeRequest(original, out _));
+        Assert.False(codec.TryDeserializeRequest(
+            Encoding.UTF8.GetBytes(xml.Replace("Version=\"1.0\"", "Version=\"2.5\"")),
+            out _));
+    }
+
+    [Fact]
+    public void ResponseVersionAttribute_AfterPlaceholderAttributeDoesNotChangeExtractedValues()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+            LoadVersionedTemplate(action, direction).Replace(
+                "Version=\"1.0\"",
+                "Correlation=\"{{{correlation_id}}}\" Version=\"1.0\""));
+        var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Integration);
+        var response = new EquipmentResponseMessage(request.CorrelationId, request.Action, 0,
+            new Dictionary<string, object?>
+            {
+                ["hfw"] = 3.02E-6,
+                ["frame_count"] = 8,
+                ["image_path"] = @"C:\Equipment Images\Version='literal'\frame 01.png"
+            });
+        var original = codec.SerializeResponse(response);
+        var xml = Encoding.UTF8.GetString(original).Replace("Version=\"1.0\"", "Version=\"different\"");
+
+        Assert.True(codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), request, out var restored));
+        Assert.Equal(response.ImagePath, restored!.ImagePath);
+        Assert.Equal(original, codec.SerializeResponse(restored));
+        Assert.False(codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml.Replace("Correlation=\"4\"", "Correlation=\"99\"")),
+            request,
+            out _));
+    }
+
+    [Fact]
+    public void ResponseVersionAttribute_WithLogicalPlaceholderRetainsContractValidation()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+            LoadVersionedTemplate(action, direction).Replace(
+                "Version=\"1.0\"",
+                "Version=\"{{{correlation_id}}}\""));
+        var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
+        var original = codec.SerializeResponse(CreateResponse(request.CorrelationId, request.Action));
+        var xml = Encoding.UTF8.GetString(original).Replace("Version='fields-1'", "Version='changed'");
+
+        Assert.True(codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), request, out _));
+        Assert.False(codec.TryDeserializeResponse(
+            Encoding.UTF8.GetBytes(xml.Replace("Version=\"1\"", "Version=\"99\"")),
+            request,
+            out _));
+    }
+
     [Fact]
     public void RequestDeserializer_RemainsSensitiveToXmlFormattingDifferences()
     {
@@ -1046,6 +1163,20 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
                 }),
             new EquipmentRequestMessage(9, EquipmentActionNames.Abort)
         };
+    }
+
+    private static string LoadVersionedTemplate(string action, string direction)
+    {
+        var root = action + "-" + direction;
+        return CreateContractTextTemplate(action, direction)
+            .Replace("<" + root + ">", "<" + root + " Version=\"1.0\">")
+            .Replace("<correlation_id>", "<correlation_id Version='fields-1'>")
+            .Replace("</" + root + ">",
+                "<metadata version=\"lower\" SchemaVersion=\"schema\""
+                + " xmlns:v=\"urn:vendor\" v:Version=\"namespaced\" Label=\"Version='label'\">"
+                + "<Version>element</Version><!-- Version=\"comment\" -->"
+                + "<![CDATA[Version=\"cdata\"]]><?vendor Version=\"processing\"?>"
+                + "</metadata></" + root + ">");
     }
 
     private static string LoadVendorLikeTemplate(string action, string direction)
