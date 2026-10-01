@@ -42,10 +42,16 @@ public sealed class WorkflowBranchViewModel : ObservableObject
         }
 
         Children.CollectionChanged += OnChildrenChanged;
-        _localization.LanguageChanged += (_, _) => OnPropertyChanged(nameof(Title));
+        System.Windows.WeakEventManager<ILocalizationService, EventArgs>.AddHandler(
+            _localization,
+            nameof(ILocalizationService.LanguageChanged),
+            OnLanguageChanged);
     }
 
     public ConditionalBranch Model => _branch;
+
+    private void OnLanguageChanged(object? sender, EventArgs e) =>
+        OnPropertyChanged(nameof(Title));
 
     public ConditionalBranchKind Kind => _branch.Kind;
 

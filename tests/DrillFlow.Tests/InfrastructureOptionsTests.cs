@@ -199,6 +199,67 @@ public sealed class InfrastructureOptionsTests
     }
 
     [Fact]
+    public void EquipmentOptions_RejectNamesThatNormalizeToAnotherExchangeFileOrSidecar()
+    {
+        var validator = new EquipmentCommunicationOptionsValidator();
+        foreach (var responseName in new[] { "request.xml ", "request.xml.", ".drillflow.exchange.lock " })
+        {
+            var options = new EquipmentCommunicationOptions
+            {
+                ExchangeDirectory = @"C:\Exchange",
+                RequestFileName = "request.xml",
+                ResponseFileName = responseName
+            };
+
+            Assert.True(validator.Validate(null, options).Failed, responseName);
+        }
+    }
+
+    [Theory]
+    [InlineData("CON.xml")]
+    [InlineData("prn.response.xml")]
+    [InlineData("AUX.xml")]
+    [InlineData("nul.xml")]
+    [InlineData("COM1.xml")]
+    [InlineData("Lpt9.xml")]
+    [InlineData("NUL .xml")]
+    [InlineData("COM¹.xml")]
+    [InlineData("LPT².xml")]
+    public void EquipmentOptions_RejectReservedWindowsDeviceFileNames(string fileName)
+    {
+        var validator = new EquipmentCommunicationOptionsValidator();
+        foreach (var useAsRequest in new[] { true, false })
+        {
+            var options = new EquipmentCommunicationOptions
+            {
+                ExchangeDirectory = @"C:\Exchange",
+                RequestFileName = useAsRequest ? fileName : "request.xml",
+                ResponseFileName = useAsRequest ? "response.xml" : fileName
+            };
+
+            var result = validator.Validate(null, options);
+
+            Assert.True(result.Failed);
+            Assert.Contains(result.Failures, failure => failure.Contains("device", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Theory]
+    [InlineData("COM10.xml")]
+    [InlineData("NUL-result.xml")]
+    [InlineData("result version.xml")]
+    public void EquipmentOptions_AcceptOrdinaryNamesNearReservedDeviceNames(string fileName)
+    {
+        var options = new EquipmentCommunicationOptions
+        {
+            ExchangeDirectory = @"C:\Exchange",
+            RequestFileName = fileName
+        };
+
+        Assert.True(new EquipmentCommunicationOptionsValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
     public void CorrelationStoreOptions_RequireAbsoluteFilePath()
     {
         var result = new CorrelationIdStoreOptionsValidator().Validate(

@@ -68,6 +68,42 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await viewModel.ShutdownAsync();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkflowBusyTransitions_PreserveLiveResumeIntent(bool activateDuringWorkflow)
+    {
+        var session = new PendingFrameSession();
+        var workflow = new StubWorkflowExecutionFacade();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator(), workflow);
+        if (activateDuringWorkflow)
+        {
+            workflow.SetState(WorkflowRunState.Validating);
+            viewModel.Activate();
+            Assert.Empty(session.FrameWidths);
+        }
+        else
+        {
+            viewModel.Activate();
+            await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+            workflow.SetState(WorkflowRunState.Validating);
+            await WaitUntilAsync(() => !viewModel.IsStreaming);
+        }
+
+        workflow.SetState(WorkflowRunState.Running);
+        workflow.SetState(WorkflowRunState.Paused);
+        workflow.SetState(WorkflowRunState.Running);
+        workflow.SetState(WorkflowRunState.Stopping);
+        Assert.False(viewModel.IsStreamingRequested);
+        workflow.SetState(WorkflowRunState.Completed);
+
+        var expectedFrames = activateDuringWorkflow ? 1 : 2;
+        await WaitUntilAsync(() => session.FrameWidths.Count == expectedFrames);
+        Assert.True(viewModel.IsStreamingRequested);
+        viewModel.StopCommand.Execute(null);
+        await viewModel.ShutdownAsync();
+    }
+
     [Fact]
     public async Task HfwChange_ScalesPixelPitchAndLocksMoveUntilMatchingFrameArrives()
     {
@@ -190,6 +226,156 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         viewModel.StopCommand.Execute(null);
         await WaitUntilAsync(() => !viewModel.IsInteractionActive);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Theory]
+    [InlineData("stage")]
+    [InlineData("camera")]
+    [InlineData("lens")]
+    [InlineData("integration")]
+    public async Task EquipmentCommand_PreservesInputsWhilePreviousFrameDrains(string action)
+    {
+        var session = new InteractiveMoveSession { BlockFirstFrameDrain = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.StageInputXText = "10E-6";
+        viewModel.StageInputYText = "20E-6";
+        viewModel.CameraInputXText = "30E-6";
+        viewModel.CameraInputYText = "40E-6";
+        viewModel.LensMode = "lens1";
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        var command = action switch
+        {
+            "stage" => viewModel.ExecuteStageMoveCommand,
+            "camera" => viewModel.ExecuteCameraMoveCommand,
+            "lens" => viewModel.ExecuteLensCommand,
+            _ => viewModel.CaptureCommand,
+        };
+        var operation = command.ExecuteAsync(null);
+        await session.FirstFrameDrainStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        // Editors remain available while the preceding frame finishes cancellation. Their new
+        // values apply to the next operator command, not the physical command already initiated.
+        viewModel.StageMoveMode = "absolute";
+        viewModel.StageInputXText = "999";
+        viewModel.StageInputYText = "999";
+        viewModel.CameraMoveMode = "absolute";
+        viewModel.CameraInputXText = "999";
+        viewModel.CameraInputYText = "999";
+        viewModel.LensMode = "lens2";
+        viewModel.HorizontalFieldWidthText = "0.5";
+        viewModel.IntegrationFrameCount = 64;
+        session.FirstFrameDrainRelease.TrySetResult(true);
+        await operation.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        switch (action)
+        {
+            case "stage":
+                Assert.Equal("relative", session.LastStageMoveMode);
+                Assert.Equal(10E-6, session.LastStageMoveXMetres, 12);
+                Assert.Equal(20E-6, session.LastStageMoveYMetres, 12);
+                break;
+            case "camera":
+                Assert.Equal("relative", session.LastCameraMoveMode);
+                Assert.Equal(30E-6, session.LastCameraMoveXMetres, 12);
+                Assert.Equal(40E-6, session.LastCameraMoveYMetres, 12);
+                break;
+            case "lens":
+                Assert.Equal("lens1", session.LastRequestedLensMode);
+                break;
+            default:
+                Assert.Equal(1E-3, session.LastIntegrationHfwMetres);
+                Assert.Equal(8, session.LastIntegrationFrameCount);
+                break;
+        }
+
+        Assert.Equal(1, session.MaximumConcurrentEquipmentCalls);
+        viewModel.StopCommand.Execute(null);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Theory]
+    [InlineData("stage")]
+    [InlineData("camera")]
+    public async Task SuccessfulManualMove_FromStoppedPreviewRequiresFreshFrame(string action)
+    {
+        var session = new InteractiveMoveSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        SetLoadedImage(viewModel);
+        viewModel.PixelPitchText = "1E-6";
+        var target = new LiveImageTarget(20, 20, 100, 100, 1E-3, 1E-3);
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        viewModel.StopCommand.Execute(null);
+        await WaitUntilAsync(() => !viewModel.IsInteractionActive);
+        Assert.True(viewModel.MoveToTargetCommand.CanExecute(target));
+
+        var command = action == "stage"
+            ? viewModel.ExecuteStageMoveCommand
+            : viewModel.ExecuteCameraMoveCommand;
+        await command.ExecuteAsync(null);
+
+        Assert.Equal(1, session.FrameCallCount);
+        Assert.True(viewModel.IsFrameCalibrationPending);
+        Assert.False(viewModel.MoveToTargetCommand.CanExecute(target));
+        ApplyDecodedFrame(viewModel, viewModel.HorizontalFieldWidthMetres);
+        Assert.True(viewModel.MoveToTargetCommand.CanExecute(target));
+        await viewModel.ShutdownAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedOrCanceledStageMove_RequiresFreshFrameBeforeAnotherImageMove(bool failMove)
+    {
+        var session = new InteractiveMoveSession
+        {
+            FailMove = failMove,
+            BlockMove = !failMove,
+        };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        SetLoadedImage(viewModel);
+        viewModel.PixelPitchText = "1E-6";
+        var target = new LiveImageTarget(20, 20, 100, 100, 1E-3, 1E-3);
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        var operation = viewModel.ExecuteStageMoveCommand.ExecuteAsync(null);
+        await session.MoveStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.False(viewModel.IsDisplayedFrameCalibrationCurrent);
+        if (!failMove)
+        {
+            viewModel.CancelNonLiveRequestCommand.Execute(null);
+        }
+
+        await operation.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        Assert.True(viewModel.IsFrameCalibrationPending);
+        Assert.False(viewModel.MoveToTargetCommand.CanExecute(target));
+        ApplyDecodedFrame(viewModel, viewModel.HorizontalFieldWidthMetres);
+        Assert.True(viewModel.MoveToTargetCommand.CanExecute(target));
+        viewModel.StopCommand.Execute(null);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task NavigationWhileFrameDrains_PreservesCalibrationWhenMoveWasNotSent()
+    {
+        var session = new InteractiveMoveSession { BlockFirstFrameDrain = true };
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        SetLoadedImage(viewModel);
+        viewModel.Activate();
+        await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        var operation = viewModel.ExecuteStageMoveCommand.ExecuteAsync(null);
+        await session.FirstFrameDrainStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+        viewModel.Deactivate();
+        session.FirstFrameDrainRelease.TrySetResult(true);
+        await operation.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(0, session.MoveCallCount);
+        Assert.True(viewModel.IsDisplayedFrameCalibrationCurrent);
         await viewModel.ShutdownAsync();
     }
 
@@ -497,6 +683,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await session.MoveStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(viewModel.IsTargetMarkerVisible);
+        Assert.True(viewModel.IsFrameCalibrationPending);
         Assert.Equal(25E-6, session.LastStageMoveXMetres, 12);
         Assert.Equal(-25E-6, session.LastStageMoveYMetres, 12);
         viewModel.CancelNonLiveRequestCommand.Execute(null);
@@ -506,6 +693,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         await move.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         await session.SecondFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         Assert.True(viewModel.HasTarget);
+        Assert.False(viewModel.MoveToTargetCommand.CanExecute(target));
         Assert.Equal(75d, viewModel.TargetPixelX, 12);
         Assert.Equal(25d, viewModel.TargetPixelY, 12);
 
@@ -774,7 +962,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
     private static LiveInteractionPageViewModel CreateViewModel(
         ILiveInteractionSession session,
-        IEquipmentResponseSimulator simulator)
+        IEquipmentResponseSimulator simulator,
+        StubWorkflowExecutionFacade? workflow = null)
     {
         return new LiveInteractionPageViewModel(
             session,
@@ -794,7 +983,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                 PollingInterval = TimeSpan.FromMilliseconds(10)
             }),
             new StubLocalizationService(),
-            new StubWorkflowExecutionFacade(),
+            workflow ?? new StubWorkflowExecutionFacade(),
             NullLogger<LiveInteractionPageViewModel>.Instance);
     }
 
@@ -1046,6 +1235,10 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
         public TaskCompletionSource<bool> FirstFrameCanceled { get; } = NewSignal();
 
+        public TaskCompletionSource<bool> FirstFrameDrainStarted { get; } = NewSignal();
+
+        public TaskCompletionSource<bool> FirstFrameDrainRelease { get; } = NewSignal();
+
         public TaskCompletionSource<bool> SecondFrameStarted { get; } = NewSignal();
 
         public TaskCompletionSource<bool> SecondFrameCanceled { get; } = NewSignal();
@@ -1063,6 +1256,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         public TaskCompletionSource<bool> OmCanceled { get; } = NewSignal();
 
         public bool BlockMove { get; set; }
+
+        public bool BlockFirstFrameDrain { get; set; }
 
         public bool FailMove { get; set; }
 
@@ -1085,6 +1280,18 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         public double LastStageMoveXMetres { get; private set; }
 
         public double LastStageMoveYMetres { get; private set; }
+
+        public string? LastStageMoveMode { get; private set; }
+
+        public string? LastCameraMoveMode { get; private set; }
+
+        public double LastCameraMoveXMetres { get; private set; }
+
+        public double LastCameraMoveYMetres { get; private set; }
+
+        public double? LastIntegrationHfwMetres { get; private set; }
+
+        public int? LastIntegrationFrameCount { get; private set; }
 
         public double CameraResponseXMetres { get; set; } = -3.2E-9;
 
@@ -1135,6 +1342,12 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             }
             finally
             {
+                if (call == 1 && BlockFirstFrameDrain)
+                {
+                    FirstFrameDrainStarted.TrySetResult(true);
+                    await FirstFrameDrainRelease.Task;
+                }
+
                 ExitCall();
                 if (call == 1)
                 {
@@ -1208,6 +1421,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             try
             {
                 MoveCallCount++;
+                LastStageMoveMode = moveMode;
                 LastStageMoveXMetres = stageXMetres;
                 LastStageMoveYMetres = stageYMetres;
                 MoveStartedAfterFrameCancellation = FirstFrameCanceled.Task.IsCompleted;
@@ -1258,6 +1472,9 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             EnterCall();
             try
             {
+                LastCameraMoveMode = moveMode;
+                LastCameraMoveXMetres = cameraXMetres;
+                LastCameraMoveYMetres = cameraYMetres;
                 return Task.FromResult(
                     new EquipmentResponseMessage(
                         702,
@@ -1353,6 +1570,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
             EnterCall();
             try
             {
+                LastIntegrationHfwMetres = horizontalFieldWidthMetres;
+                LastIntegrationFrameCount = frameCount;
                 CaptureStartedAfterFrameCancellation = FirstFrameCanceled.Task.IsCompleted;
                 CaptureStarted.TrySetResult(true);
                 if (FailCapture)
@@ -1586,16 +1805,19 @@ public sealed class DesktopLiveInteractionPageViewModelTests
 
     private sealed class StubWorkflowExecutionFacade : IWorkflowExecutionFacade
     {
-        public WorkflowRunState State => WorkflowRunState.Idle;
+        public WorkflowRunState State { get; private set; } = WorkflowRunState.Idle;
 
         public WorkflowNode? CurrentNode => null;
 
         public RunResultStore Results { get; } = new RunResultStore();
 
-        public event EventHandler<WorkflowRunStateChangedEventArgs>? RunStateChanged
+        public event EventHandler<WorkflowRunStateChangedEventArgs>? RunStateChanged;
+
+        public void SetState(WorkflowRunState state)
         {
-            add { }
-            remove { }
+            var previousState = State;
+            State = state;
+            RunStateChanged?.Invoke(this, new WorkflowRunStateChangedEventArgs(previousState, state, null));
         }
 
         public event EventHandler<WorkflowNodeStateChangedEventArgs>? NodeStateChanged

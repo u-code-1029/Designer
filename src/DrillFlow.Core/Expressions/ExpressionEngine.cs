@@ -13,6 +13,13 @@ namespace DrillFlow.Core.Expressions
     /// </summary>
     public sealed class ExpressionEngine
     {
+        // Bound both recursive parsing (parentheses, unary operators, indexes)
+        // and the resulting evaluation tree (including long flat operator/member
+        // chains). Malformed authored expressions must produce validation issues
+        // rather than exhausting the process stack.
+        private const int MaximumExpressionDepth = 128;
+        private const int MaximumExpressionNodes = 4096;
+
         public ExpressionValue Evaluate(string expression, ExpressionContext? context = null)
         {
             var parser = new Parser(PrepareExpression(expression));
@@ -407,6 +414,8 @@ namespace DrillFlow.Core.Expressions
         {
             private readonly Lexer _lexer;
             private Token _current;
+            private int _nestingDepth;
+            private int _nodeCount;
             private readonly HashSet<string> _rootIdentifiers =
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             private readonly List<ExpressionMemberReference> _firstLevelMemberReferences =
@@ -440,7 +449,7 @@ namespace DrillFlow.Core.Expressions
                 while (_current.Kind == TokenKind.OrOr)
                 {
                     var operation = Take();
-                    left = new BinaryNode(left, operation, ParseAnd());
+                    left = CountNode(new BinaryNode(left, operation, ParseAnd()));
                 }
 
                 return left;
@@ -452,7 +461,7 @@ namespace DrillFlow.Core.Expressions
                 while (_current.Kind == TokenKind.AndAnd)
                 {
                     var operation = Take();
-                    left = new BinaryNode(left, operation, ParseEquality());
+                    left = CountNode(new BinaryNode(left, operation, ParseEquality()));
                 }
 
                 return left;
@@ -464,7 +473,7 @@ namespace DrillFlow.Core.Expressions
                 while (_current.Kind == TokenKind.EqualEqual || _current.Kind == TokenKind.BangEqual)
                 {
                     var operation = Take();
-                    left = new BinaryNode(left, operation, ParseComparison());
+                    left = CountNode(new BinaryNode(left, operation, ParseComparison()));
                 }
 
                 return left;
@@ -479,7 +488,7 @@ namespace DrillFlow.Core.Expressions
                        _current.Kind == TokenKind.GreaterEqual)
                 {
                     var operation = Take();
-                    left = new BinaryNode(left, operation, ParseTerm());
+                    left = CountNode(new BinaryNode(left, operation, ParseTerm()));
                 }
 
                 return left;
@@ -491,7 +500,7 @@ namespace DrillFlow.Core.Expressions
                 while (_current.Kind == TokenKind.Plus || _current.Kind == TokenKind.Minus)
                 {
                     var operation = Take();
-                    left = new BinaryNode(left, operation, ParseFactor());
+                    left = CountNode(new BinaryNode(left, operation, ParseFactor()));
                 }
 
                 return left;
@@ -503,7 +512,7 @@ namespace DrillFlow.Core.Expressions
                 while (_current.Kind == TokenKind.Star || _current.Kind == TokenKind.Slash)
                 {
                     var operation = Take();
-                    left = new BinaryNode(left, operation, ParseUnary());
+                    left = CountNode(new BinaryNode(left, operation, ParseUnary()));
                 }
 
                 return left;
@@ -516,7 +525,15 @@ namespace DrillFlow.Core.Expressions
                     _current.Kind == TokenKind.Minus)
                 {
                     var operation = Take();
-                    return new UnaryNode(operation, ParseUnary());
+                    EnterNestedExpression(operation.Position);
+                    try
+                    {
+                        return CountNode(new UnaryNode(operation, ParseUnary()));
+                    }
+                    finally
+                    {
+                        _nestingDepth--;
+                    }
                 }
 
                 return ParsePostfix();
@@ -537,16 +554,34 @@ namespace DrillFlow.Core.Expressions
                                 new ExpressionMemberReference(variable.Name, (string)member.Value!));
                         }
 
-                        value = new MemberNode(value, (string)member.Value!, member.Position);
+                        value = CountNode(new MemberNode(value, (string)member.Value!, member.Position));
                         continue;
                     }
 
                     if (_current.Kind == TokenKind.LeftBracket)
                     {
                         var bracket = Take();
-                        var index = ParseOr();
+                        Node index;
+                        EnterNestedExpression(bracket.Position);
+                        try
+                        {
+                            index = ParseOr();
+                        }
+                        finally
+                        {
+                            _nestingDepth--;
+                        }
+
                         Expect(TokenKind.RightBracket, "A closing ']' is required.");
-                        value = new IndexNode(value, index, bracket.Position);
+                        if (value is VariableNode variable
+                            && index is LiteralNode literal
+                            && literal.Value.Kind == ExpressionValueKind.String)
+                        {
+                            _firstLevelMemberReferences.Add(
+                                new ExpressionMemberReference(variable.Name, literal.Value.AsString()));
+                        }
+
+                        value = CountNode(new IndexNode(value, index, bracket.Position));
                         continue;
                     }
 
@@ -561,41 +596,76 @@ namespace DrillFlow.Core.Expressions
                     case TokenKind.Number:
                     {
                         var token = Take();
-                        return new LiteralNode(ExpressionValue.Number((double)token.Value!), token.Position);
+                        return CountNode(new LiteralNode(ExpressionValue.Number((double)token.Value!), token.Position));
                     }
                     case TokenKind.String:
                     {
                         var token = Take();
-                        return new LiteralNode(ExpressionValue.String((string)token.Value!), token.Position);
+                        return CountNode(new LiteralNode(ExpressionValue.String((string)token.Value!), token.Position));
                     }
                     case TokenKind.True:
                     case TokenKind.False:
                     {
                         var token = Take();
-                        return new LiteralNode(ExpressionValue.Boolean((bool)token.Value!), token.Position);
+                        return CountNode(new LiteralNode(ExpressionValue.Boolean((bool)token.Value!), token.Position));
                     }
                     case TokenKind.Null:
                     {
                         var token = Take();
-                        return new LiteralNode(ExpressionValue.Null, token.Position);
+                        return CountNode(new LiteralNode(ExpressionValue.Null, token.Position));
                     }
                     case TokenKind.Identifier:
                     {
                         var token = Take();
                         var name = (string)token.Value!;
                         _rootIdentifiers.Add(name);
-                        return new VariableNode(name, token.Position);
+                        return CountNode(new VariableNode(name, token.Position));
                     }
                     case TokenKind.LeftParenthesis:
                     {
-                        Take();
-                        var inner = ParseOr();
+                        var opening = Take();
+                        Node inner;
+                        EnterNestedExpression(opening.Position);
+                        try
+                        {
+                            inner = ParseOr();
+                        }
+                        finally
+                        {
+                            _nestingDepth--;
+                        }
+
                         Expect(TokenKind.RightParenthesis, "A closing ')' is required.");
                         return inner;
                     }
                     default:
                         throw new ExpressionSyntaxException("A value or sub-expression is required.", _current.Position);
                 }
+            }
+
+            private void EnterNestedExpression(int position)
+            {
+                if (_nestingDepth >= MaximumExpressionDepth)
+                {
+                    throw new ExpressionSyntaxException(
+                        $"An expression cannot nest more than {MaximumExpressionDepth} levels.",
+                        position);
+                }
+
+                _nestingDepth++;
+            }
+
+            private T CountNode<T>(T node)
+                where T : Node
+            {
+                if (++_nodeCount > MaximumExpressionNodes)
+                {
+                    throw new ExpressionSyntaxException(
+                        $"An expression cannot contain more than {MaximumExpressionNodes} values and operations.",
+                        _current.Position);
+                }
+
+                return node;
             }
 
             private Token Take()
@@ -618,12 +688,21 @@ namespace DrillFlow.Core.Expressions
 
         private abstract class Node
         {
-            protected Node(int position)
+            protected Node(int position, int depth = 1)
             {
+                if (depth > MaximumExpressionDepth)
+                {
+                    throw new ExpressionSyntaxException(
+                        $"An expression cannot evaluate more than {MaximumExpressionDepth} levels deep.",
+                        position);
+                }
+
                 Position = position;
+                Depth = depth;
             }
 
             protected int Position { get; }
+            public int Depth { get; }
             public abstract ExpressionValue Evaluate(ExpressionContext context);
         }
 
@@ -672,7 +751,7 @@ namespace DrillFlow.Core.Expressions
             private readonly string _member;
 
             public MemberNode(Node target, string member, int position)
-                : base(position)
+                : base(position, target.Depth + 1)
             {
                 _target = target;
                 _member = member;
@@ -718,7 +797,7 @@ namespace DrillFlow.Core.Expressions
             private readonly Node _index;
 
             public IndexNode(Node target, Node index, int position)
-                : base(position)
+                : base(position, Math.Max(target.Depth, index.Depth) + 1)
             {
                 _target = target;
                 _index = index;
@@ -785,7 +864,7 @@ namespace DrillFlow.Core.Expressions
             private readonly Node _operand;
 
             public UnaryNode(Token operation, Node operand)
-                : base(operation.Position)
+                : base(operation.Position, operand.Depth + 1)
             {
                 _operation = operation;
                 _operand = operand;
@@ -835,7 +914,7 @@ namespace DrillFlow.Core.Expressions
             private readonly Node _right;
 
             public BinaryNode(Node left, Token operation, Node right)
-                : base(operation.Position)
+                : base(operation.Position, Math.Max(left.Depth, right.Depth) + 1)
             {
                 _left = left;
                 _operation = operation;

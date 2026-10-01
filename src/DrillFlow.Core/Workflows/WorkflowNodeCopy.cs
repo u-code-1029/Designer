@@ -380,6 +380,9 @@ namespace DrillFlow.Core.Workflows
 
                 rewritten.Append(
                     (previous < 0 || source[previous] != '.')
+                    // Exponent text such as the e3 in 1e3 is part of a numeric
+                    // token, even when an action happens to use that alias.
+                    && (index == 0 || !IsIdentifierPart(source[index - 1]))
                     && aliasMap.TryGetValue(identifier, out var mappedAlias)
                         ? mappedAlias
                         : identifier);
@@ -391,12 +394,12 @@ namespace DrillFlow.Core.Workflows
 
         private static bool IsIdentifierStart(char value)
         {
-            return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z';
+            return value == '_' || char.IsLetter(value);
         }
 
         private static bool IsIdentifierPart(char value)
         {
-            return IsIdentifierStart(value) || value >= '0' && value <= '9';
+            return IsIdentifierStart(value) || char.IsDigit(value);
         }
     }
 }

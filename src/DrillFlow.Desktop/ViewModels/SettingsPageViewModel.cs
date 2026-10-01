@@ -10,6 +10,7 @@ using DrillFlow.Application.Communication;
 using DrillFlow.Application.RealtimeVideo;
 using DrillFlow.Desktop.Models;
 using DrillFlow.Desktop.Services;
+using DrillFlow.Infrastructure.Communication;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -192,6 +193,7 @@ public sealed class SettingsPageViewModel : ObservableObject
             if (SetProperty(ref _exchangeFolder, value ?? string.Empty))
             {
                 OpenFolderCommand.NotifyCanExecuteChanged();
+                OpenLiveImageFolderCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -367,7 +369,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         Theme = preferences.Theme;
         ValidateWorkflowOnEveryChange = preferences.ValidateWorkflowOnEveryChange;
         ExchangeFolder = communication.ExchangeFolder;
-        LiveImageFolder = communication.ResolveLiveImageFolder();
+        LiveImageFolder = communication.LiveImageFolder;
         RequestFileName = communication.RequestFileName;
         ResponseFileName = communication.ResponseFileName;
         // Preserve unsupported persisted values as an invalid draft. Startup deliberately
@@ -456,20 +458,23 @@ public sealed class SettingsPageViewModel : ObservableObject
         }
 
         IsTesting = true;
+        var communication = BuildSettings();
+        var exchangeFolder = communication.ExchangeFolder;
+        var liveImageFolder = communication.ResolveLiveImageFolder();
         var testName = ".drillflow-write-test-" + Guid.NewGuid().ToString("N") + ".tmp";
-        var exchangeTestPath = Path.Combine(ExchangeFolder, testName);
-        var liveImageTestPath = Path.Combine(LiveImageFolder, testName);
+        var exchangeTestPath = Path.Combine(exchangeFolder, testName);
+        var liveImageTestPath = Path.Combine(liveImageFolder, testName);
         try
         {
             await Task.Run(() =>
             {
-                TestWritableDirectory(ExchangeFolder, exchangeTestPath);
+                TestWritableDirectory(exchangeFolder, exchangeTestPath);
                 if (!string.Equals(
-                        ExchangeFolder.TrimEnd('\\', '/'),
-                        LiveImageFolder.TrimEnd('\\', '/'),
+                        exchangeFolder.TrimEnd('\\', '/'),
+                        liveImageFolder.TrimEnd('\\', '/'),
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    TestWritableDirectory(LiveImageFolder, liveImageTestPath);
+                    TestWritableDirectory(liveImageFolder, liveImageTestPath);
                 }
             });
 
@@ -481,8 +486,8 @@ public sealed class SettingsPageViewModel : ObservableObject
             _logger.LogWarning(
                 exception,
                 "Communication folder test failed for exchange {ExchangeFolder} and Live images {LiveImageFolder}",
-                ExchangeFolder,
-                LiveImageFolder);
+                exchangeFolder,
+                liveImageFolder);
             StatusMessage = _localization["ConnectionTestFailed"] + " " + exception.Message;
             StatusIsError = true;
             TryDelete(exchangeTestPath);
@@ -505,7 +510,8 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             failure = _localization["FileNameOnly"];
         }
-        else if (!IsRootedPath(LiveImageFolder))
+        else if (!string.IsNullOrWhiteSpace(LiveImageFolder)
+                 && !IsRootedPath(LiveImageFolder))
         {
             failure = _localization["LiveImageFolderRequired"];
         }
@@ -567,6 +573,17 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             failure = _localization["RealtimeVideoValidationFailed"];
         }
+        else
+        {
+            // Reuse the startup/transport validator before replacing live options. The
+            // friendly field checks above must never accept a configuration it rejects.
+            var candidate = new EquipmentCommunicationOptions();
+            BuildSettings().ApplyTo(candidate);
+            if (new EquipmentCommunicationOptionsValidator().Validate(null, candidate).Failed)
+            {
+                failure = _localization["SettingsValidationFailed"];
+            }
+        }
 
         ValidationMessage = failure ?? string.Empty;
         return failure is null;
@@ -575,7 +592,9 @@ public sealed class SettingsPageViewModel : ObservableObject
     private CommunicationSettings BuildSettings() => new()
     {
         ExchangeFolder = EquipmentCommunicationOptions.NormalizeExchangeDirectory(ExchangeFolder),
-        LiveImageFolder = EquipmentCommunicationOptions.NormalizeExchangeDirectory(LiveImageFolder),
+        LiveImageFolder = string.IsNullOrWhiteSpace(LiveImageFolder)
+            ? string.Empty
+            : EquipmentCommunicationOptions.NormalizeExchangeDirectory(LiveImageFolder),
         RequestFileName = RequestFileName.Trim(),
         ResponseFileName = ResponseFileName.Trim(),
         EquipmentRequestHandling = EquipmentRequestHandling,
@@ -652,13 +671,19 @@ public sealed class SettingsPageViewModel : ObservableObject
     }
 
     private bool CanOpenLiveImageFolder() =>
-        CanEditSettings && IsRootedPath(LiveImageFolder);
+        CanEditSettings
+        && (string.IsNullOrWhiteSpace(LiveImageFolder)
+            ? IsRootedPath(ExchangeFolder)
+            : IsRootedPath(LiveImageFolder));
 
     private void OpenLiveImageFolder()
     {
         try
         {
-            var path = _exchangeFolderLauncher.Open(LiveImageFolder);
+            var path = _exchangeFolderLauncher.Open(
+                EquipmentCommunicationOptions.ResolveLiveImageDirectory(
+                    ExchangeFolder,
+                    LiveImageFolder));
             StatusMessage = string.Format(_localization["LiveImageFolderOpened"], path);
             StatusIsError = false;
         }
@@ -752,47 +777,13 @@ public sealed class SettingsPageViewModel : ObservableObject
 
     private static bool IsRootedPath(string value)
     {
-        try
+        var directory = EquipmentCommunicationOptions.NormalizeExchangeDirectory(value);
+        var candidate = new EquipmentCommunicationOptions
         {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return false;
-            }
-
-            var path = value.Trim();
-            if (path.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
-            {
-                return false;
-            }
-
-            if (path.StartsWith(@"\\", StringComparison.Ordinal))
-            {
-                var serverSeparator = path.IndexOfAny(new[] { '\\', '/' }, 2);
-                if (serverSeparator <= 2 || serverSeparator == path.Length - 1)
-                {
-                    return false;
-                }
-
-                var shareStart = serverSeparator + 1;
-                var shareSeparator = path.IndexOfAny(new[] { '\\', '/' }, shareStart);
-                var shareLength = (shareSeparator < 0 ? path.Length : shareSeparator) - shareStart;
-                return shareLength > 0;
-            }
-
-            return path.Length >= 3
-                   && char.IsLetter(path[0])
-                   && path[1] == ':'
-                   && (path[2] == Path.DirectorySeparatorChar
-                       || path[2] == Path.AltDirectorySeparatorChar);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
+            ExchangeDirectory = directory,
+            LiveImageDirectory = directory
+        };
+        return new EquipmentCommunicationOptionsValidator().Validate(null, candidate).Succeeded;
     }
 
     private static void TryDelete(string path)

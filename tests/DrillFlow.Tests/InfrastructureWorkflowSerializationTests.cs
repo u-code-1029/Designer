@@ -224,6 +224,49 @@ public sealed class InfrastructureWorkflowSerializationTests
     }
 
     [Theory]
+    [InlineData("=move_1.results.last.stage_x", "=move_1.results.last.current_stage_x")]
+    [InlineData("=move_1.results.last.stage_y", "=move_1.results.last.current_stage_y")]
+    [InlineData("=move_1.results.last.index", "=move_1.results.last.correlation_id")]
+    [InlineData("=move_1.results.last.command", "=move_1.results.last.type")]
+    [InlineData(" =move_1 . RESULTS . LAST . STAGE_X ", " =move_1 . RESULTS . LAST . current_stage_x ")]
+    [InlineData("='move_1.results.last.stage_x'", "='move_1.results.last.stage_x'")]
+    [InlineData("=move_1.results[1 + 0].stage_y", "=move_1.results[1 + 0].current_stage_y")]
+    [InlineData("=move_1.results[http_1.result.json['index']].index",
+        "=move_1.results[http_1.result.json['index']].correlation_id")]
+    [InlineData("=move_1['results']['last']['stage_x']", "=move_1['results']['last']['current_stage_x']")]
+    [InlineData("=move_1[\"result\"][\"command\"]", "=move_1[\"result\"][\"type\"]")]
+    [InlineData("=move_1['parameters']['move_y']", "=move_1['parameters']['stage_y']")]
+    [InlineData("=move_1[(\"result\")].stage_x", "=move_1[(\"result\")].current_stage_x")]
+    [InlineData("=move_1[(\"parameters\")][(\"move_x\")]", "=move_1[(\"parameters\")][(\"stage_x\")]")]
+    [InlineData("=move_1[((('results')))][(('last'))][(('stage_y'))]",
+        "=move_1[((('results')))][(('last'))][(('current_stage_y'))]")]
+    [InlineData("=((move_1 . results)[0]).stage_x", "=((move_1 . results)[0]).current_stage_x")]
+    [InlineData("='escaped \\' move_1.result.stage_x' + move_1.result.stage_y",
+        "='escaped \\' move_1.result.stage_x' + move_1.result.current_stage_y")]
+    [InlineData("=http_1.result.json.result.command", "=http_1.result.json.result.command")]
+    [InlineData("=http_1.result.json.parameters.move_x", "=http_1.result.json.parameters.move_x")]
+    [InlineData("=http_1.result.json.results.last.command", "=http_1.result.json.results.last.command")]
+    [InlineData("=http_1.result.json . move_1 . result.command", "=http_1.result.json . move_1 . result.command")]
+    [InlineData("=unknown_1.result.command", "=unknown_1.result.command")]
+    [InlineData("=abort_1.result.command", "=abort_1.result.type")]
+    public void Deserialize_MigratesVersion1LatestRepeatedResultReferences(
+        string expression,
+        string expected)
+    {
+        var json = "{\"schemaVersion\":1,\"nodes\":[{\"type\":\"move\",\"key\":\"move_1\"},"
+                   + "{\"type\":\"http\",\"key\":\"http_1\"},{\"type\":\"abort\",\"key\":\"abort_1\"},"
+                   + "{\"type\":\"delay\",\"key\":\"delay_1\","
+                   + "\"durationMilliseconds\":{\"rawText\":"
+                   + Newtonsoft.Json.JsonConvert.SerializeObject(expression) + "}}]}";
+
+        var restored = new JsonWorkflowDocumentSerializer().Deserialize(json);
+
+        Assert.IsType<StageNode>(restored.Nodes[0]);
+        Assert.IsType<HttpActionNode>(restored.Nodes[1]);
+        Assert.Equal(expected, Assert.IsType<DelayNode>(restored.Nodes[3]).DurationMilliseconds.RawText);
+    }
+
+    [Theory]
     [InlineData("measure")]
     [InlineData("drill")]
     public void Deserialize_RejectsVersion1EquipmentActionsWithoutSafeMigration(string type)

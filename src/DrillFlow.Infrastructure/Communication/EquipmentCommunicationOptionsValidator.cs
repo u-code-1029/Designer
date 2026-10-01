@@ -126,6 +126,19 @@ public sealed class EquipmentCommunicationOptionsValidator
 
         var fileName = value!;
 
+        // Win32 strips trailing spaces/periods and resolves DOS device names even when an
+        // extension is present. Reject aliases that could collide with the other exchange file
+        // or bypass the reserved sidecar name rather than validating their literal spelling.
+        if (fileName[fileName.Length - 1] == ' ' || fileName[fileName.Length - 1] == '.')
+        {
+            failures.Add($"The {role} file name must not end with a space or period.");
+        }
+
+        if (IsReservedWindowsDeviceName(fileName))
+        {
+            failures.Add($"The {role} file name must not use a reserved Windows device name.");
+        }
+
         if (!string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal)
             || Path.IsPathRooted(fileName)
             || fileName == "."
@@ -144,6 +157,25 @@ public sealed class EquipmentCommunicationOptionsValidator
         {
             failures.Add($"The {role} file name must include an extension.");
         }
+    }
+
+    private static bool IsReservedWindowsDeviceName(string fileName)
+    {
+        var extensionStart = fileName.IndexOf('.');
+        var stem = (extensionStart < 0 ? fileName : fileName.Substring(0, extensionStart)).TrimEnd(' ');
+        if (string.Equals(stem, "CON", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(stem, "PRN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(stem, "AUX", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(stem, "NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return stem.Length == 4
+               && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                   || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+               && (stem[3] >= '1' && stem[3] <= '9'
+                   || stem[3] == '¹' || stem[3] == '²' || stem[3] == '³');
     }
 
     private static bool IsAbsoluteWindowsDirectory(string value)

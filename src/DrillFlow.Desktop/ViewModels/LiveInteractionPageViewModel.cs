@@ -683,8 +683,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     }
 
     /// <summary>
-    /// True only when the displayed image was requested with the current HFW. Movement remains
-    /// disabled while an older image is visible after a magnification change.
+    /// True only when the displayed image uses the current HFW and predates no equipment move
+    /// or lens change. Movement stays disabled until a fresh live frame replaces stale pixels.
     /// </summary>
     public bool IsDisplayedFrameCalibrationCurrent
     {
@@ -1718,17 +1718,19 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             return;
         }
 
+        var moveMode = StageMoveMode;
         await ExecuteManualEquipmentActionAsync(
             "LiveStatusStageMoving",
-            new object[] { StageMoveMode, x, y },
+            new object[] { moveMode, x, y },
             "LiveStatusStageMoveCompleted",
             "LiveStatusStageMoveFailed",
-            token => _session.MoveStageAsync(StageMoveMode, x, y, token),
+            token => _session.MoveStageAsync(moveMode, x, y, token),
             response =>
             {
                 ApplyStageResponse(response);
                 return new object[] { _stageX, _stageY };
-            });
+            },
+            invalidatesDisplayedFrame: true);
     }
 
     private bool CanExecuteCameraMove() =>
@@ -1745,17 +1747,19 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             return;
         }
 
+        var moveMode = CameraMoveMode;
         await ExecuteManualEquipmentActionAsync(
             "LiveStatusCameraMoving",
-            new object[] { CameraMoveMode, x, y },
+            new object[] { moveMode, x, y },
             "LiveStatusCameraMoveCompleted",
             "LiveStatusCameraMoveFailed",
-            token => _session.MoveCameraAsync(CameraMoveMode, x, y, token),
+            token => _session.MoveCameraAsync(moveMode, x, y, token),
             response =>
             {
                 ApplyCameraResponse(response);
                 return new object[] { _cameraX, _cameraY };
-            });
+            },
+            invalidatesDisplayedFrame: true);
     }
 
     private bool CanExecuteLens() =>
@@ -1769,17 +1773,19 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             return;
         }
 
+        var lensMode = LensMode;
         await ExecuteManualEquipmentActionAsync(
             "LiveStatusLensChanging",
-            new object[] { LensMode },
+            new object[] { lensMode },
             "LiveStatusLensChanged",
             "LiveStatusLensChangeFailed",
-            token => _session.ChangeLensAsync(LensMode, token),
+            token => _session.ChangeLensAsync(lensMode, token),
             response =>
             {
                 ApplyLensResponse(response);
                 return new object[] { CurrentLensMode };
-            });
+            },
+            invalidatesDisplayedFrame: true);
     }
 
     private bool CanExecuteAutoContrastBrightness() =>
@@ -1852,7 +1858,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         string completedStatusKey,
         string failedStatusKey,
         Func<CancellationToken, Task<EquipmentResponseMessage>> exchange,
-        Func<EquipmentResponseMessage, object[]> applyResponse)
+        Func<EquipmentResponseMessage, object[]> applyResponse,
+        bool invalidatesDisplayedFrame = false)
     {
         var activationGeneration = _activationGeneration;
         var completed = false;
@@ -1874,6 +1881,11 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             IsMoving = true;
             SetStatus(startingStatusKey, startingStatusArguments);
             requestState = BeginNonLiveRequest(operationCancellation);
+            if (invalidatesDisplayedFrame)
+            {
+                InvalidateDisplayedFrame();
+            }
+
             var response = await exchange(operationCancellation.Token);
             MarkNonLiveResponseReceived(requestState);
             if (_isShuttingDown
@@ -2058,6 +2070,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             return;
         }
 
+        var horizontalFieldWidthMetres = _horizontalFieldWidthMetres;
+        var frameCount = IntegrationFrameCount;
         var activationGeneration = _activationGeneration;
         var completed = false;
         var resumeStreaming = false;
@@ -2080,8 +2094,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             SetStatus("LiveStatusCapturing");
             requestState = BeginNonLiveRequest(capturePostResponse);
             imageExchange = await _session.IntegrateAsync(
-                _horizontalFieldWidthMetres,
-                IntegrationFrameCount,
+                horizontalFieldWidthMetres,
+                frameCount,
                 capturePostResponse.Token);
             MarkNonLiveResponseReceived(requestState);
             var response = imageExchange.Response;
@@ -2280,6 +2294,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
             IsMoving = true;
             SetStatus("LiveStatusMoving", moveX, moveY);
             requestState = BeginNonLiveRequest(moveCancellation);
+            InvalidateDisplayedFrame(preserveTargetMarker: true);
             var response = await _session.MoveStageAsync(
                 LiveInteractionProtocol.RelativeMoveMode,
                 moveX,
@@ -2538,8 +2553,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
         // The displayed pixels were acquired through the previous optical path. Require one
         // fresh live response before translating another image point into a stage movement.
-        IsDisplayedFrameCalibrationCurrent = false;
-        IsTargetMarkerVisible = false;
+        InvalidateDisplayedFrame();
     }
 
     private void ApplyAutoContrastBrightnessResponse(EquipmentResponseMessage response)
@@ -2547,6 +2561,18 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
         ApplyCorrelationResponse(response);
         _lastAutoContrastBrightnessCorrelationId = response.CorrelationId;
         OnPropertyChanged(nameof(AutoContrastBrightnessResultText));
+    }
+
+    private void InvalidateDisplayedFrame(bool preserveTargetMarker = false)
+    {
+        // Equipment may already have consumed a request when cancellation or response failure
+        // is observed. Reuse the last preview only after a fresh frame establishes its position
+        // and optical calibration, including when a manual move began from a stopped preview.
+        IsDisplayedFrameCalibrationCurrent = false;
+        if (!preserveTargetMarker)
+        {
+            IsTargetMarkerVisible = false;
+        }
     }
 
     private void ApplyFocusResponse(EquipmentResponseMessage response)
@@ -3041,7 +3067,9 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
 
         if (IsWorkflowBusy())
         {
-            _resumeAfterWorkflow = _isPageActive && IsStreamingRequested;
+            // Validating can stop Live before Running/Paused/Stopping arrive. Keep the saved
+            // intent through those transitions, including activation during an existing run.
+            _resumeAfterWorkflow = _isPageActive && (_resumeAfterWorkflow || IsStreamingRequested);
             if (IsStreamingRequested)
             {
                 StopStreaming();

@@ -1254,10 +1254,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 return null;
             }
 
-            var payload = await _stableFileReader.TryReadAsync(
+            var payload = await EquipmentFileReadBudget.TryReadAsync(
+                    _stableFileReader,
                     responsePath,
                     settings.StableReadDelay,
                     EquipmentMessageLimits.MaximumWirePayloadBytes,
+                    settings.ResponseTimeout - elapsed.Elapsed,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (payload is not null)
@@ -1306,10 +1308,12 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
-        var payload = await _stableFileReader.TryReadAsync(
+        var payload = await EquipmentFileReadBudget.TryReadAsync(
+                _stableFileReader,
                 responsePath,
                 settings.StableReadDelay,
                 EquipmentMessageLimits.MaximumWirePayloadBytes,
+                settings.ResponseTimeout,
                 cancellationToken)
             .ConfigureAwait(false);
         if (payload is null || ByteArraysEqual(payload, retainedResponseBaseline))
@@ -1332,17 +1336,19 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
         EquipmentCommunicationSnapshot settings,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + settings.ResponseTimeout;
+        var elapsed = Stopwatch.StartNew();
         byte[]? lastRejectedPayload = null;
         var observedStableResponse = false;
         var observedUnchangedRetainedBaseline = false;
-        while (DateTime.UtcNow < deadline)
+        while (elapsed.Elapsed < settings.ResponseTimeout)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var payload = await _stableFileReader.TryReadAsync(
+            var payload = await EquipmentFileReadBudget.TryReadAsync(
+                    _stableFileReader,
                     responsePath,
                     settings.StableReadDelay,
                     EquipmentMessageLimits.MaximumWirePayloadBytes,
+                    settings.ResponseTimeout - elapsed.Elapsed,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -1368,7 +1374,7 @@ public sealed class FileEquipmentTransport : IEquipmentFileTransport, IDisposabl
                 }
             }
 
-            var remaining = deadline - DateTime.UtcNow;
+            var remaining = settings.ResponseTimeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero)
             {
                 break;

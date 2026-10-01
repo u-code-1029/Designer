@@ -776,7 +776,7 @@ public sealed class WorkflowRunner : IWorkflowRunner
                     "The canceled designer HTTP action {Method} {Url} completed late with "
                     + "{ExceptionType}.",
                     request.Method,
-                    GetSafeHttpLogUrl(request.Url),
+                    HttpRequestDiagnostics.GetSafeLogUrl(request.Url),
                     exception.GetType().FullName ?? exception.GetType().Name);
             }
             catch (Exception)
@@ -784,26 +784,6 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 // Host shutdown can dispose logging providers before a blocked task returns.
             }
         }
-    }
-
-    private static string GetSafeHttpLogUrl(string value)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
-        {
-            return "<invalid-url>";
-        }
-
-        // Uri.GetLeftPart(UriPartial.Path) can retain user-info from the authority. Rebuild the
-        // URI explicitly so late-task diagnostics never expose credentials, query tokens, or a
-        // fragment while still identifying the host/path that needs investigation.
-        var safe = new UriBuilder(uri)
-        {
-            UserName = string.Empty,
-            Password = string.Empty,
-            Query = string.Empty,
-            Fragment = string.Empty
-        };
-        return safe.Uri.GetLeftPart(UriPartial.Path);
     }
 
     private async Task<SequenceOutcome> ExecuteRepeatAsync(
@@ -1263,9 +1243,10 @@ public sealed class WorkflowRunner : IWorkflowRunner
                 _state = state;
             }
 
-            RunStateChanged?.Invoke(
-                this,
-                new WorkflowRunStateChangedEventArgs(previous, state, CurrentRunId, message, exception));
+            NotifyObservers(
+                RunStateChanged,
+                new WorkflowRunStateChangedEventArgs(previous, state, CurrentRunId, message, exception),
+                nameof(RunStateChanged));
         }
     }
 
@@ -1276,9 +1257,43 @@ public sealed class WorkflowRunner : IWorkflowRunner
         ActionExecutionResult? result = null,
         Exception? exception = null)
     {
-        NodeStateChanged?.Invoke(
-            this,
-            new WorkflowNodeStateChangedEventArgs(node, state, iterationPath, result, exception));
+        NotifyObservers(
+            NodeStateChanged,
+            new WorkflowNodeStateChangedEventArgs(node, state, iterationPath, result, exception),
+            nameof(NodeStateChanged));
+    }
+
+    private void NotifyObservers<TEventArgs>(
+        EventHandler<TEventArgs>? handlers,
+        TEventArgs args,
+        string eventName)
+        where TEventArgs : EventArgs
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<TEventArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, args);
+            }
+            catch (Exception exception)
+            {
+                // Observers render execution state; their failures must neither change the
+                // physical action's outcome nor prevent RequestStop from canceling its tokens.
+                try
+                {
+                    _logger.LogWarning(exception, "A workflow {EventName} observer failed.", eventName);
+                }
+                catch (Exception)
+                {
+                    // A disposed or failing diagnostic provider must not block Stop either.
+                }
+            }
+        }
     }
 
     private static bool IsTerminal(WorkflowRunState state)

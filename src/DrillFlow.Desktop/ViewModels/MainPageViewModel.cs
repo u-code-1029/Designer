@@ -61,6 +61,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private object? _explicitPasteTarget;
     private string _toolboxSearchText = string.Empty;
     private bool _isValidationCurrent;
+    private bool _isDocumentOperationBusy;
 
     public MainPageViewModel(
         ILocalizationService localization,
@@ -274,6 +275,10 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     public void Dispose()
     {
+        _execution.RunStateChanged -= OnRunStateChanged;
+        _execution.NodeStateChanged -= OnNodeStateChanged;
+        _liveInteraction.PropertyChanged -= OnLiveInteractionPropertyChanged;
+        _localization.LanguageChanged -= OnLanguageChanged;
         _validationPolicy.Changed -= OnValidationPolicyChanged;
         _toolboxSearchSubscription.Dispose();
         _toolboxSearchChanges.Dispose();
@@ -364,7 +369,23 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     public bool IsWorkflowEditingEnabled => !IsExecutionBusy
                                             && !IsBusyState(_execution.State)
+                                            && !IsDocumentOperationBusy
                                             && !_liveInteraction.IsInteractionActive;
+
+    public bool IsDocumentOperationBusy
+    {
+        get => _isDocumentOperationBusy;
+        private set
+        {
+            if (SetProperty(ref _isDocumentOperationBusy, value))
+            {
+                OnPropertyChanged(nameof(IsWorkflowEditingEnabled));
+                OnPropertyChanged(nameof(CanCompleteExpressions));
+                SetWorkflowEditingEnabled(IsWorkflowEditingEnabled);
+                NotifyCommandStates();
+            }
+        }
+    }
 
     public bool CanCompleteExpressions => IsWorkflowEditingEnabled;
 
@@ -555,34 +576,48 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
 
     public async Task<bool> PrepareForCloseAsync()
     {
-        if (IsExecutionBusy)
+        // A pending load/save owns the document until it completes. Closing now could
+        // race its continuation and bypass the unsaved-changes decision.
+        if (IsDocumentOperationBusy)
         {
-            _terminalStateWaiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _execution.RequestStop();
-            if (!IsTerminalState(_execution.State))
-            {
-                StatusMessage = _localization["StatusStopping"];
-            }
+            return false;
+        }
 
-            if (!IsTerminalState(_execution.State))
+        IsDocumentOperationBusy = true;
+        try
+        {
+            if (IsExecutionBusy)
             {
-                var terminalTask = _terminalStateWaiter.Task;
-                var stopCompletion = await Task.WhenAny(
-                    terminalTask,
-                    Task.Delay(CloseStopTimeout));
-                if (!ReferenceEquals(stopCompletion, terminalTask))
+                _terminalStateWaiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _execution.RequestStop();
+                if (!IsTerminalState(_execution.State))
                 {
-                    _logger.LogWarning(
-                        "Application close is abandoning a workflow exchange that did not "
-                        + "reach a terminal state within the bounded immediate-stop period. No "
-                        + "equipment abort command was published.");
+                    StatusMessage = _localization["StatusStopping"];
+                }
+
+                if (!IsTerminalState(_execution.State))
+                {
+                    var terminalTask = _terminalStateWaiter.Task;
+                    var stopCompletion = await Task.WhenAny(
+                        terminalTask,
+                        Task.Delay(CloseStopTimeout));
+                    if (!ReferenceEquals(stopCompletion, terminalTask))
+                    {
+                        _logger.LogWarning(
+                            "Application close is abandoning a workflow exchange that did not "
+                            + "reach a terminal state within the bounded immediate-stop period. No "
+                            + "equipment abort command was published.");
+                    }
                 }
             }
 
-            _terminalStateWaiter = null;
+            return await ConfirmUnsavedChangesAsync();
         }
-
-        return await ConfirmUnsavedChangesAsync();
+        finally
+        {
+            _terminalStateWaiter = null;
+            IsDocumentOperationBusy = false;
+        }
     }
 
     public void CaptureUndoCheckpoint()
@@ -797,13 +832,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         return true;
     }
 
-    private async Task NewAsync()
+    private Task NewAsync() => ExecuteDocumentOperationAsync(async () =>
     {
-        if (!IsWorkflowEditingEnabled)
-        {
-            return;
-        }
-
         if (!await ConfirmUnsavedChangesAsync())
         {
             return;
@@ -813,15 +843,10 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _undo.Clear();
         _redo.Clear();
         StatusMessage = string.Empty;
-    }
+    });
 
-    private async Task OpenAsync()
+    private Task OpenAsync() => ExecuteDocumentOperationAsync(async () =>
     {
-        if (!IsWorkflowEditingEnabled)
-        {
-            return;
-        }
-
         if (!await ConfirmUnsavedChangesAsync())
         {
             return;
@@ -848,26 +873,34 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             StatusMessage = exception.Message;
             StatusIsError = true;
         }
-    }
+    });
 
-    private async Task SaveAsync()
+    private Task SaveAsync() => ExecuteDocumentOperationAsync(async () =>
     {
-        if (!IsWorkflowEditingEnabled)
-        {
-            return;
-        }
-
         await SaveDocumentAsync(false);
-    }
+    });
 
-    private async Task SaveAsAsync()
+    private Task SaveAsAsync() => ExecuteDocumentOperationAsync(async () =>
+    {
+        await SaveDocumentAsync(true);
+    });
+
+    private async Task ExecuteDocumentOperationAsync(Func<Task> operation)
     {
         if (!IsWorkflowEditingEnabled)
         {
             return;
         }
 
-        await SaveDocumentAsync(true);
+        IsDocumentOperationBusy = true;
+        try
+        {
+            await operation();
+        }
+        finally
+        {
+            IsDocumentOperationBusy = false;
+        }
     }
 
     private async Task<bool> SaveDocumentAsync(bool forceSaveAs)
@@ -884,22 +917,34 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return false;
         }
 
-        _document.Name = Path.GetFileName(path).Replace(".drillflow.json", string.Empty);
-        var saved = await SaveToPathAsync(path!);
-        OnPropertyChanged(nameof(DocumentName));
-        OnPropertyChanged(nameof(DocumentDisplayName));
-        return saved;
+        var fileName = Path.GetFileName(path!);
+        const string documentExtension = ".drillflow.json";
+        var name = fileName.EndsWith(documentExtension, StringComparison.OrdinalIgnoreCase)
+            ? fileName.Substring(0, fileName.Length - documentExtension.Length)
+            : Path.GetFileNameWithoutExtension(fileName);
+        return await SaveToPathAsync(path!, name);
     }
 
-    private async Task<bool> SaveToPathAsync(string path)
+    private async Task<bool> SaveToPathAsync(string path, string? name = null)
     {
         try
         {
-            await _documentService.SaveAsync(path, _document);
+            // File I/O receives a private snapshot. A failed Save As must leave the
+            // authored document name/path intact, and late model changes stay dirty.
+            var snapshot = _documentService.Deserialize(_documentService.Serialize(_document));
+            snapshot.Name = name ?? snapshot.Name;
+            var savedJson = _documentService.Serialize(snapshot);
+            await _documentService.SaveAsync(path, snapshot);
+            _document.Name = snapshot.Name;
             _documentPath = path;
-            IsDirty = false;
+            IsDirty = !string.Equals(
+                _documentService.Serialize(_document),
+                savedJson,
+                StringComparison.Ordinal);
             StatusMessage = path;
             StatusIsError = false;
+            OnPropertyChanged(nameof(DocumentName));
+            OnPropertyChanged(nameof(DocumentDisplayName));
             OnPropertyChanged(nameof(DocumentPath));
             return true;
         }
@@ -922,7 +967,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         return (await _userDialogs.ConfirmUnsavedChangesAsync()) switch
         {
             UnsavedChangesChoice.Discard => true,
-            UnsavedChangesChoice.Save => await SaveDocumentAsync(false),
+            UnsavedChangesChoice.Save => await SaveDocumentAsync(false) && !IsDirty,
             _ => false
         };
     }

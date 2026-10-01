@@ -787,6 +787,51 @@ public sealed class InfrastructureFileTransportTests
     }
 
     [Fact]
+    public async Task Exchange_StableReadDelayCannotExtendResponseTimeout()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.ResponseTimeout = TimeSpan.FromMilliseconds(100);
+        options.StableReadDelay = TimeSpan.FromSeconds(5);
+        var reader = new DelayedStableFileReader(EquipmentFilePresence.Absent);
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options), NullLogger<FileEquipmentTransport>.Instance, _codec,
+            new RecordingTraceSink(), () => DateTime.UtcNow, reader);
+        using var operatorCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        await Assert.ThrowsAsync<EquipmentResponseTimeoutException>(() =>
+            transport.ExchangeAsync(StageRequest(143), operatorCancellation.Token)
+                .WithTimeoutAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.False(operatorCancellation.IsCancellationRequested);
+        Assert.True(reader.CanceledReads > 0);
+        Assert.True(File.Exists(RequestPath(options)));
+    }
+
+    [Fact]
+    public async Task Exchange_UnreadableBaselineUsesItsTimeoutBeforeAnyPublication()
+    {
+        using var directory = new TempDirectory();
+        var options = CreateOptions(directory.Path);
+        options.ResponseTimeout = TimeSpan.FromMilliseconds(100);
+        options.StableReadDelay = TimeSpan.FromSeconds(5);
+        options.ApplicationResponseLifecycle = ApplicationResponseFileLifecycle.RetainUntilOverwritten;
+        var reader = new DelayedStableFileReader(EquipmentFilePresence.Present);
+        using var transport = new FileEquipmentTransport(
+            Options.Create(options), NullLogger<FileEquipmentTransport>.Instance, _codec,
+            new RecordingTraceSink(), () => DateTime.UtcNow, reader);
+        using var operatorCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            transport.ExchangeAsync(StageRequest(144), operatorCancellation.Token)
+                .WithTimeoutAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.False(operatorCancellation.IsCancellationRequested);
+        Assert.True(reader.CanceledReads > 0);
+        Assert.False(File.Exists(RequestPath(options)));
+    }
+
+    [Fact]
     public async Task Exchange_UsesOneImmutableSettingsSnapshotAndNextExchangeUsesLatestSettings()
     {
         using var originalDirectory = new TempDirectory();
@@ -1237,6 +1282,35 @@ public sealed class InfrastructureFileTransportTests
         {
             Interlocked.Increment(ref _exchangeStoppedCount);
             throw new InvalidOperationException("stopped trace failure");
+        }
+    }
+
+    private sealed class DelayedStableFileReader : IStableEquipmentFileReader
+    {
+        private readonly EquipmentFilePresence _presence;
+
+        public DelayedStableFileReader(EquipmentFilePresence presence) => _presence = presence;
+
+        public int CanceledReads { get; private set; }
+
+        public EquipmentFilePresence GetPresence(string path) => _presence;
+
+        public async Task<byte[]?> TryReadAsync(
+            string path,
+            TimeSpan stableReadDelay,
+            int maximumPayloadBytes,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(stableReadDelay, cancellationToken);
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                CanceledReads++;
+                throw;
+            }
         }
     }
 

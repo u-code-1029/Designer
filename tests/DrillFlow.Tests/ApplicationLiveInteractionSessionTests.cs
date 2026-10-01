@@ -270,6 +270,40 @@ public sealed class ApplicationLiveInteractionSessionTests
     }
 
     [Fact]
+    public async Task SuccessfulLensResponse_RequiresActualLensModeAndReleasesSessionForNextAction()
+    {
+        var transport = new RecordingTransport((request, _) => Task.FromResult(
+            request.Action == "lens"
+                ? new EquipmentResponseMessage(request.CorrelationId, request.Action, 0)
+                : ResponseFor(request)));
+        using var session = CreateSession(transport, @"C:\exchange");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            session.ChangeLensAsync("no_change"));
+
+        Assert.Contains("current_lens_mode", error.Message, StringComparison.Ordinal);
+        Assert.False(session.IsBusy);
+        var stage = await session.MoveStageAsync("relative", 0d, 0d);
+        Assert.True(stage.IsSuccess);
+        Assert.Equal(new[] { "lens", "stage" }, transport.Requests.Select(request => request.Action));
+    }
+
+    [Fact]
+    public async Task FailedLensResponse_PreservesEquipmentFailureWithoutRequiringSuccessFields()
+    {
+        var transport = new RecordingTransport((request, _) => Task.FromResult(
+            new EquipmentResponseMessage(request.CorrelationId, request.Action, 1)));
+        using var session = CreateSession(transport, @"C:\exchange");
+
+        var error = await Assert.ThrowsAsync<LiveEquipmentActionFailedException>(() =>
+            session.ChangeLensAsync("lens1"));
+
+        Assert.Equal("lens", error.Action);
+        Assert.Equal(1, error.Result);
+        Assert.False(session.IsBusy);
+    }
+
+    [Fact]
     public async Task FailureResult_ThrowsExplicitEquipmentFailure()
     {
         using var directory = new LiveSessionTestDirectory();

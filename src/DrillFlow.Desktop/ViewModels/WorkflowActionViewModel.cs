@@ -87,22 +87,27 @@ public sealed class WorkflowActionViewModel : ObservableObject
             Branches.CollectionChanged += OnBranchesChanged;
         }
 
-        _localization.LanguageChanged += (_, _) =>
-        {
-            OnPropertyChanged(nameof(Title));
-            OnPropertyChanged(nameof(RuntimeStateText));
-            OnPropertyChanged(nameof(RunningStatusText));
-            OnPropertyChanged(nameof(ParameterObjectLabel));
-            OnPropertyChanged(nameof(ResultObjectLabel));
-            OnPropertyChanged(nameof(LatestImageStatusText));
-            foreach (var result in Results)
-            {
-                result.NotifyLanguageChanged();
-            }
-        };
+        System.Windows.WeakEventManager<ILocalizationService, EventArgs>.AddHandler(
+            _localization,
+            nameof(ILocalizationService.LanguageChanged),
+            OnLanguageChanged);
     }
 
     public WorkflowNode Model { get; }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(RuntimeStateText));
+        OnPropertyChanged(nameof(RunningStatusText));
+        OnPropertyChanged(nameof(ParameterObjectLabel));
+        OnPropertyChanged(nameof(ResultObjectLabel));
+        OnPropertyChanged(nameof(LatestImageStatusText));
+        foreach (var result in Results)
+        {
+            result.NotifyLanguageChanged();
+        }
+    }
 
     public Guid Id => Model.Id;
 

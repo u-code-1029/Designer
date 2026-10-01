@@ -332,6 +332,66 @@ public sealed class ApplicationWorkflowRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_ObserverFailuresPreserveSuccessAndNotifyOtherObservers()
+    {
+        var transport = new FakeTransport(request => Task.FromResult(Response(request)));
+        var runner = CreateRunner(transport);
+        var move = new StageNode { Key = "stage_observed" };
+        var runStates = new List<WorkflowRunState>();
+        var nodeStates = new List<WorkflowNodeExecutionState>();
+        runner.RunStateChanged += (_, _) => throw new InvalidOperationException("Broken run observer.");
+        runner.RunStateChanged += (_, args) => runStates.Add(args.State);
+        runner.NodeStateChanged += (_, _) => throw new InvalidOperationException("Broken node observer.");
+        runner.NodeStateChanged += (_, args) => nodeStates.Add(args.State);
+
+        await runner.RunAsync(Document(move));
+
+        Assert.Equal(WorkflowRunState.Completed, runner.State);
+        Assert.NotNull(runner.Results.GetLatest(move.Id));
+        Assert.Equal(
+            new[] { WorkflowRunState.Validating, WorkflowRunState.Running, WorkflowRunState.Completed },
+            runStates);
+        Assert.Equal(
+            new[] { WorkflowNodeExecutionState.Running, WorkflowNodeExecutionState.Completed },
+            nodeStates);
+        Assert.Single(transport.Requests);
+    }
+
+    [Fact]
+    public async Task RequestStop_ObserverAndLoggingFailuresDoNotPreventCancellation()
+    {
+        var requestSeen = new TaskCompletionSource<EquipmentRequestMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationSeen = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new CancellationAwareTransport(requestSeen, cancellationSeen);
+        var runner = CreateRunner(transport, logger: new FailingWarningLogger());
+        var move = new StageNode { Key = "stage_observed" };
+        var notifiedStates = new ConcurrentQueue<WorkflowRunState>();
+        runner.RunStateChanged += (_, args) =>
+        {
+            if (args.State == WorkflowRunState.Stopping)
+            {
+                throw new InvalidOperationException("Broken Stop observer.");
+            }
+        };
+        runner.RunStateChanged += (_, args) => notifiedStates.Enqueue(args.State);
+
+        var run = runner.RunAsync(Document(move, new StageNode { Key = "never_started" }));
+        await requestSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(3));
+
+        runner.RequestStop();
+        await cancellationSeen.Task.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+        await run.WithTimeoutAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(WorkflowRunState.Stopped, runner.State);
+        Assert.Contains(WorkflowRunState.Stopping, notifiedStates);
+        Assert.Contains(WorkflowRunState.Stopped, notifiedStates);
+        Assert.Single(transport.Requests);
+        Assert.Null(runner.Results.GetLatest(move.Id));
+    }
+
+    [Fact]
     public async Task RequestStop_FirstPressStopsImmediatelyWithoutResponseOrAbort()
     {
         var responseGate = new TaskCompletionSource<EquipmentResponseMessage>(
@@ -868,6 +928,26 @@ public sealed class ApplicationWorkflowRunnerTests
 
             public void Dispose()
             {
+            }
+        }
+    }
+
+    private sealed class FailingWarningLogger : ILogger<WorkflowRunner>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                throw new InvalidOperationException("Broken warning provider.");
             }
         }
     }

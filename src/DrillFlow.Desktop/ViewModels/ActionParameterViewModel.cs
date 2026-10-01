@@ -41,15 +41,20 @@ public sealed class ActionParameterViewModel : ObservableObject
         _ownerKind = ownerKind;
         _localization = localization;
         SuggestedValues = GetSuggestedValues(name);
-        _localization.LanguageChanged += (_, _) =>
-        {
-            OnPropertyChanged(nameof(Description));
-            OnPropertyChanged(nameof(Label));
-            Validate();
-        };
+        System.Windows.WeakEventManager<ILocalizationService, EventArgs>.AddHandler(
+            _localization,
+            nameof(ILocalizationService.LanguageChanged),
+            OnLanguageChanged);
     }
 
     public string Name { get; }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(Label));
+        Validate();
+    }
 
     public string LabelKey { get; }
 

@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Core.Workflows;
@@ -10,6 +12,43 @@ namespace DrillFlow.Tests;
 
 public sealed class DesktopWorkflowActionValidationStateTests
 {
+    [Fact]
+    public void Localization_DoesNotKeepDiscardedActionTreesAlive()
+    {
+        var localization = new StubLocalizationService();
+        var discarded = CreateDiscardedTree(localization);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.All(discarded, reference => Assert.False(reference.IsAlive));
+        GC.KeepAlive(localization);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference[] CreateDiscardedTree(ILocalizationService localization)
+    {
+        var model = new ConditionalNode { Key = "conditional_1" };
+        model.Branches.Add(new ConditionalBranch
+        {
+            Kind = ConditionalBranchKind.If,
+            Condition = ParameterBinding.Literal("true"),
+            Body = { new DelayNode { Key = "delay_1" } }
+        });
+        var action = new WorkflowActionViewModel(model, localization, new UnusedImageDecoder());
+        var branch = action.Branches.Last();
+        var child = Assert.Single(branch.Children);
+        return new[]
+        {
+            new WeakReference(action),
+            new WeakReference(branch),
+            new WeakReference(branch.Condition),
+            new WeakReference(child),
+            new WeakReference(Assert.Single(child.Parameters))
+        };
+    }
+
     [Fact]
     public void ValidationErrors_AreExposedForCardStylingAndCanBeCleared()
     {

@@ -68,7 +68,7 @@ Action 앞의 붉은 점은 브레이크포인트다. 시작 pill 아래부터 �
 
 이미지를 더블클릭하거나 오른쪽 클릭 메뉴에서 “해당 위치로 이동”을 선택하면 동일한 좌표 mapper가 원본 pixel 크기와 X/Y DPI를 함께 사용해 WPF `Stretch=Uniform`의 실제 표시 영역과 letterbox를 계산한 뒤 원본 pixel 좌표로 되돌린다. 따라서 X/Y DPI가 다른 이미지도 화면 지점과 이동 지점이 일치한다. 이미지 중심을 이동량 `(0, 0)`으로 하고, 사용자가 입력한 pixel pitch와 m/mm/µm/nm 단위를 metre로 환산해 `action: "stage"`, `move_mode: "relative"`, `stage_x`, `stage_y` request를 만든다. 기본 축은 오른쪽 +X, 아래쪽 +Y이며 설치 방향에 맞춰 각 축을 반전할 수 있다. 계산 결과는 NaN/Infinity가 아닌 유한 signed number인지 검사하며 별도의 ±이동거리 제한은 두지 않는다.
 
-Stage/Camera 이동, Focus, Integration 촬영, Lens 변경 또는 ACB를 시작하면 현재 Live exchange를 즉시 취소하고, transport가 그 exchange가 게시한 정확한 request를 회수해 gate를 놓을 때까지 기다린 뒤 interactive Action을 하나만 보낸다. 이미지 지점 Stage 이동은 matching 성공 response 뒤 페이지가 활성 상태이면 이전 Stop 여부와 관계없이 Live streaming을 자동 재개하지만, 실패·취소·페이지 이탈 때는 오류 확인을 위해 멈춘 상태를 유지한다. Integration, Lens, ACB는 이전 재생 상태를 복원하며, Lens 성공 뒤에는 새 Live frame이 decode될 때까지 기존 이미지의 이동 보정을 오래된 상태로 표시한다. Lens request는 `lens1`, `lens2`, `no_change` 중 하나이고 성공 response는 실제 `lens1` 또는 `lens2` 상태를 갱신한다. ACB는 현재 유효한 HFW를 request에 넣는다. Live Interaction에는 OM과 Abort를 제공하지 않는다. 페이지를 이탈하면 진행 중인 앱 소유 Stage/Camera/Focus/Integration/Lens/ACB도 취소하고 Live를 재개하지 않는다. `촬영`은 `action: "integration"`과 선택한 1/2/4/8/16/32/64 `frame_count`로 고화질 `image_path`를 받은 즉시 원본 바이트 그대로 전용 LocalAppData 스냅샷에 확보한다. 스냅샷 확보까지만 현재 response timeout의 image I/O 예산을 적용하고 저장 Dialog에서 사용자가 결정하는 시간에는 timer를 적용하지 않는다. 미리보기와 Windows 저장 Dialog의 로컬 복사는 모두 이 동일 스냅샷을 사용하므로 장비가 원본을 덮어쓰거나 삭제해도 결과가 바뀌지 않는다. 작업이 끝난 스냅샷은 즉시 지우며 종료/다음 시작에서도 남은 전용 파일을 정리한다. 스트리밍·장비 인터랙션 중에는 일반 워크플로 실행, Response 테스트, 통신 설정 변경을 막고, 반대로 워크플로 실행 중에는 라이브 명령을 막는다.
+Stage/Camera 이동, Focus, Integration 또는 OM 촬영, Lens 변경 또는 ACB를 시작하면 현재 Live exchange를 즉시 취소하고, transport가 그 exchange가 게시한 정확한 request를 회수해 gate를 놓을 때까지 기다린 뒤 interactive Action을 하나만 보낸다. 이미지 지점 Stage 이동은 matching 성공 response 뒤 페이지가 활성 상태이면 이전 Stop 여부와 관계없이 Live streaming을 자동 재개하지만, 실패·취소·페이지 이탈 때는 오류 확인을 위해 멈춘 상태를 유지한다. Integration, OM, Lens, ACB는 이전 재생 상태를 복원한다. 이동 또는 Lens 명령을 전송하면 성공·실패·취소와 관계없이 새 Live frame이 decode될 때까지 기존 이미지의 이동 보정을 오래된 상태로 표시한다. Lens request는 `lens1`, `lens2`, `no_change` 중 하나이고 성공 response는 실제 `lens1` 또는 `lens2` 상태를 갱신한다. ACB는 현재 유효한 HFW를 request에 넣는다. Live Interaction은 독점 OM 촬영도 제공하며, Abort는 명시적인 Workflow Action으로만 제공한다. 페이지를 이탈하면 진행 중인 앱 소유 Stage/Camera/Focus/Integration/OM/Lens/ACB도 취소하고 Live를 재개하지 않는다. `촬영`은 `action: "integration"`과 선택한 1/2/4/8/16/32/64 `frame_count`로 고화질 `image_path`를 받은 즉시 원본 바이트 그대로 전용 LocalAppData 스냅샷에 확보한다. 스냅샷 확보까지만 현재 response timeout의 image I/O 예산을 적용하고 저장 Dialog에서 사용자가 결정하는 시간에는 timer를 적용하지 않는다. 미리보기와 Windows 저장 Dialog의 로컬 복사는 모두 이 동일 스냅샷을 사용하므로 장비가 원본을 덮어쓰거나 삭제해도 결과가 바뀌지 않는다. 작업이 끝난 스냅샷은 즉시 지우며 종료/다음 시작에서도 남은 전용 파일을 정리한다. 스트리밍·장비 인터랙션 중에는 일반 워크플로 실행, Response 테스트, 통신 설정 변경을 막고, 반대로 워크플로 실행 중에는 라이브 명령을 막는다.
 
 ## 3. Action 모델
 
@@ -318,7 +318,7 @@ code-behind는 hit testing, mouse 좌표, drag payload, animation처럼 WPF visu
 - Live 오른쪽 독립 스크롤, 통신 폴더 열기, 1프레임/연속 테스트 response 생성과 즉시 Stop cleanup
 - 논리 message와 UTF-8 XML wire를 분리한 Action별 template codec, workflow schema v2와 v1 Move→Stage migration
 - `result = 1` 공통-only 실패 response와 Action별 failure template, OM/Lens/ACB Designer Action
-- OM/Abort를 제외한 Live Lens/ACB 독점 동작과 처음에는 모두 접힌 expandable control card
+- Abort를 제외한 Live OM/Lens/ACB 독점 동작과 처음에는 모두 접힌 expandable control card
 
 ## 11. 확장 시 체크리스트
 

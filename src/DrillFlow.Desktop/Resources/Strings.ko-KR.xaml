@@ -138,7 +138,7 @@
     <system:String x:Key="FileExchangeRetryGroup">Timeout 재시도 정책</system:String>
     <system:String x:Key="ExchangeFolder">통신 폴더</system:String>
     <system:String x:Key="LiveImageFolder">Live 이미지 공유 폴더 (image_path)</system:String>
-    <system:String x:Key="LiveImageFolderHint">Designer와 장비가 모두 접근할 수 있는 절대 로컬 또는 UNC 폴더를 지정하세요. 실제 요청에는 이 폴더 아래의 live-{correlation_id}.bmp가 사용됩니다.</system:String>
+    <system:String x:Key="LiveImageFolderHint">Designer와 장비가 모두 접근할 수 있는 절대 로컬 또는 UNC 폴더를 지정하세요. 비워 두면 통신 폴더 아래 .drillflow-live를 사용합니다. 실제 요청에는 이 폴더 아래의 live-{correlation_id}.bmp가 사용됩니다.</system:String>
     <system:String x:Key="RequestFileName">요청 파일명</system:String>
     <system:String x:Key="ResponseFileName">응답 파일명</system:String>
     <system:String x:Key="EquipmentRequestHandling">장비의 요청 파일 처리 방식</system:String>

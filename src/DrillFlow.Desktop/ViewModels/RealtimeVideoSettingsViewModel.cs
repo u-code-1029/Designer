@@ -224,7 +224,7 @@ public sealed class RealtimeVideoSettingsViewModel : ObservableObject
                && string.Equals(
                    leftSignalR.HubEndpoint,
                    rightSignalR.HubEndpoint,
-                   StringComparison.OrdinalIgnoreCase)
+                   StringComparison.Ordinal)
                && string.Equals(
                    leftSignalR.StreamMethod,
                    rightSignalR.StreamMethod,

@@ -59,6 +59,33 @@ namespace DrillFlow.Tests
         }
 
         [Fact]
+        public void CloneManyForInsertionPreservesScientificNumbersAndWholeExternalIdentifiers()
+        {
+            var exponentAlias = new StageNode { Key = "e" };
+            var exponentWithDigitsAlias = new StageNode { Key = "E3" };
+            var consumer = new StageNode
+            {
+                Key = "consumer",
+                StageX = ParameterBinding.Expression(
+                    "1e-3 + .5E3 + 1.E+3 + 6.02e23 + e.parameters.stage_x + E3.result.value"),
+                StageY = ParameterBinding.Expression("external_éE3.parameters.stage_y")
+            };
+
+            var clones = WorkflowNodeCopy.CloneManyForInsertion(
+                new WorkflowNode[] { exponentAlias, exponentWithDigitsAlias, consumer },
+                new[] { "e", "E3", "consumer" });
+
+            var copiedConsumer = Assert.IsType<StageNode>(clones[2]);
+            Assert.Equal(
+                "=1e-3 + .5E3 + 1.E+3 + 6.02e23 + e_copy.parameters.stage_x + E3_copy.result.value",
+                copiedConsumer.StageX.RawText);
+            Assert.Equal("=external_éE3.parameters.stage_y", copiedConsumer.StageY.RawText);
+            Assert.Equal(
+                "=1e-3 + .5E3 + 1.E+3 + 6.02e23 + e.parameters.stage_x + E3.result.value",
+                consumer.StageX.RawText);
+        }
+
+        [Fact]
         public void CloneManyForInsertionPreservesOrderAndRewritesReferencesAcrossSelectedRoots()
         {
             var focus = new FocusNode { Key = "focus_1" };

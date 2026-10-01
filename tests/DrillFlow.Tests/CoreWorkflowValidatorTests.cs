@@ -514,6 +514,63 @@ namespace DrillFlow.Tests
         }
 
         [Fact]
+        public void ExcessivelyNestedExpressionsBecomeValidationIssues()
+        {
+            var stage = ValidStage("stage_1");
+            stage.StageX = ParameterBinding.Expression(
+                new string('(', 2000) + "1E-3" + new string(')', 2000));
+
+            var result = _validator.Validate(Document(stage));
+
+            Assert.False(result.IsValid);
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == stage.Id && issue.Code == "expression.syntax");
+        }
+
+        [Theory]
+        [InlineData("source_stage['result'].current_stage_x")]
+        [InlineData("source_stage[\"LAST\"].current_stage_x")]
+        [InlineData("source_stage['results'][0].current_stage_x")]
+        public void SelectedActionValidationRequiresStringIndexedRuntimeResults(string expression)
+        {
+            var source = ValidStage("source_stage");
+            var selected = ValidStage("selected_stage");
+            selected.StageX = ParameterBinding.Expression(expression);
+            var document = Document(source, selected);
+
+            var unavailable = _validator.ValidateSelectedAction(document, selected.Id);
+            var available = _validator.ValidateSelectedAction(document, selected.Id, new[] { source.Id });
+
+            Assert.Contains(
+                unavailable.Issues,
+                issue => issue.NodeId == selected.Id && issue.Code == "expression.result_unavailable");
+            Assert.True(available.IsValid);
+        }
+
+        [Fact]
+        public void StringIndexedActionMembersUseTheSameValidationAsDotMembers()
+        {
+            var source = ValidStage("source_stage");
+            var parameters = ValidStage("parameter_consumer");
+            parameters.StageX = ParameterBinding.Expression("source_stage['PARAMETERS'].stage_x");
+            var typo = ValidStage("typo");
+            typo.StageX = ParameterBinding.Expression("source_stage['paramters'].stage_x");
+            var dynamicField = ValidStage("dynamic_field");
+            dynamicField.StageX = ParameterBinding.Expression(
+                "source_stage['result']['vendor-defined coordinate']");
+            var document = Document(source, parameters, typo, dynamicField);
+
+            var result = _validator.Validate(document);
+
+            Assert.Contains(
+                result.Issues,
+                issue => issue.NodeId == typo.Id && issue.Code == "expression.unknown_action_member");
+            Assert.DoesNotContain(result.Issues, issue => issue.NodeId == parameters.Id || issue.NodeId == dynamicField.Id);
+            Assert.True(_validator.ValidateSelectedAction(document, parameters.Id).IsValid);
+        }
+
+        [Fact]
         public void SelectedActionValidationIncludesReferencedParameterActionErrors()
         {
             var source = ValidStage("source_stage");

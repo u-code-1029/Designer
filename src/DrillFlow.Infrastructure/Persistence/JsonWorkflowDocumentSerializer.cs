@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using DrillFlow.Application.Persistence;
@@ -472,120 +471,60 @@ public sealed class JsonWorkflowDocumentSerializer : IWorkflowDocumentSerializer
 
     private static void RewriteVersion1MoveReferences(WorkflowDocument document)
     {
+        var stageKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var equipmentKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in document.EnumerateNodesDepthFirst())
+        {
+            if (node is StageNode)
+            {
+                stageKeys.Add(node.Key);
+            }
+
+            switch (node.Kind)
+            {
+                case WorkflowNodeKind.Stage:
+                case WorkflowNodeKind.Camera:
+                case WorkflowNodeKind.Focus:
+                case WorkflowNodeKind.Integration:
+                case WorkflowNodeKind.Live:
+                case WorkflowNodeKind.Om:
+                case WorkflowNodeKind.Lens:
+                case WorkflowNodeKind.AutoContrastBrightness:
+                case WorkflowNodeKind.Abort:
+                    equipmentKeys.Add(node.Key);
+                    break;
+            }
+        }
+
         foreach (var node in document.EnumerateNodesDepthFirst())
         {
             foreach (var binding in node.GetParameterBindings().Values)
             {
-                RewriteVersion1MoveParameterReference(binding);
+                RewriteVersion1MoveParameterReference(binding, stageKeys, equipmentKeys);
             }
 
             if (node is ConditionalNode conditional)
             {
                 foreach (var branch in conditional.Branches ?? new List<ConditionalBranch>())
                 {
-                    RewriteVersion1MoveParameterReference(branch?.Condition);
+                    RewriteVersion1MoveParameterReference(branch?.Condition, stageKeys, equipmentKeys);
                 }
             }
         }
     }
 
-    private static void RewriteVersion1MoveParameterReference(ParameterBinding? binding)
+    private static void RewriteVersion1MoveParameterReference(
+        ParameterBinding? binding,
+        ISet<string> stageKeys,
+        ISet<string> equipmentKeys)
     {
-        if (binding == null || !binding.IsExpression)
+        if (binding != null && binding.IsExpression)
         {
-            return;
+            binding.RawText = Version1ExpressionMigration.Rewrite(
+                binding.RawText ?? string.Empty,
+                stageKeys,
+                equipmentKeys);
         }
-
-        var source = binding.RawText ?? string.Empty;
-        var rewritten = new StringBuilder(source.Length);
-        var segmentStart = 0;
-        var quote = '\0';
-        for (var index = 0; index < source.Length; index++)
-        {
-            var current = source[index];
-            if (quote == '\0')
-            {
-                if (current != '\'' && current != '"')
-                {
-                    continue;
-                }
-
-                AppendMigratedExpressionSegment(rewritten, source, segmentStart, index - segmentStart);
-                quote = current;
-                segmentStart = index;
-                continue;
-            }
-
-            if (current == '\\' && index + 1 < source.Length)
-            {
-                index++;
-            }
-            else if (current == quote)
-            {
-                rewritten.Append(source, segmentStart, index - segmentStart + 1);
-                quote = '\0';
-                segmentStart = index + 1;
-            }
-        }
-
-        if (segmentStart < source.Length)
-        {
-            if (quote == '\0')
-            {
-                AppendMigratedExpressionSegment(
-                    rewritten,
-                    source,
-                    segmentStart,
-                    source.Length - segmentStart);
-            }
-            else
-            {
-                rewritten.Append(source, segmentStart, source.Length - segmentStart);
-            }
-        }
-
-        binding.RawText = rewritten.ToString();
-    }
-
-    private static void AppendMigratedExpressionSegment(
-        StringBuilder destination,
-        string source,
-        int start,
-        int length)
-    {
-        var segment = source.Substring(start, length);
-        segment = Regex.Replace(
-            segment,
-            @"(?<prefix>\.\s*parameters\s*\.\s*)move_x\b",
-            "${prefix}stage_x",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        segment = Regex.Replace(
-            segment,
-            @"(?<prefix>\.\s*parameters\s*\.\s*)move_y\b",
-            "${prefix}stage_y",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        segment = RewriteVersion1ResultMember(segment, "stage_x", "current_stage_x");
-        segment = RewriteVersion1ResultMember(segment, "stage_y", "current_stage_y");
-        segment = RewriteVersion1ResultMember(segment, "index", "correlation_id");
-        segment = RewriteVersion1ResultMember(segment, "command", "type");
-        destination.Append(segment);
-    }
-
-    private static string RewriteVersion1ResultMember(
-        string segment,
-        string oldMember,
-        string newMember)
-    {
-        // v1 exposed the latest response through result/last and retained Repeat responses through
-        // results[n]. Rewrite only those result containers; quoted text is excluded by the caller.
-        var pattern = @"(?<prefix>\.\s*(?:(?:result|last)|results\s*\[\s*\d+\s*\])\s*\.\s*)"
-                      + Regex.Escape(oldMember)
-                      + @"\b";
-        return Regex.Replace(
-            segment,
-            pattern,
-            "${prefix}" + newMember,
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static JsonSerializer CreatePlainSerializer()

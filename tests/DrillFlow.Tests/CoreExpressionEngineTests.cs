@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Runtime;
 using DrillFlow.Core.Workflows;
@@ -98,6 +99,85 @@ namespace DrillFlow.Tests
             Assert.DoesNotContain(
                 analysis.FirstLevelMemberReferences,
                 reference => reference.MemberName == "value" || reference.MemberName == "stage_x");
+        }
+
+        [Fact]
+        public void AnalyzeRecognizesStringIndexedRootMembersWithoutAnalyzingDynamicJsonFields()
+        {
+            var analysis = _engine.Analyze(
+                "focus.result.value + FOCUS['RESULT'].value + (stage)[\"p\\u0061rameters\"].stage_x"
+                + " + api['last']['json']['display name']");
+
+            Assert.Equal(3, analysis.RootIdentifiers.Count);
+            Assert.Equal(3, analysis.FirstLevelMemberReferences.Count);
+            Assert.Contains(
+                analysis.FirstLevelMemberReferences,
+                reference => reference.RootIdentifier == "focus" && reference.MemberName == "result");
+            Assert.Contains(
+                analysis.FirstLevelMemberReferences,
+                reference => reference.RootIdentifier == "stage" && reference.MemberName == "parameters");
+            Assert.Contains(
+                analysis.FirstLevelMemberReferences,
+                reference => reference.RootIdentifier == "api" && reference.MemberName == "last");
+        }
+
+        [Theory]
+        [InlineData("parentheses")]
+        [InlineData("unary")]
+        [InlineData("nested_indexes")]
+        [InlineData("binary_chain")]
+        [InlineData("member_chain")]
+        [InlineData("index_chain")]
+        [InlineData("balanced_tree")]
+        public void RejectsExcessiveParsingAndEvaluationComplexity(string shape)
+        {
+            string expression;
+            switch (shape)
+            {
+                case "parentheses":
+                    expression = new string('(', 2000) + "1" + new string(')', 2000);
+                    break;
+                case "unary":
+                    expression = new string('-', 2000) + "1";
+                    break;
+                case "nested_indexes":
+                    expression = string.Concat(Enumerable.Repeat("values[", 2000))
+                                 + "0" + new string(']', 2000);
+                    break;
+                case "binary_chain":
+                    expression = string.Join(" + ", Enumerable.Repeat("1", 2000));
+                    break;
+                case "member_chain":
+                    expression = "action" + string.Concat(Enumerable.Repeat(".member", 2000));
+                    break;
+                case "index_chain":
+                    expression = "values" + string.Concat(Enumerable.Repeat("[0]", 2000));
+                    break;
+                default:
+                    expression = "1";
+                    for (var index = 0; index < 12; index++)
+                    {
+                        expression = "(" + expression + " + " + expression + ")";
+                    }
+
+                    break;
+            }
+
+            Assert.Throws<ExpressionSyntaxException>(() => _engine.Analyze(expression));
+            Assert.Throws<ExpressionSyntaxException>(() => _engine.Evaluate(expression));
+        }
+
+        [Fact]
+        public void ComplexityLimitsKeepOrdinaryNestedExpressionsAndSubsequentEvaluationsWorking()
+        {
+            var expression = new string('(', 32)
+                             + "(1E-3 + 2E-3) * -2"
+                             + new string(')', 32);
+
+            Assert.Equal(-0.006, _engine.Evaluate(expression).AsNumber(), 12);
+            Assert.Empty(_engine.Analyze(expression).RootIdentifiers);
+            Assert.Throws<ExpressionSyntaxException>(() => _engine.Evaluate(new string('-', 2000) + "1"));
+            Assert.Equal(3d, _engine.Evaluate("1 + 2").AsNumber());
         }
 
         [Fact]

@@ -138,7 +138,7 @@
     <system:String x:Key="FileExchangeRetryGroup">Timeout retry policy</system:String>
     <system:String x:Key="ExchangeFolder">Exchange folder</system:String>
     <system:String x:Key="LiveImageFolder">Live image shared folder (image_path)</system:String>
-    <system:String x:Key="LiveImageFolderHint">Choose an absolute local or UNC folder that both the Designer and equipment can access. Requests use live-{correlation_id}.bmp inside this folder.</system:String>
+    <system:String x:Key="LiveImageFolderHint">Choose an absolute local or UNC folder that both the Designer and equipment can access. Leave blank to use .drillflow-live inside the exchange folder. Requests use live-{correlation_id}.bmp inside this folder.</system:String>
     <system:String x:Key="RequestFileName">Request file name</system:String>
     <system:String x:Key="ResponseFileName">Response file name</system:String>
     <system:String x:Key="EquipmentRequestHandling">Equipment request-file behavior</system:String>

@@ -346,6 +346,13 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
                     $"The '{action}' response must contain an absolute 'image_path'.");
             }
 
+            if (string.Equals(action, LiveInteractionProtocol.LensAction, StringComparison.Ordinal)
+                && response.CurrentLensMode is null)
+            {
+                throw new InvalidOperationException(
+                    "The 'lens' response must contain the actual 'current_lens_mode'.");
+            }
+
             if (string.Equals(action, LiveInteractionProtocol.LiveAction, StringComparison.Ordinal))
             {
                 _logger.LogTrace(

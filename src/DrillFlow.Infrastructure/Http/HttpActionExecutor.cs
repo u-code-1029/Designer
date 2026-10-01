@@ -45,7 +45,7 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
         }
 
         var headers = ParseHeaders(request.Headers);
-        var safeLogUrl = GetSafeLogUrl(request.Url);
+        var safeLogUrl = HttpRequestDiagnostics.GetSafeLogUrl(request.Url);
         using (var message = new HttpRequestMessage(new HttpMethod(request.Method), request.Url))
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
@@ -59,12 +59,40 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
                 safeLogUrl,
                 request.Timeout.TotalMilliseconds);
 
-            HttpResponseMessage response;
             try
             {
-                response = await _client.SendAsync(message, timeout.Token).ConfigureAwait(false);
+                using (var response = await AwaitWithCancellationAsync(
+                    _client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeout.Token),
+                    timeout.Token,
+                    discarded => discarded.Dispose()).ConfigureAwait(false))
+                {
+                    // netstandard2.0/net48 cannot pass a token to ReadAsStringAsync. Bound the
+                    // whole response, including an uncooperative content reader, by our token.
+                    // Disposing the response on cancellation also releases its connection.
+                    var body = response.Content == null
+                        ? string.Empty
+                        : await AwaitWithCancellationAsync(
+                            response.Content.ReadAsStringAsync(), timeout.Token).ConfigureAwait(false);
+                    var responseHeaders = ReadResponseHeaders(response);
+                    var contentType = response.Content?.Headers.ContentType?.ToString() ?? string.Empty;
+                    var json = TryParseJson(body);
+
+                    _logger.LogInformation(
+                        "Designer HTTP request to {Url} completed with status {StatusCode}",
+                        safeLogUrl,
+                        (int)response.StatusCode);
+
+                    return new HttpActionResponse(
+                        (int)response.StatusCode,
+                        response.ReasonPhrase ?? string.Empty,
+                        responseHeaders,
+                        body,
+                        contentType,
+                        json);
+                }
             }
-            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (
+                timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
                     $"HTTP {request.Method} request to '{safeLogUrl}' exceeded "
@@ -72,28 +100,48 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
                     exception);
             }
 
-            using (response)
+        }
+    }
+
+    private static async Task<T> AwaitWithCancellationAsync<T>(
+        Task<T> operation,
+        CancellationToken cancellationToken,
+        Action<T>? discardResult = null)
+    {
+        if (operation.IsCompleted || !cancellationToken.CanBeCanceled)
+        {
+            return await operation.ConfigureAwait(false);
+        }
+
+        var cancellationSignal = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using (cancellationToken.Register(() => cancellationSignal.TrySetResult(true)))
+        {
+            var winner = await Task.WhenAny(operation, cancellationSignal.Task).ConfigureAwait(false);
+            if (ReferenceEquals(winner, operation))
             {
-                var body = response.Content == null
-                    ? string.Empty
-                    : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var responseHeaders = ReadResponseHeaders(response);
-                var contentType = response.Content?.Headers.ContentType?.ToString() ?? string.Empty;
-                var json = TryParseJson(body);
-
-                _logger.LogInformation(
-                    "Designer HTTP request to {Url} completed with status {StatusCode}",
-                    safeLogUrl,
-                    (int)response.StatusCode);
-
-                return new HttpActionResponse(
-                    (int)response.StatusCode,
-                    response.ReasonPhrase ?? string.Empty,
-                    responseHeaders,
-                    body,
-                    contentType,
-                    json);
+                return await operation.ConfigureAwait(false);
             }
+
+            // A late response still owns a connection, and late faults must be observed even
+            // when the caller has already stopped. No request data is logged by this cleanup.
+            _ = ObserveDiscardedOperationAsync(operation, discardResult);
+            throw new OperationCanceledException(cancellationToken);
+        }
+    }
+
+    private static async Task ObserveDiscardedOperationAsync<T>(
+        Task<T> operation,
+        Action<T>? discardResult)
+    {
+        try
+        {
+            var result = await operation.ConfigureAwait(false);
+            discardResult?.Invoke(result);
+        }
+        catch (Exception)
+        {
+            // The operation was explicitly abandoned; observe faults and disposal failures.
         }
     }
 
@@ -146,13 +194,6 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
         }
 
         return headers;
-    }
-
-    private static string GetSafeLogUrl(string value)
-    {
-        return Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            ? uri.GetLeftPart(UriPartial.Path)
-            : "<invalid-url>";
     }
 
     private static string HeaderValue(JToken token)
@@ -248,20 +289,15 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
         return headers;
     }
 
-    private static bool IsJson(string text)
-    {
-        try
-        {
-            JToken.Parse(text);
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
+    private static bool IsJson(string text) => TryReadJsonToken(text) is not null;
 
     private static object? TryParseJson(string text)
+    {
+        var token = TryReadJsonToken(text);
+        return token is null ? null : ConvertToken(token);
+    }
+
+    private static JToken? TryReadJsonToken(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -276,7 +312,18 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
                 FloatParseHandling = FloatParseHandling.Double
             })
             {
-                return ConvertToken(JToken.ReadFrom(reader));
+                var token = JToken.ReadFrom(reader);
+                // A valid prefix does not make the entire body JSON. Keep malformed/multiple
+                // documents available as raw text instead of publishing a misleading object.
+                while (reader.Read())
+                {
+                    if (reader.TokenType != JsonToken.Comment)
+                    {
+                        return null;
+                    }
+                }
+
+                return token;
             }
         }
         catch (JsonException)
@@ -295,7 +342,12 @@ public sealed class HttpActionExecutor : IHttpActionExecutor
                 return ((JArray)token).Select(ConvertToken).ToArray();
             case JTokenType.Integer:
             case JTokenType.Float:
-                return Convert.ToDouble(((JValue)token).Value, CultureInfo.InvariantCulture);
+                var number = ((JValue)token).Value;
+                // Json.NET uses BigInteger for valid integers outside Int64/UInt64. It does
+                // not implement IConvertible, but our expression number model is double.
+                return number is System.Numerics.BigInteger integer
+                    ? (double)integer
+                    : Convert.ToDouble(number, CultureInfo.InvariantCulture);
             case JTokenType.Boolean:
                 return token.Value<bool>();
             case JTokenType.Null:
