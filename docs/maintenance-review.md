@@ -27,12 +27,16 @@ Desktop의 WPF 조립이라는 의존 방향은 이 목적에 맞게 구성되�
 | 구버전 문서 | v1 변환을 Action 루트와 실제 parameter/result 컨테이너로 제한한다. `results.last`, 동적 인덱스, 문자열 인덱스와 괄호를 처리하고 중첩 HTTP JSON이나 일반 문자열을 바꾸지 않는다. |
 | HTTP | URL 정보 제거를 공통화하고 username/password/query/fragment를 로그에서 제외한다. timeout과 취소를 응답 본문까지 적용하고 늦은 응답·fault를 정리한다. JSON은 전체 본문을 검사하며 큰 정수도 표현식의 double 모델로 변환한다. |
 
-기존 `Version` 예외도 유지한다. 응답 비교에서 정확히 `Version`인 비접두사 속성의
-고정 값 차이만 허용하고, 출력은 제공된 템플릿 양식을 사용한다.
+응답 비교 예외는 정확한 `NamedTypedObject` 태그의 비접두사 `Type` 속성 값에 적용한다.
+`Version` 및 다른 태그의 `Type`은 계속 비교하고, 출력은 제공된 템플릿 양식을 사용한다.
+실행 폴더의 전체 `Templates`를 시작 시 읽으므로 XML 교체 후 앱 재시작으로 반영된다.
+외부 파일 오류는 기본 XML로 대체하지 않는다.
+외부 vendor 형식의 request·성공/실패 response 원문 보존, 교체 후 재시작, 파일 누락·인코딩·XML·placeholder 오류 및 Type 비교 경계를 회귀 테스트로 검증했다.
+Desktop 빌드와 publish 폴더에 XML 25개가 소스와 동일하게 복사되는 것도 확인했다.
 
 ## 검증과 확인 범위
 
-현재 검증 결과는 전체 솔루션 빌드 경고 0·오류 0, Linux 테스트 376개 통과·실패 0·skip 0이다.
+현재 검증 결과는 전체 솔루션 빌드 경고 0·오류 0, Linux 테스트 408개 통과·실패 0·skip 0이다.
 100ms 응답 제한과 2초 안정화 대기의 주입 reader 재현에서, 응답 대기와 기존 응답 baseline
 검사는 변경 전 약 2011/2004ms에서 변경 후 120/102ms로 줄었다. 시간 예산에 의해 reader
 토큰만 취소되며 operator 토큰은 유지되는 것을 확인했다.

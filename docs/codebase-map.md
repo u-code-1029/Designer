@@ -152,7 +152,7 @@ RealtimeVideo/
 Application 포트를 파일 시스템, XML 템플릿, HTTP와 JSON 저장소로 구현한다. 장비 handshake의 핵심 소유 계층이다.
 
 ```text
-DrillFlow.Infrastructure.csproj                — Core/Application을 참조하고 XML 템플릿 25개를 embedded resource로 묶는다.
+DrillFlow.Infrastructure.csproj                — Core/Application을 참조하고 XML 템플릿 25개를 embedded resource로 묶고 실행·배포 폴더의 Templates로 복사한다.
 InfrastructureServiceCollectionExtensions.cs   — codec, transport, 안정 파일 reader, serializer, simulator와 HTTP 구현을 등록한다.
 Communication/
   EquipmentCommunicationOptionsValidator.cs   — 경로, leaf 파일명, lifecycle, timeout/retry/delay 조합을 원자적으로 검증한다.
@@ -166,6 +166,7 @@ Communication/
     EquipmentFileSnapshot.cs                   — 파일 길이와 마지막 수정 시각을 안정성 비교용으로 묶는다.
     IStableEquipmentFileReader.cs              — 쓰기 중 파일을 거부하고 immutable byte snapshot을 얻는 내부 seam이다.
     StableEquipmentFileReader.cs               — 전/후 metadata, 안정화 지연, writer 공유 잠금, 정확한 길이 read로 local/UNC 파일을 확인한다.
+  EquipmentXmlTemplateLoader.cs               — 실행 폴더의 전체 외부 템플릿을 시작 시 읽고 파일 오류를 기본값으로 숨기지 않는다.
   Templates/{Action}/                          — 장비별 XML 정답지 디렉터리이며 일반 XML 변환기가 아니라 placeholder 기반 고정 계약이다.
     Abort/{request.xml,response.xml}            — Abort request와 공통 결과 response 템플릿이다.
     Acb/{request.xml,response.xml}              — ACB request와 공통 결과 response 템플릿이다.
@@ -314,7 +315,8 @@ InfrastructureAtomicFilePublisherTests.cs      — temp 완성 후 replace/move 
 InfrastructureCorrelationIdTests.cs            — persisted block 예약, 동시 발급과 재시작 비재사용을 검증한다.
 InfrastructureFileTransportTests.cs             — lock/publish/poll/matching/retry/cleanup/cancel handshake를 통합 검증한다.
 InfrastructureStableEquipmentFileReaderTests.cs — 쓰기 중/변경 중 파일 거부와 안정 byte snapshot을 검증한다.
-InfrastructureXmlTemplateEquipmentMessageCodecTests.cs — 25개 템플릿, placeholder, BOM/공백/과학 표기와 fault parsing을 검증한다.
+InfrastructureXmlTemplateEquipmentMessageCodecTests.cs — 25개 템플릿, placeholder, BOM/공백/과학 표기, NamedTypedObject Type 예외와 fault parsing을 검증한다.
+InfrastructureXmlTemplateLoadingTests.cs              — 외부 양식 보존, 재시작 snapshot, 파일·인코딩·XML·계약 오류를 검증한다.
 InfrastructureResponseSimulatorTests.cs         — 테스트 response 검증과 atomic XML 생성을 검증한다.
 InfrastructureWorkflowSerializationTests.cs     — Workflow polymorphic JSON round-trip과 호환성을 검증한다.
 InfrastructureHttpActionExecutorTests.cs        — HTTP method/header/body/JSON/timeout 동작을 검증한다.
@@ -366,7 +368,7 @@ MainPageViewModel / LiveInteractionPageViewModel
       14. runner/trace 이벤트가 카드, inspector, terminal과 image view를 갱신
 ```
 
-논리 JSON 객체는 디버깅, UI 구조화 표시와 내부 처리 편의를 위한 메모리 표현이다. 중간 `request.json`/`response.json` 파일을 만들지 않는다. 실제 wire payload는 embedded XML 정답지에 정확한 placeholder 값을 넣거나 그 자리의 값을 추출해 처리한다.
+논리 JSON 객체는 디버깅, UI 구조화 표시와 내부 처리 편의를 위한 메모리 표현이다. 중간 `request.json`/`response.json` 파일을 만들지 않는다. 실제 wire payload는 실행 폴더의 XML 정답지(외부 폴더가 없을 때 embedded 정답지)에 정확한 placeholder 값을 넣거나 그 자리의 값을 추출해 처리한다.
 
 ## 4. 파일 handshake에서 바꾸면 안 되는 순서
 
@@ -442,7 +444,7 @@ credential 이름 또는 token 환경 변수의 이름만 남는다.
 4. **Application 계약:** `EquipmentRequestMessage.cs`의 `EquipmentActionNames`, request/response field 접근과 simulator draft 모델을 갱신한다.
 5. **실행 mapping:** `WorkflowRunner.ExecuteNodeAsync`와 장비 request parameter 생성/result field materialization을 추가한다. `result: 1`은 계속 fault로 Workflow를 중단해야 한다.
 6. **Live 노출 여부:** Live 화면에서도 실행할 명령이면 `ILiveInteractionSession`, `LiveInteractionSession`과 `LiveInteractionProtocol`에 exclusive 실행 API를 추가한다. 연속 frame과 동시에 게시하지 않는다.
-7. **XML 정답지:** `Infrastructure/Communication/Templates/{Action}/request.xml`, `response.xml` 및 성공 전용 필드가 있으면 `failure-response.xml`을 추가하고 csproj embedded-resource glob에 포함되는지 확인한다.
+7. **XML 정답지:** `Infrastructure/Communication/Templates/{Action}/request.xml`, `response.xml` 및 성공 전용 필드가 있으면 `failure-response.xml`을 추가하고 csproj embedded-resource 및 output/publish-copy glob에 포함되는지 확인한다.
 8. **Codec:** `XmlTemplateEquipmentMessageCodec`의 template descriptor, expected placeholder 집합, request field 렌더링, 성공/fault response parsing과 과학 표기/경로/matrix validator를 추가한다.
 9. **Simulator:** `JsonEquipmentResponseSimulator`의 기본값·입력 검증과 새 response XML 게시를 추가한다.
 10. **Workflow persistence:** `JsonWorkflowDocumentSerializer`의 discriminator/생성/migration과 round-trip을 추가한다.

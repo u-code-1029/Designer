@@ -4,7 +4,7 @@
 > 범위: Designer/Live Interaction과 장비 사이의 단일 Action request/response
 > 비범위: 워크플로 저장 파일(`*.drillflow.json`), HTTP 및 로컬 Control Flow
 
-이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 앱이 게시하는 request와 테스트 response는 **UTF-8(BOM 없음) XML**이다. Embedded 템플릿과 장비 wire XML 입력은 strict UTF-8 BOM 유무를 모두 허용하며, 정확히 하나의 선두 BOM은 원본 파일을 수정하지 않고 메모리에서 제거한 뒤 파싱한다. 인코딩과 파일 인계의 상세 정책은 [`docs/xml-encoding-and-file-handshake.md`](docs/xml-encoding-and-file-handshake.md)를 따른다.
+이 문서는 장비 데이터 구조를 바꿀 개발자나 에이전트가 가장 먼저 읽어야 하는 source of truth다. 앱은 **메모리 안에서 JSON과 같은 논리 객체**를 사용하지만 중간 `.json` 파일은 만들지 않는다. 앱이 게시하는 request와 테스트 response는 **UTF-8(BOM 없음) XML**이다. 외부·Embedded 템플릿과 장비 wire XML 입력은 strict UTF-8 BOM 유무를 모두 허용하며, 정확히 하나의 선두 BOM은 원본 파일을 수정하지 않고 메모리에서 제거한 뒤 파싱한다. 인코딩과 파일 인계의 상세 정책은 [`docs/xml-encoding-and-file-handshake.md`](docs/xml-encoding-and-file-handshake.md)를 따른다.
 
 XML은 일반 객체 직렬화 결과가 아니다. Action별 정답 템플릿을 일반 텍스트로 취급하며 정확히 `{{{field_name}}}`인 자리만 XML-safe 값으로 치환하거나 추출한다. 태그·속성·주석·본문에 있는 일반 `field_name` 문자열과 `{{{{field_name}}}}` 같은 근접 표기는 placeholder가 아니다. 실제 장비 XML이 확정되면 [템플릿 폴더](#8-xml-템플릿과-변경-방법)의 25개 Dummy 파일을 실제 양식으로 바꾸고 placeholder 이름과 의미를 유지한다. Action별 성공 response에 추가 필드가 있는 경우에는 공통 필드만 담은 `failure-response.xml`도 함께 유지한다.
 
@@ -370,7 +370,9 @@ Designer의 “Response 테스트”와 Live의 1회/연속 테스트는 편집 
 
 ## 8. XML 템플릿과 변경 방법
 
-Dummy 템플릿은 다음 위치에 Embedded Resource로 포함된다.
+Dummy 템플릿 소스는 다음 위치에 있으며, 빌드·배포 시 실행 파일 옆의 `Templates/{Action}/`로 복사되고 Embedded Resource로도 포함된다.
+
+앱은 시작할 때 실행 폴더의 `Templates` 전체를 우선 읽는다. 이 폴더가 있으면 25개 파일이 모두 필요하며, 파일 누락·읽기 오류·잘못된 UTF-8/XML·placeholder 계약 오류를 기본 템플릿으로 대체하지 않는다. 외부 폴더가 전혀 없을 때만 Embedded Resource를 사용한다. 템플릿은 앱 시작 시 고정되므로 파일 교체 후 앱을 다시 시작한다. 교환 폴더의 `request.xml`은 생성되는 출력 파일이며 템플릿 입력 파일과 다르다.
 
 ~~~text
 src/DrillFlow.Infrastructure/Communication/Templates/
@@ -405,9 +407,9 @@ src/DrillFlow.Infrastructure/Communication/Templates/
 
 실제 양식으로 교체할 때:
 
-response의 XML 요소에 고정 `Version` 속성이 있으면 템플릿과 장비 응답의 속성 값이 달라도 일치로 처리한다. 출력에는 템플릿의 값을 그대로 사용한다. 이 예외는 정확히 `Version`인 비접두사 속성 값에만 적용하며, 논리 placeholder가 있는 속성은 계속 검증한다. 속성 존재 여부와 나머지 양식은 아래 규칙을 유지한다. 자세한 경계는 [XML 인코딩과 파일 핸드셰이크](docs/xml-encoding-and-file-handshake.md)를 참조한다.
+response의 정확한 `NamedTypedObject` 태그에 고정 `Type` 속성이 있으면 템플릿과 장비 응답의 속성 값이 달라도 일치로 처리한다. 출력에는 템플릿의 값을 그대로 사용한다. 이 예외는 대소문자를 구분하는 비접두사 태그 `NamedTypedObject`의 비접두사 `Type` 값에만 적용한다. `Version`과 다른 태그의 `Type`은 계속 비교하며, 논리 placeholder가 있는 속성은 계속 검증한다. 속성 존재 여부와 나머지 양식은 아래 규칙을 유지한다. 자세한 경계는 [XML 인코딩과 파일 핸드셰이크](docs/xml-encoding-and-file-handshake.md)를 참조한다.
 
-1. Action/방향에 맞는 소스 파일을 바꾸고 앱을 다시 빌드한다. 성공 response에 추가 필드가 있는 Action은 `response.xml`과 `failure-response.xml`을 서로 다른 장비 성공/실패 정답지에 맞춰 함께 검토한다. 템플릿은 assembly Embedded Resource이므로 빌드 산출물 옆의 XML을 수정해도 적용되지 않는다.
+1. 실행 파일 옆의 `Templates/{Action}/request.xml` 등 Action/방향에 맞는 파일을 바꾸고 앱을 다시 시작한다. 재빌드 없이 적용된다. 저장소에서 개발할 때는 위 소스 파일을 수정하고 다시 빌드하면 실행 폴더로 복사된다. 다음 빌드·배포에서 더 최신 소스 템플릿으로 덮어쓸 수 있으므로 운영 양식은 별도로 보관한다. 성공 response에 추가 필드가 있는 Action은 `response.xml`과 `failure-response.xml`을 서로 다른 장비 성공/실패 정답지에 맞춰 함께 검토한다.
 2. `correlation_id`와 Action별 동적 request/response 필드는 정확한 `{{{field_name}}}` 토큰으로 적어도 한 번 남긴다. response의 `result`도 필수다. `type`과 `action`은 토큰으로 둘 수도 있고 해당 Action/방향 템플릿의 고정 문자열로 표현할 수도 있다.
 3. 같은 논리 값을 XML 여러 위치에 넣어야 하면 동일 placeholder를 반복해도 된다. 렌더링 시 모두 같은 값으로 치환하며, response/request 파싱 시 반복 위치의 XML-unescape 결과가 하나라도 다르면 전체 payload를 거부한다. 값 경계를 알 수 없는 인접 placeholder는 허용하지 않으며, 한 템플릿은 재귀 깊이와 처리량을 제한하기 위해 placeholder 출현을 최대 256개까지 허용한다.
 4. 임의 placeholder나 공백·대문자가 섞인 잘못된 토큰을 추가하지 않는다. 일반 `correlation_id` 같은 텍스트는 개수와 관계없이 그대로 유지된다.

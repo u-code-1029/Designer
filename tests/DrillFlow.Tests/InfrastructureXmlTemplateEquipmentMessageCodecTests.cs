@@ -360,17 +360,18 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     [Theory]
     [InlineData("")]
     [InlineData("2.5")]
+    [InlineData("Other.Class, Version=9.0.0.0, Culture=neutral")]
     [InlineData("release &amp; 3 &quot;beta&quot;")]
     [InlineData(" \t2.0\r\n ")]
-    public void ResponseVersionAttributes_IgnoreValuesAndPreserveTemplateRendering(string version)
+    public void ResponseNamedTypedObjectType_IgnoreValuesAndPreserveTemplateRendering(string type)
     {
-        var codec = new XmlTemplateEquipmentMessageCodec(LoadVersionedTemplate);
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadTypedObjectTemplate);
         foreach (var request in CreateRequests())
         {
             var original = codec.SerializeResponse(CreateResponse(request.CorrelationId, request.Action));
             var xml = Encoding.UTF8.GetString(original)
-                .Replace("Version=\"1.0\"", "Version=\"" + version + "\"")
-                .Replace("Version='fields-1'", "Version='fields-2'");
+                .Replace("Type=\"wire-1\"", "Type=\"" + type + "\"")
+                .Replace("Type='fields-1'", "Type='fields-2'");
             var payload = Encoding.UTF8.GetBytes(xml);
 
             Assert.True(codec.TryDeserializeResponse(payload, request, out var response));
@@ -385,26 +386,38 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     }
 
     [Theory]
-    [InlineData("Version=\"1.0\"", "")]
-    [InlineData("Version=\"1.0\"", "version=\"1.0\"")]
-    [InlineData("Version=\"1.0\"", "Version=\"2\" Version=\"3\"")]
-    [InlineData("Version=\"1.0\"", "Version=\"<invalid\"")]
-    [InlineData("version=\"lower\"", "version=\"different\"")]
-    [InlineData("SchemaVersion=\"schema\"", "SchemaVersion=\"different\"")]
-    [InlineData("v:Version=\"namespaced\"", "v:Version=\"different\"")]
-    [InlineData("Label=\"Version='label'\"", "Label=\"Version='different'\"")]
-    [InlineData("<Version>element</Version>", "<Version>different</Version>")]
-    [InlineData("<!-- Version=\"comment\" -->", "<!-- Version=\"different\" -->")]
-    [InlineData("<![CDATA[Version=\"cdata\"]]>", "<![CDATA[Version=\"different\"]]>")]
-    [InlineData("<?vendor Version=\"processing\"?>", "<?vendor Version=\"different\"?>")]
-    [InlineData("<correlation_id Version='fields-1'>1</correlation_id>",
-        "<correlation_id Version='fields-2'>99</correlation_id>")]
+    [InlineData("Type=\"wire-1\"", "")]
+    [InlineData("Type=\"wire-1\"", "type=\"wire-1\"")]
+    [InlineData("Type=\"wire-1\"", "Type=\"2\" Type=\"3\"")]
+    [InlineData("Type=\"wire-1\"", "Type=\"<invalid\"")]
+    [InlineData("NamedTypedObject", "namedtypedobject")]
+    [InlineData("NamedTypedObject", "OtherNamedTypedObject")]
+    [InlineData("Version=\"1.0\"", "Version=\"different\"")]
+    [InlineData("Version=\"object-1\"", "Version=\"different\"")]
+    [InlineData("type=\"lower\"", "type=\"different\"")]
+    [InlineData("ObjectType=\"schema\"", "ObjectType=\"different\"")]
+    [InlineData("v:Type=\"namespaced\"", "v:Type=\"different\"")]
+    [InlineData("Label=\"Type='label'\"", "Label=\"Type='different'\"")]
+    [InlineData("<Type>element</Type>", "<Type>different</Type>")]
+    [InlineData("<!-- <NamedTypedObject Type=\"comment\"/> -->",
+        "<!-- <NamedTypedObject Type=\"different\"/> -->")]
+    [InlineData("<![CDATA[<NamedTypedObject Type=\"cdata\"/>]]>",
+        "<![CDATA[<NamedTypedObject Type=\"different\"/>]]>")]
+    [InlineData("<?NamedTypedObject Type=\"processing\"?>",
+        "<?NamedTypedObject Type=\"different\"?>")]
+    [InlineData("<v:NamedTypedObject Type=\"prefixed\"/>",
+        "<v:NamedTypedObject Type=\"different\"/>")]
+    [InlineData("<OtherNamedTypedObject Type=\"other\"/>",
+        "<OtherNamedTypedObject Type=\"different\"/>")]
+    [InlineData("<correlation_id Type=\"scalar\">", "<correlation_id Type=\"different\">")]
+    [InlineData("<correlation_id Type=\"scalar\">1</correlation_id>",
+        "<correlation_id Type=\"scalar\">99</correlation_id>")]
     [InlineData("<result>0</result>", "<result>2</result>")]
-    public void ResponseVersionException_PreservesOtherMatchingAndXmlValidation(
+    public void ResponseNamedTypedObjectTypeException_PreservesOtherMatchingAndXmlValidation(
         string originalText,
         string replacement)
     {
-        var codec = new XmlTemplateEquipmentMessageCodec(LoadVersionedTemplate);
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadTypedObjectTemplate);
         var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
         var xml = Encoding.UTF8.GetString(codec.SerializeResponse(
             CreateResponse(request.CorrelationId, request.Action)));
@@ -415,37 +428,57 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     }
 
     [Fact]
-    public void RequestVersionAttributes_RemainExactAndUseTemplateValues()
+    public void RequestNamedTypedObjectType_RemainsExactAndUsesTemplateValues()
     {
-        var codec = new XmlTemplateEquipmentMessageCodec(LoadVersionedTemplate);
+        var codec = new XmlTemplateEquipmentMessageCodec(LoadTypedObjectTemplate);
         var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
         var original = codec.SerializeRequest(request);
         var xml = Encoding.UTF8.GetString(original);
 
-        Assert.Contains("Version=\"1.0\"", xml, StringComparison.Ordinal);
+        Assert.Contains("Type=\"wire-1\"", xml, StringComparison.Ordinal);
         Assert.True(codec.TryDeserializeRequest(original, out _));
         Assert.False(codec.TryDeserializeRequest(
-            Encoding.UTF8.GetBytes(xml.Replace("Version=\"1.0\"", "Version=\"2.5\"")),
+            Encoding.UTF8.GetBytes(xml.Replace("Type=\"wire-1\"", "Type=\"different\"")),
             out _));
     }
 
-    [Fact]
-    public void ResponseVersionAttribute_AfterPlaceholderAttributeDoesNotChangeExtractedValues()
+    [Theory]
+    [InlineData("<namedtypedobject Type=\"wire-1\"/>")]
+    [InlineData("<OtherNamedTypedObject Type=\"wire-1\"/>")]
+    [InlineData("<v:NamedTypedObject xmlns:v=\"urn:vendor\" Type=\"wire-1\"/>")]
+    [InlineData("<NamedTypedObject type=\"wire-1\"/>")]
+    [InlineData("<NamedTypedObject xmlns:v=\"urn:vendor\" v:Type=\"wire-1\"/>")]
+    public void ResponseTypeException_RequiresExactElementAndAttributeNames(string element)
     {
         var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
-            LoadVersionedTemplate(action, direction).Replace(
-                "Version=\"1.0\"",
-                "Correlation=\"{{{correlation_id}}}\" Version=\"1.0\""));
+            CreateContractTextTemplate(action, direction).Replace(
+                "</" + action + "-" + direction + ">",
+                element + "</" + action + "-" + direction + ">"));
+        var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
+        var original = codec.SerializeResponse(CreateResponse(request.CorrelationId, request.Action));
+        Assert.True(codec.TryDeserializeResponse(original, request, out _));
+        var xml = Encoding.UTF8.GetString(original).Replace("wire-1", "different");
+
+        Assert.False(codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), request, out _));
+    }
+
+    [Fact]
+    public void ResponseNamedTypedObjectType_AfterPlaceholderAttributeDoesNotChangeExtractedValues()
+    {
+        var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
+            LoadTypedObjectTemplate(action, direction).Replace(
+                "Type=\"wire-1\"",
+                "Correlation=\"{{{correlation_id}}}\" Type=\"wire-1\""));
         var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Integration);
         var response = new EquipmentResponseMessage(request.CorrelationId, request.Action, 0,
             new Dictionary<string, object?>
             {
                 ["hfw"] = 3.02E-6,
                 ["frame_count"] = 8,
-                ["image_path"] = @"C:\Equipment Images\Version='literal'\frame 01.png"
+                ["image_path"] = @"C:\Equipment Images\Type='literal'\frame 01.png"
             });
         var original = codec.SerializeResponse(response);
-        var xml = Encoding.UTF8.GetString(original).Replace("Version=\"1.0\"", "Version=\"different\"");
+        var xml = Encoding.UTF8.GetString(original).Replace("Type=\"wire-1\"", "Type=\"different\"");
 
         Assert.True(codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), request, out var restored));
         Assert.Equal(response.ImagePath, restored!.ImagePath);
@@ -457,19 +490,19 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
     }
 
     [Fact]
-    public void ResponseVersionAttribute_WithLogicalPlaceholderRetainsContractValidation()
+    public void ResponseNamedTypedObjectType_WithLogicalPlaceholderRetainsContractValidation()
     {
         var codec = new XmlTemplateEquipmentMessageCodec((action, direction) =>
-            LoadVersionedTemplate(action, direction).Replace(
-                "Version=\"1.0\"",
-                "Version=\"{{{correlation_id}}}\""));
+            LoadTypedObjectTemplate(action, direction).Replace(
+                "Type=\"wire-1\"",
+                "Type=\"{{{correlation_id}}}\""));
         var request = CreateRequests().Single(item => item.Action == EquipmentActionNames.Stage);
         var original = codec.SerializeResponse(CreateResponse(request.CorrelationId, request.Action));
-        var xml = Encoding.UTF8.GetString(original).Replace("Version='fields-1'", "Version='changed'");
+        var xml = Encoding.UTF8.GetString(original).Replace("Type='fields-1'", "Type='changed'");
 
         Assert.True(codec.TryDeserializeResponse(Encoding.UTF8.GetBytes(xml), request, out _));
         Assert.False(codec.TryDeserializeResponse(
-            Encoding.UTF8.GetBytes(xml.Replace("Version=\"1\"", "Version=\"99\"")),
+            Encoding.UTF8.GetBytes(xml.Replace("Type=\"1\"", "Type=\"99\"")),
             request,
             out _));
     }
@@ -1165,17 +1198,21 @@ public sealed class InfrastructureXmlTemplateEquipmentMessageCodecTests
         };
     }
 
-    private static string LoadVersionedTemplate(string action, string direction)
+    private static string LoadTypedObjectTemplate(string action, string direction)
     {
         var root = action + "-" + direction;
         return CreateContractTextTemplate(action, direction)
-            .Replace("<" + root + ">", "<" + root + " Version=\"1.0\">")
-            .Replace("<correlation_id>", "<correlation_id Version='fields-1'>")
+            .Replace("<" + root + ">",
+                "<" + root + " Version=\"1.0\"><NamedTypedObject Type=\"wire-1\" Version=\"object-1\">")
+            .Replace("<correlation_id>",
+                "<NamedTypedObject Type='fields-1'><correlation_id Type=\"scalar\">")
+            .Replace("</correlation_id>", "</correlation_id></NamedTypedObject>")
             .Replace("</" + root + ">",
-                "<metadata version=\"lower\" SchemaVersion=\"schema\""
-                + " xmlns:v=\"urn:vendor\" v:Version=\"namespaced\" Label=\"Version='label'\">"
-                + "<Version>element</Version><!-- Version=\"comment\" -->"
-                + "<![CDATA[Version=\"cdata\"]]><?vendor Version=\"processing\"?>"
+                "</NamedTypedObject><metadata type=\"lower\" ObjectType=\"schema\""
+                + " xmlns:v=\"urn:vendor\" v:Type=\"namespaced\" Label=\"Type='label'\">"
+                + "<Type>element</Type><!-- <NamedTypedObject Type=\"comment\"/> -->"
+                + "<![CDATA[<NamedTypedObject Type=\"cdata\"/>]]><?NamedTypedObject Type=\"processing\"?>"
+                + "<v:NamedTypedObject Type=\"prefixed\"/><OtherNamedTypedObject Type=\"other\"/>"
                 + "</metadata></" + root + ">");
     }
 

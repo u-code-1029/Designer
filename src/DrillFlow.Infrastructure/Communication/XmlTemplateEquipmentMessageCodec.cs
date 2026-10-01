@@ -15,8 +15,8 @@ namespace DrillFlow.Infrastructure.Communication;
 
 /// <summary>
 /// Renders and extracts the equipment's fixed XML answer-sheet templates. This is intentionally
-/// not an XML object serializer: every non-placeholder byte comes from an embedded
-/// contract templates, while only declared scalar values are replaced or extracted.
+/// not an XML object serializer: every non-placeholder byte comes from the selected
+/// contract template, while only declared scalar values are replaced or extracted.
 /// </summary>
 public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 {
@@ -27,7 +27,22 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
     private readonly IReadOnlyDictionary<string, ActionTemplates> _templates;
 
     public XmlTemplateEquipmentMessageCodec()
-        : this(LoadEmbeddedTemplate, loadFailureResponseTemplates: true)
+        : this(EquipmentXmlTemplateLoader.Create(
+            Path.Combine(AppContext.BaseDirectory, "Templates"),
+            allowMissingDirectory: true,
+            LoadEmbeddedTemplate,
+            DecodeTemplateBytes), loadFailureResponseTemplates: true,
+            templateDirectory: Path.Combine(AppContext.BaseDirectory, "Templates"))
+    {
+    }
+
+    public XmlTemplateEquipmentMessageCodec(string templateDirectory)
+        : this(EquipmentXmlTemplateLoader.Create(
+            templateDirectory,
+            allowMissingDirectory: false,
+            LoadEmbeddedTemplate,
+            DecodeTemplateBytes), loadFailureResponseTemplates: true,
+            templateDirectory: templateDirectory)
     {
     }
 
@@ -38,11 +53,36 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
     private XmlTemplateEquipmentMessageCodec(
         Func<string, string, string> templateLoader,
-        bool loadFailureResponseTemplates)
+        bool loadFailureResponseTemplates,
+        string? templateDirectory = null)
     {
         if (templateLoader is null)
         {
             throw new ArgumentNullException(nameof(templateLoader));
+        }
+
+        var sourceDirectory = templateDirectory is not null && Directory.Exists(templateDirectory)
+            ? Path.GetFullPath(templateDirectory)
+            : null;
+
+        TemplateDefinition LoadDefinition(
+            string action,
+            string fileDirection,
+            string logicalDirection,
+            IReadOnlyCollection<string> fields)
+        {
+            try
+            {
+                return TemplateDefinition.Parse(
+                    action, logicalDirection, templateLoader(action, fileDirection), fields);
+            }
+            catch (InvalidDataException exception) when (sourceDirectory is not null)
+            {
+                var folder = char.ToUpperInvariant(action[0]) + action.Substring(1);
+                var source = Path.Combine(sourceDirectory, folder, fileDirection + ".xml");
+                throw new InvalidDataException(
+                    $"Equipment XML template '{source}' is invalid: {exception.Message}", exception);
+            }
         }
 
         var templates = new Dictionary<string, ActionTemplates>(StringComparer.Ordinal);
@@ -53,21 +93,21 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             templates.Add(
                 action,
                 new ActionTemplates(
-                    TemplateDefinition.Parse(
+                    LoadDefinition(
                         action,
                         "request",
-                        templateLoader(action, "request"),
+                        "request",
                         requestFields),
-                    TemplateDefinition.Parse(
+                    LoadDefinition(
                         action,
                         "response",
-                        templateLoader(action, "response"),
+                        "response",
                         responseFields),
                     loadFailureResponseTemplates && HasSuccessOnlyResponseFields(action)
-                        ? TemplateDefinition.Parse(
+                        ? LoadDefinition(
                             action,
+                            "failure-response",
                             "response",
-                            templateLoader(action, "failure-response"),
                             GetExpectedFailureResponseFields())
                         : null));
         }
@@ -1376,16 +1416,21 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             using (var buffer = new MemoryStream())
             {
                 stream.CopyTo(buffer);
-                if (!TryDecode(buffer.ToArray(), out var template))
-                {
-                    throw new InvalidDataException(
-                        $"Equipment XML template '{resourceName}' must be strict UTF-8 with "
-                        + "zero or one leading UTF-8 BOM and no embedded U+FEFF marker.");
-                }
-
-                return template;
+                return DecodeTemplateBytes(buffer.ToArray(), resourceName);
             }
         }
+    }
+
+    private static string DecodeTemplateBytes(byte[] payload, string source)
+    {
+        if (!TryDecode(payload, out var template))
+        {
+            throw new InvalidDataException(
+                $"Equipment XML template '{source}' must be strict UTF-8 with "
+                + "zero or one leading UTF-8 BOM and no embedded U+FEFF marker or NUL.");
+        }
+
+        return template;
     }
 
     private static IReadOnlyCollection<string> GetExpectedRequestFields(string action)
@@ -1505,7 +1550,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
         private readonly IReadOnlyList<string> _renderLiterals;
         private readonly IReadOnlyList<string> _extractionLiterals;
         private readonly bool _ignoreResponseFormattingWhitespace;
-        private readonly HashSet<int> _ignoredResponseVersionAttributeOrdinals;
+        private readonly HashSet<int> _ignoredResponseTypeAttributeOrdinals;
         private readonly IReadOnlyList<int> _materializationOrder;
 
         private TemplateDefinition(
@@ -1515,7 +1560,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             IReadOnlyList<string> renderLiterals,
             IReadOnlyList<string> extractionLiterals,
             bool ignoreResponseFormattingWhitespace,
-            IEnumerable<int> ignoredResponseVersionAttributeOrdinals)
+            IEnumerable<int> ignoredResponseTypeAttributeOrdinals)
         {
             _action = action;
             _direction = direction;
@@ -1523,8 +1568,8 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             _renderLiterals = renderLiterals;
             _extractionLiterals = extractionLiterals;
             _ignoreResponseFormattingWhitespace = ignoreResponseFormattingWhitespace;
-            _ignoredResponseVersionAttributeOrdinals = new HashSet<int>(
-                ignoredResponseVersionAttributeOrdinals);
+            _ignoredResponseTypeAttributeOrdinals = new HashSet<int>(
+                ignoredResponseTypeAttributeOrdinals);
             _materializationOrder = Enumerable.Range(0, placeholders.Count)
                 .OrderBy(index => GetMaterializationPriority(placeholders[index]))
                 .ThenBy(index => index)
@@ -1629,11 +1674,11 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 direction,
                 "response",
                 StringComparison.Ordinal);
-            var ignoredVersionAttributes = new List<VersionAttributeValueRange>();
+            var ignoredTypeAttributes = new List<TypeAttributeValueRange>();
             if (ignoreResponseFormattingWhitespace)
             {
                 var placeholderIndex = 0;
-                foreach (var attribute in FindVersionAttributeValues(template))
+                foreach (var attribute in FindNamedTypedObjectTypeValues(template))
                 {
                     while (placeholderIndex < matches.Count
                            && matches[placeholderIndex].Index + matches[placeholderIndex].Length
@@ -1642,12 +1687,12 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                         placeholderIndex++;
                     }
 
-                    // A Version attribute may carry a declared logical field. Keep those
+                    // A Type attribute may carry a declared logical field. Keep those
                     // occurrences strict so metadata tolerance cannot bypass field validation.
                     if (placeholderIndex >= matches.Count
                         || matches[placeholderIndex].Index >= attribute.End)
                     {
-                        ignoredVersionAttributes.Add(attribute);
+                        ignoredTypeAttributes.Add(attribute);
                     }
                 }
             }
@@ -1656,13 +1701,13 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 ? Array.AsReadOnly(
                     literals.Select(RemoveResponseFormattingWhitespace).ToArray())
                 : literals.AsReadOnly();
-            if (ignoredVersionAttributes.Count > 0)
+            if (ignoredTypeAttributes.Count > 0)
             {
                 // Scan the complete template rather than each literal: placeholders may split
                 // a start tag or a quoted attribute across multiple literal segments.
                 var comparisonTemplate = ExtractionText.CreateWhitespaceInsensitive(
                     template,
-                    ignoredVersionAttributes);
+                    ignoredTypeAttributes);
                 var normalizedLiterals = new string[literals.Count];
                 for (var index = 0; index < normalizedLiterals.Length; index++)
                 {
@@ -1693,7 +1738,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 literals.AsReadOnly(),
                 extractionLiterals,
                 ignoreResponseFormattingWhitespace,
-                ignoredVersionAttributes.Select(attribute => attribute.Ordinal));
+                ignoredTypeAttributes.Select(attribute => attribute.Ordinal));
         }
 
         public string Render(IReadOnlyDictionary<string, string> values)
@@ -1735,10 +1780,10 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             var extractionText = _ignoreResponseFormattingWhitespace
                 ? ExtractionText.CreateWhitespaceInsensitive(
                     text,
-                    _ignoredResponseVersionAttributeOrdinals.Count == 0
-                        ? Array.Empty<VersionAttributeValueRange>()
-                        : FindVersionAttributeValues(text)
-                            .Where(attribute => _ignoredResponseVersionAttributeOrdinals
+                    _ignoredResponseTypeAttributeOrdinals.Count == 0
+                        ? Array.Empty<TypeAttributeValueRange>()
+                        : FindNamedTypedObjectTypeValues(text)
+                            .Where(attribute => _ignoredResponseTypeAttributeOrdinals
                                 .Contains(attribute.Ordinal))
                             .ToArray())
                 : ExtractionText.CreateExact(text);
@@ -2265,10 +2310,10 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                 : 0;
         }
 
-        private static IReadOnlyList<VersionAttributeValueRange> FindVersionAttributeValues(
+        private static IReadOnlyList<TypeAttributeValueRange> FindNamedTypedObjectTypeValues(
             string text)
         {
-            var attributes = new List<VersionAttributeValueRange>();
+            var attributes = new List<TypeAttributeValueRange>();
             var cursor = 0;
             var ordinal = 0;
             while (cursor < text.Length)
@@ -2303,13 +2348,20 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     continue;
                 }
 
-                // Skip the element name, then consume complete attributes. Quoted values in
-                // other attributes are skipped intact, even if they contain Version-like text.
+                // Match the exact element name, then consume complete attributes. Quoted
+                // values on other attributes are skipped intact, even if they contain Type text.
+                var elementStart = cursor;
                 while (cursor < text.Length
                        && !IsXmlFormattingWhitespace(text[cursor])
                        && text[cursor] != '>' && text[cursor] != '/')
                 {
                     cursor++;
+                }
+
+                if (!SegmentEquals(text, elementStart, cursor - elementStart, "NamedTypedObject"))
+                {
+                    SkipXmlTag(text, ref cursor);
+                    continue;
                 }
 
                 while (cursor < text.Length)
@@ -2354,10 +2406,9 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                         break;
                     }
 
-                    if (nameLength == "Version".Length
-                        && StartsWithAt(text, nameStart, "Version"))
+                    if (SegmentEquals(text, nameStart, nameLength, "Type"))
                     {
-                        attributes.Add(new VersionAttributeValueRange(valueStart, valueEnd, ordinal++));
+                        attributes.Add(new TypeAttributeValueRange(valueStart, valueEnd, ordinal++));
                     }
 
                     cursor = valueEnd + 1;
@@ -2389,9 +2440,9 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             }
         }
 
-        private sealed class VersionAttributeValueRange
+        private sealed class TypeAttributeValueRange
         {
-            public VersionAttributeValueRange(int start, int end, int ordinal)
+            public TypeAttributeValueRange(int start, int end, int ordinal)
             {
                 Start = start;
                 End = end;
@@ -2428,13 +2479,13 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
 
             public static ExtractionText CreateWhitespaceInsensitive(
                 string text,
-                IReadOnlyList<VersionAttributeValueRange> ignoredVersionAttributes)
+                IReadOnlyList<TypeAttributeValueRange> ignoredTypeAttributes)
             {
                 var characterCount = 0;
                 var attributeIndex = 0;
                 for (var index = 0; index < text.Length; index++)
                 {
-                    if (!ShouldIgnoreCharacter(text, index, ignoredVersionAttributes, ref attributeIndex))
+                    if (!ShouldIgnoreCharacter(text, index, ignoredTypeAttributes, ref attributeIndex))
                     {
                         characterCount++;
                     }
@@ -2449,7 +2500,7 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
                     if (ShouldIgnoreCharacter(
                             text,
                             originalIndex,
-                            ignoredVersionAttributes,
+                            ignoredTypeAttributes,
                             ref attributeIndex))
                     {
                         continue;
@@ -2469,18 +2520,18 @@ public sealed class XmlTemplateEquipmentMessageCodec : IEquipmentMessageCodec
             private static bool ShouldIgnoreCharacter(
                 string text,
                 int index,
-                IReadOnlyList<VersionAttributeValueRange> ignoredVersionAttributes,
+                IReadOnlyList<TypeAttributeValueRange> ignoredTypeAttributes,
                 ref int attributeIndex)
             {
-                while (attributeIndex < ignoredVersionAttributes.Count
-                       && index >= ignoredVersionAttributes[attributeIndex].End)
+                while (attributeIndex < ignoredTypeAttributes.Count
+                       && index >= ignoredTypeAttributes[attributeIndex].End)
                 {
                     attributeIndex++;
                 }
 
                 return IsXmlFormattingWhitespace(text[index])
-                       || attributeIndex < ignoredVersionAttributes.Count
-                       && index >= ignoredVersionAttributes[attributeIndex].Start;
+                       || attributeIndex < ignoredTypeAttributes.Count
+                       && index >= ignoredTypeAttributes[attributeIndex].Start;
             }
 
             public string GetComparisonText(int originalStart, int originalEnd)

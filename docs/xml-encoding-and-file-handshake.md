@@ -1,6 +1,6 @@
 # XML 인코딩 및 파일 인계 정책
 
-> 적용 범위: Embedded XML 템플릿, 장비 request/response XML, 로컬 및 UNC 교환 폴더  
+> 적용 범위: 외부·Embedded XML 템플릿, 장비 request/response XML, 로컬 및 UNC 교환 폴더
 > 최종 확인: 2026-08-28
 
 이 문서는 XML을 어떤 인코딩으로 받아들이고 내보내는지, 장비가 파일을 기록하는 도중 앱이 불완전한 내용을 읽지 않도록 어떻게 인계하는지를 정의한다. 논리 데이터 구조와 placeholder 목록은 [`contract.md`](../contract.md)를 따른다.
@@ -39,7 +39,7 @@
 
 템플릿과 장비 XML의 호환성은 raw byte 배열을 서로 비교해 판단하지 않는다. 공통 UTF-8 decode와 BOM 제거 후 text로 XML 형식과 placeholder 위치를 해석한다. 고정 템플릿 구간의 ASCII space, tab, CR, LF 차이도 기존 규칙대로 무시한다.
 
-response 비교에서는 XML 요소의 고정 `Version` 속성 값도 무시한다. 예를 들어 템플릿의 `<reply Version="1.0">`는 장비의 `<reply Version="2.0">`와 일치한다. 속성 이름은 대소문자를 구분하며 namespace 접두사 없는 `Version`만 해당한다. 속성의 존재, 순서, 따옴표 형식, 다른 속성과 태그·주석·CDATA 내용은 기존 규칙으로 비교한다. XML 선언의 `version`이나 `<Version>` 요소 내용에는 이 예외를 적용하지 않는다. `Version` 값에 논리 필드 placeholder가 있으면 그 필드의 추출·검증도 유지한다. 출력 request/테스트 response는 계속 템플릿에 제공된 `Version` 값과 원본 양식을 사용한다.
+response 비교에서는 정확한 `NamedTypedObject` 태그의 고정 `Type` 속성 값을 무시한다. 예를 들어 템플릿의 `<NamedTypedObject Type="Vendor.Class, Version=1.0">`는 장비의 `<NamedTypedObject Type="Other.Class, Version=2.0">`와 일치한다. 태그와 속성 이름은 대소문자를 구분하며 namespace 접두사 없는 `NamedTypedObject`/`Type`만 해당한다. 속성의 존재, 순서, 따옴표 형식, 다른 속성과 태그·주석·CDATA 내용은 기존 규칙으로 비교한다. `Version` 속성과 다른 태그의 `Type`에는 이 예외를 적용하지 않는다. `Type` 값에 논리 필드 placeholder가 있으면 그 필드의 추출·검증도 유지한다. 출력 request/테스트 response는 계속 템플릿에 제공된 `Type` 값과 원본 양식을 사용한다.
 
 Raw byte 비교는 XML 의미 비교가 아닌 다음 파일 소유권·신선도 보호에만 남겨 둔다.
 
