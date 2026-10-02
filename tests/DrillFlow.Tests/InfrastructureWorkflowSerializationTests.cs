@@ -11,6 +11,40 @@ namespace DrillFlow.Tests;
 
 public sealed class InfrastructureWorkflowSerializationTests
 {
+    [Theory]
+    [InlineData("3.02E-6")]
+    [InlineData("1E-3")]
+    [InlineData("  =source.parameters.hfw  ")]
+    public void RoundTrip_PreservesExplicitImageAcquisitionHfw(string authoredHfw)
+    {
+        var serializer = new JsonWorkflowDocumentSerializer();
+        var document = new WorkflowDocument
+        {
+            Nodes = new List<WorkflowNode>
+            {
+                new IntegrationNode
+                {
+                    Key = "integration_1",
+                    HorizontalFieldWidth = new ParameterBinding(authoredHfw),
+                },
+                new LiveNode
+                {
+                    Key = "live_1",
+                    HorizontalFieldWidth = new ParameterBinding(authoredHfw),
+                },
+            },
+        };
+
+        var restored = serializer.Deserialize(serializer.Serialize(document));
+
+        Assert.Equal(
+            authoredHfw,
+            Assert.IsType<IntegrationNode>(restored.Nodes[0]).HorizontalFieldWidth.RawText);
+        Assert.Equal(
+            authoredHfw,
+            Assert.IsType<LiveNode>(restored.Nodes[1]).HorizontalFieldWidth.RawText);
+    }
+
     [Fact]
     public void RoundTrip_PreservesSchemaNestedTypesIdsAndRawExpressions()
     {

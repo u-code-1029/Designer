@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 
 namespace DrillFlow.Application.Communication;
 
@@ -29,16 +28,20 @@ public sealed class EquipmentCommunicationOptions
     }
 
     /// <summary>
-    /// Shared local or UNC directory proposed to the controller through each Live request's
-    /// image_path. The actual filename remains correlation-specific so a delayed older frame
-    /// cannot overwrite a newer request. When omitted, the existing exchange-directory
-    /// subfolder is retained for backward compatibility.
+    /// Shared local or UNC image output directory proposed to the controller through Live,
+    /// Integration and OM requests' image_path. The persisted name is retained for compatibility.
+    /// Live Interaction filenames remain correlation-specific so a delayed older image cannot
+    /// overwrite a newer request. When omitted, the existing exchange-directory subfolder is
+    /// retained for backward compatibility.
     /// </summary>
     public string LiveImageDirectory
     {
         get => ResolveLiveImageDirectory(_exchangeDirectory, _liveImageDirectory);
         set => _liveImageDirectory = NormalizeExchangeDirectory(value);
     }
+
+    /// <summary>Whether the image output directory was explicitly configured instead of inherited.</summary>
+    public bool HasConfiguredLiveImageDirectory => _liveImageDirectory.Length > 0;
 
     /// <summary>
     /// Canonicalizes a local/UNC directory for Windows equipment messages. Windows file APIs
@@ -62,7 +65,7 @@ public sealed class EquipmentCommunicationOptions
         var exchange = NormalizeExchangeDirectory(exchangeDirectory);
         return exchange.Length == 0
             ? string.Empty
-            : Path.Combine(exchange, DefaultLiveImageDirectoryName);
+            : EquipmentImagePath.Create(exchange, DefaultLiveImageDirectoryName);
     }
 
     public string RequestFileName { get; set; } = "request.xml";

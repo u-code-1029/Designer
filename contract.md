@@ -163,7 +163,7 @@ Dummy XML은 `z_to_sharpness_2d`를 한 placeholder 문자열로 다룬다. 현�
   "type": "request",
   "correlation_id": 4,
   "action": "integration",
-  "hfw": 3.02E-6,
+  "hfw": 5E-6,
   "frame_count": 8,
   "image_path": "C:\\EquipmentImages\\integration-4.bmp"
 }
@@ -182,7 +182,7 @@ Response는 같은 이름의 `hfw`, `frame_count`, `image_path`와 공통 `resul
   "type": "request",
   "correlation_id": 5,
   "action": "live",
-  "hfw": 1E-3,
+  "hfw": 5E-6,
   "frame_count": 1,
   "image_path": "\\\\equipment-server\\camera-share\\live-5.bmp"
 }
@@ -190,11 +190,13 @@ Response는 같은 이름의 `hfw`, `frame_count`, `image_path`와 공통 `resul
 
 Response는 공통 envelope/result와 `hfw`, `frame_count`, `image_path`를 가진다.
 
-- `hfw`: `0 < hfw < 2.4E-3` m. UI 기본값은 `1E-3` m(1mm).
+- `hfw`: `0 < hfw < 2.4E-3` m. Live 화면과 새 Integration/Live Frame 액션의 기본값은 `5E-6` m(5 µm).
 - `frame_count`: request와 response 모두 항상 `1`.
 - `image_path`: Integration과 같은 절대 파일 경로 규칙.
 
-Live Interaction은 한 번에 하나의 frame만 요청한다. Live request의 `image_path`는 설정된 `LiveImageDirectory` 아래에 `live-<correlation_id>.bmp`라는 고유 파일명을 붙여 만든다. 이 설정은 절대 Windows 로컬 또는 UNC 폴더이며, 비어 있거나 이전 설정 파일에 없으면 `<ExchangeDirectory>\.drillflow-live`를 사용한다. response 이미지를 file handle 없이 메모리에 완전히 decode한 뒤 다음 request를 만든다. response 경로가 앱이 제안한 correlation별 요청 경로와 정확히 같을 때만 앱 소유 임시 파일로 간주해 사용 후 best-effort 삭제하고, 정리 실패는 다음 frame 진행을 막지 않는다. 장비가 다른 경로를 반환하면 장비 소유로 간주해 보존한다. 고화질 `integration`의 요청 경로 생성 방식은 이 설정의 영향을 받지 않고 기존 `<ExchangeDirectory>\.drillflow-live\integration-<correlation_id>.bmp`를 유지한다. 실제 장비가 별도 내부 프레임 파일을 더 만든다면 그 파일의 정리는 장비가 책임지는 것이 안전하다.
+새 Workflow의 Integration/Live Frame/OM 액션은 현재 이미지 공유 폴더 설정 아래의 `integration.bmp`, `live.bmp`, `om.bmp`를 기본 경로로 사용한다. 설정을 저장한 뒤 만드는 액션에 새 경로가 적용되며 기존 저장·복사한 액션의 명시 경로와 HFW는 보존한다.
+
+Live Interaction은 한 번에 하나의 frame만 요청한다. Live request의 `image_path`는 설정된 `LiveImageDirectory` 아래에 `live-<correlation_id>.bmp`라는 고유 파일명을 붙여 만든다. 이 설정은 절대 Windows 로컬 또는 UNC 폴더이며, 비어 있거나 이전 설정 파일에 없으면 `<ExchangeDirectory>\.drillflow-live`를 사용한다. response 이미지를 file handle 없이 메모리에 완전히 decode한 뒤 다음 request를 만든다. response 경로가 앱이 제안한 correlation별 요청 경로와 정확히 같을 때만 앱 소유 임시 파일로 간주해 사용 후 best-effort 삭제하고, 정리 실패는 다음 frame 진행을 막지 않는다. 장비가 다른 경로를 반환하면 장비 소유로 간주해 보존한다. Live 화면의 `integration`과 `om`도 같은 공유 폴더 아래에 각각 `integration-<correlation_id>.bmp`, `om-<correlation_id>.bmp`를 사용한다. 실제 장비가 별도 내부 프레임 파일을 더 만든다면 그 파일의 정리는 장비가 책임지는 것이 안전하다.
 
 ### 3.6 Abort — `abort`
 
@@ -341,7 +343,7 @@ Designer Workflow 실행과 Live Interaction 장비 동작은 같은 파일명�
 | 설정 | 의미 |
 |---|---|
 | `ExchangeDirectory` | request/response가 함께 존재하는 절대 로컬 또는 UNC 폴더. 입력한 `/`는 wire image path와 일관되도록 `\`로 정규화 |
-| `LiveImageDirectory` | Live frame을 앱과 장비가 공유하는 절대 로컬 또는 UNC 폴더. Desktop 저장 이름은 `LiveImageFolder`. 비어 있거나 누락되면 `<ExchangeDirectory>\.drillflow-live`; 실제 request 값은 `<resolved directory>\live-<correlation_id>.bmp` |
+| `LiveImageDirectory` | Integration/Live Frame/OM 이미지의 공통 절대 로컬 또는 UNC 공유 폴더. Desktop 설정 화면은 이미지 공유 폴더이며 저장 이름은 `LiveImageFolder`. 비어 있거나 누락되면 `<ExchangeDirectory>\.drillflow-live`; Live 화면은 correlation별 파일명을 사용 |
 | `RequestFileName` | 확장자를 포함한 leaf filename. 기본 `request.xml` |
 | `ResponseFileName` | 확장자를 포함한 leaf filename. 기본 `response.xml` |
 | `EquipmentRequestLifecycle` | 장비가 request를 읽고 삭제하는지, 다음 request가 덮어쓰는지 |

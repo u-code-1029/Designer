@@ -13,7 +13,8 @@ public sealed class CommunicationSettings
         "Exchange");
 
     /// <summary>
-    /// Shared folder used to build Live request image_path values. Blank values from older
+    /// Shared folder used to build image action defaults and Live Interaction image paths.
+    /// The persisted property name is retained for compatibility. Blank values from older
     /// settings files intentionally resolve below the configured exchange folder.
     /// </summary>
     public string LiveImageFolder { get; set; } = string.Empty;
@@ -76,7 +77,7 @@ public sealed class CommunicationSettings
         }
 
         options.ExchangeDirectory = ExchangeFolder;
-        options.LiveImageDirectory = ResolveLiveImageFolder();
+        options.LiveImageDirectory = LiveImageFolder;
         options.RequestFileName = RequestFileName;
         options.ResponseFileName = ResponseFileName;
         options.EquipmentRequestLifecycle = Enum.TryParse<EquipmentRequestFileLifecycle>(
@@ -135,7 +136,9 @@ public sealed class CommunicationSettings
         return new CommunicationSettings
         {
             ExchangeFolder = options.ExchangeDirectory,
-            LiveImageFolder = options.LiveImageDirectory,
+            LiveImageFolder = options.HasConfiguredLiveImageDirectory
+                ? options.LiveImageDirectory
+                : string.Empty,
             RequestFileName = options.RequestFileName,
             ResponseFileName = options.ResponseFileName,
             EquipmentRequestHandling = options.EquipmentRequestLifecycle.ToString(),

@@ -98,7 +98,7 @@ namespace DrillFlow.Core.Workflows
         {
             Key = "integration";
             DisplayName = "Capture integrated image";
-            HorizontalFieldWidth = ParameterBinding.Literal("3.02E-6");
+            HorizontalFieldWidth = ParameterBinding.Literal("5E-6");
             FrameCount = ParameterBinding.Literal("8");
             ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\integration.png");
         }
@@ -129,7 +129,7 @@ namespace DrillFlow.Core.Workflows
         {
             Key = "live";
             DisplayName = "Capture live frame";
-            HorizontalFieldWidth = ParameterBinding.Literal("1E-3");
+            HorizontalFieldWidth = ParameterBinding.Literal("5E-6");
             FrameCount = ParameterBinding.Literal("1");
             ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\live.png");
         }

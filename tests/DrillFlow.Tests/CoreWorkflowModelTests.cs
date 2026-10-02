@@ -85,8 +85,17 @@ namespace DrillFlow.Tests
                 new[] { "hfw", "frame_count", "image_path" },
                 nodes[4].GetParameterBindings().Keys);
             Assert.Equal(
-                "1E-3",
+                "5E-6",
                 Assert.IsType<LiveNode>(nodes[4]).HorizontalFieldWidth.RawText);
+        }
+
+        [Fact]
+        public void NewImageAcquisitionNodesDefaultToFiveMicrometres()
+        {
+            Assert.Equal("5E-6", new IntegrationNode().HorizontalFieldWidth.RawText);
+            Assert.Equal("5E-6", new LiveNode().HorizontalFieldWidth.RawText);
+            Assert.Equal("3.02E-6", new FocusNode().HorizontalFieldWidth.RawText);
+            Assert.Equal("2.04E-6", new AutoContrastBrightnessNode().HorizontalFieldWidth.RawText);
         }
     }
 }

@@ -1,14 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using DrillFlow.Application.Communication;
 using DrillFlow.Core.Workflows;
 
 namespace DrillFlow.Desktop.Services;
 
 public static class WorkflowNodeFactory
 {
-    public static WorkflowNode Create(WorkflowNodeKind kind, IEnumerable<string> existingAliases)
+    public static WorkflowNode Create(
+        WorkflowNodeKind kind,
+        IEnumerable<string> existingAliases,
+        EquipmentCommunicationOptions communicationOptions)
     {
+        if (communicationOptions is null)
+        {
+            throw new ArgumentNullException(nameof(communicationOptions));
+        }
+
         WorkflowNode node = kind switch
         {
             WorkflowNodeKind.Stage => new StageNode(),
@@ -16,15 +25,15 @@ public static class WorkflowNodeFactory
             WorkflowNodeKind.Focus => new FocusNode(),
             WorkflowNodeKind.Integration => new IntegrationNode
             {
-                ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\integration.bmp")
+                ImagePath = ParameterBinding.Literal(CreateImagePath(communicationOptions, "integration.bmp"))
             },
             WorkflowNodeKind.Live => new LiveNode
             {
-                ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\live.bmp")
+                ImagePath = ParameterBinding.Literal(CreateImagePath(communicationOptions, "live.bmp"))
             },
             WorkflowNodeKind.Om => new OmNode
             {
-                ImagePath = ParameterBinding.Literal(@"C:\DrillFlow\Images\om.bmp")
+                ImagePath = ParameterBinding.Literal(CreateImagePath(communicationOptions, "om.bmp"))
             },
             WorkflowNodeKind.Lens => new LensNode
             {
@@ -45,6 +54,22 @@ public static class WorkflowNodeFactory
         node.Key = CreateUniqueAlias(kind, existingAliases);
         node.DisplayName = node.Key;
         return node;
+    }
+
+    private static string CreateImagePath(
+        EquipmentCommunicationOptions communicationOptions,
+        string fileName)
+    {
+        // Settings mutates the active options instance. Resolve the folder for every
+        // new action, including the exchange-folder fallback when no folder is set.
+        var directory = communicationOptions.LiveImageDirectory;
+        if (directory.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "An image directory must be configured before creating an image action.");
+        }
+
+        return EquipmentImagePath.Create(directory, fileName);
     }
 
     private static ConditionalNode CreateConditional()

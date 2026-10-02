@@ -23,7 +23,7 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private const int MinimumFrameIntervalMilliseconds = 33;
     private const int InitialErrorBackoffMilliseconds = 500;
     private const int MaximumErrorBackoffMilliseconds = 5000;
-    private const double DefaultHorizontalFieldWidthMetres = 1E-3d;
+    private const double DefaultHorizontalFieldWidthMetres = 5E-6d;
     private static readonly TimeSpan ShutdownDrainTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ILiveInteractionSession _session;
@@ -59,8 +59,8 @@ public sealed class LiveInteractionPageViewModel : ObservableObject
     private bool _invertXAxis;
     private bool _invertYAxis;
     private bool _isPixelPitchLinkedToHorizontalFieldWidth = true;
-    private string _horizontalFieldWidthText = "1";
-    private string _horizontalFieldWidthUnit = "mm";
+    private string _horizontalFieldWidthText = "5";
+    private string _horizontalFieldWidthUnit = "um";
     private double _horizontalFieldWidthMetres = DefaultHorizontalFieldWidthMetres;
     private string _horizontalFieldWidthValidationMessage = string.Empty;
     private string _pixelPitchText = string.Empty;

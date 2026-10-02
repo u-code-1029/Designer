@@ -63,7 +63,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
     public async Task<LiveImageExchangeResult> RequestOmImageAsync(
         CancellationToken cancellationToken = default)
     {
-        var ownedImageDirectory = CaptureOwnedImageDirectory(EquipmentActionNames.Om);
+        var ownedImageDirectory = CaptureOwnedImageDirectory();
         string? requestedImagePath = null;
         try
         {
@@ -241,7 +241,7 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         int frameCount,
         CancellationToken cancellationToken)
     {
-        var ownedImageDirectory = CaptureOwnedImageDirectory(action);
+        var ownedImageDirectory = CaptureOwnedImageDirectory();
         string? requestedImagePath = null;
         try
         {
@@ -387,20 +387,13 @@ public sealed class LiveInteractionSession : ILiveInteractionSession, IDisposabl
         string action,
         int correlationId)
     {
-        return Path.Combine(directory, action + "-" + correlationId + ".bmp");
+        return EquipmentImagePath.Create(directory, action + "-" + correlationId + ".bmp");
     }
 
-    private string CaptureOwnedImageDirectory(string action)
+    private string CaptureOwnedImageDirectory()
     {
         var communication = EquipmentCommunicationSnapshot.Capture(_communicationOptions);
-        if (string.Equals(action, LiveInteractionProtocol.LiveAction, StringComparison.Ordinal))
-        {
-            return communication.LiveImageDirectory;
-        }
-
-        return Path.Combine(
-            communication.ExchangeDirectory,
-            EquipmentCommunicationOptions.DefaultLiveImageDirectoryName);
+        return communication.LiveImageDirectory;
     }
 
     private void TryDeleteOwnedImagePath(string? requestedImagePath)

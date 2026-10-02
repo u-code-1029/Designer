@@ -22,6 +22,48 @@ namespace DrillFlow.Tests;
 public sealed class DesktopLiveInteractionPageViewModelTests
 {
     [Fact]
+    public async Task NewLiveView_ShowsFiveMicrometresAndUsesItForTheFirstFrame()
+    {
+        var session = new PendingFrameSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+
+        Assert.Equal("5", viewModel.HorizontalFieldWidthText);
+        Assert.Equal("um", viewModel.HorizontalFieldWidthUnit);
+        Assert.Equal(5E-6, viewModel.HorizontalFieldWidthMetres, 12);
+        Assert.Empty(viewModel.HorizontalFieldWidthValidationMessage);
+        Assert.Equal("1E-3", viewModel.FocusHfwText);
+        viewModel.Activate();
+        await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(5E-6, Assert.Single(session.FrameWidths), 12);
+        viewModel.StopCommand.Execute(null);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task LivePageReactivation_PreservesExplicitOperatorHfwAndUnit()
+    {
+        var session = new PendingFrameSession();
+        var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.HorizontalFieldWidthUnit = "mm";
+        viewModel.HorizontalFieldWidthText = "0.007";
+        viewModel.Activate();
+        await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
+
+        viewModel.Deactivate();
+        await WaitUntilAsync(() => !viewModel.IsInteractionActive);
+        viewModel.Activate();
+        await WaitUntilAsync(() => session.FrameWidths.Count == 2);
+
+        Assert.Equal("0.007", viewModel.HorizontalFieldWidthText);
+        Assert.Equal("mm", viewModel.HorizontalFieldWidthUnit);
+        Assert.Equal(7E-6, viewModel.HorizontalFieldWidthMetres, 12);
+        Assert.All(session.FrameWidths, width => Assert.Equal(7E-6, width, 12));
+        viewModel.StopCommand.Execute(null);
+        await viewModel.ShutdownAsync();
+    }
+
+    [Fact]
     public async Task HfwZoom_CancelsOldFrameAndRestartsAtHalfWidth()
     {
         var session = new PendingFrameSession();
@@ -29,15 +71,16 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         viewModel.Activate();
         await session.FrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(1E-3, Assert.Single(session.FrameWidths));
+        var initialWidth = Assert.Single(session.FrameWidths);
+        Assert.Equal(5E-6, initialWidth, 12);
         Assert.True(viewModel.ZoomFrameInCommand.CanExecute(null));
 
         viewModel.ZoomFrameInCommand.Execute(null);
 
         await WaitUntilAsync(() => session.FrameWidths.Count >= 2);
-        Assert.Equal(0.5E-3, viewModel.HorizontalFieldWidthMetres);
-        Assert.Equal("0.5", viewModel.HorizontalFieldWidthText);
-        Assert.Equal(new[] { 1E-3, 0.5E-3 }, session.FrameWidths);
+        Assert.Equal(2.5E-6, viewModel.HorizontalFieldWidthMetres, 12);
+        Assert.Equal("2.5", viewModel.HorizontalFieldWidthText);
+        Assert.Equal(new[] { initialWidth, initialWidth / 2d }, session.FrameWidths);
 
         viewModel.StopCommand.Execute(null);
         await WaitUntilAsync(() => !viewModel.IsInteractionActive);
@@ -54,7 +97,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         viewModel.HorizontalFieldWidthUnit = "m";
         viewModel.HorizontalFieldWidthText = "2.4E-3";
 
-        Assert.Equal(1E-3, viewModel.HorizontalFieldWidthMetres);
+        Assert.Equal(5E-6, viewModel.HorizontalFieldWidthMetres, 12);
         Assert.NotEmpty(viewModel.HorizontalFieldWidthValidationMessage);
         Assert.False(viewModel.ZoomFrameInCommand.CanExecute(null));
 
@@ -109,6 +152,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     {
         var session = new PendingFrameSession();
         var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.HorizontalFieldWidthUnit = "mm";
+        viewModel.HorizontalFieldWidthText = "1";
         SetLoadedImage(viewModel);
         viewModel.PixelPitchUnit = "um";
         viewModel.PixelPitchText = "2";
@@ -144,6 +189,8 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         var viewModel = CreateViewModel(
             new PendingFrameSession(),
             new BlockingResponseSimulator());
+        viewModel.HorizontalFieldWidthUnit = "mm";
+        viewModel.HorizontalFieldWidthText = "1";
         viewModel.PixelPitchUnit = "um";
         viewModel.PixelPitchText = "2";
 
@@ -168,7 +215,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
         var viewModel = CreateViewModel(
             new PendingFrameSession(),
             new BlockingResponseSimulator());
-        ApplyDecodedFrame(viewModel, 1E-3);
+        ApplyDecodedFrame(viewModel, viewModel.HorizontalFieldWidthMetres);
 
         var created = viewModel.TryCreateMoveTarget(
             100d,
@@ -286,7 +333,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
                 Assert.Equal("lens1", session.LastRequestedLensMode);
                 break;
             default:
-                Assert.Equal(1E-3, session.LastIntegrationHfwMetres);
+                Assert.Equal(5E-6, session.LastIntegrationHfwMetres!.Value, 12);
                 Assert.Equal(8, session.LastIntegrationFrameCount);
                 break;
         }
@@ -470,6 +517,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     {
         var session = new InteractiveMoveSession();
         var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
+        viewModel.HorizontalFieldWidthUnit = "mm";
         viewModel.HorizontalFieldWidthText = "0.75";
         viewModel.Activate();
         await session.FirstFrameStarted.Task.WithTimeoutAsync(TimeSpan.FromSeconds(2));
@@ -659,7 +707,7 @@ public sealed class DesktopLiveInteractionPageViewModelTests
     {
         var session = new InteractiveMoveSession { BlockMove = true };
         var viewModel = CreateViewModel(session, new BlockingResponseSimulator());
-        ApplyDecodedFrame(viewModel, 1E-3);
+        ApplyDecodedFrame(viewModel, viewModel.HorizontalFieldWidthMetres);
         viewModel.PixelPitchUnit = "um";
         viewModel.PixelPitchText = "1";
         viewModel.Activate();

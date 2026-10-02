@@ -105,6 +105,7 @@ Workflow와 라이브 상호작용의 사용 사례를 실행하고, 파일·HTT
 DrillFlow.Application.csproj                   — Core만 프로젝트 참조하는 netstandard2.0 사용 사례 프로젝트다.
 ApplicationServiceCollectionExtensions.cs      — Runner, 결과 저장소, Live session 등 Application 서비스 등록 진입점이다.
 Communication/
+  EquipmentImagePath.cs                        — 공유 이미지 폴더와 파일명을 Windows wire 경로로 결합한다.
   EquipmentCommunicationOptions.cs            — 교환 폴더/파일명, 생명주기, timeout, polling, retry, 안정화 지연의 런타임 옵션이다.
   EquipmentCommunicationSnapshot.cs           — 한 번의 전체 exchange가 사용할 옵션을 불변 복사해 중간 설정 변경을 격리한다.
   EquipmentRequestMessage.cs                   — correlation ID, action, 파라미터와 `EquipmentActionNames`를 가진 논리 request다.
@@ -239,7 +240,7 @@ Services/
   IWorkflowExecutionFacade.cs / WorkflowExecutionFacade.cs  — Runner 명령과 이벤트를 MainPage가 쓰는 좁은 API로 노출한다.
   IWorkflowValidationPolicy.cs / WorkflowValidationPolicy.cs — 변경 시 자동 검증 flag를 화면과 분리한다.
   IExpressionCompletionSource.cs               — 현재 문서/Action 상태에서 expression completion 후보를 제공하는 UI 포트다.
-  WorkflowNodeFactory.cs                     — Toolbox kind에서 기본값이 채워진 Core 노드를 생성한다.
+  WorkflowNodeFactory.cs                     — Toolbox kind와 현재 공유 폴더 설정에서 새 Core 노드의 기본값을 생성한다.
   IFileDialogService.cs / FileDialogService.cs              — Workflow/image 파일 선택·저장 대화상자를 추상화한다.
   ShellFolderPicker.cs                        — net48/Windows 7 Shell dialog를 폴더 선택 모드로 연다.
   IExchangeFolderLauncher.cs / ExchangeFolderLauncher.cs    — 현재 교환 폴더를 Explorer로 연다.
@@ -307,7 +308,10 @@ CoreWorkflowNodeCopyTests.cs                   — deep copy, 새 ID/별칭과 �
 CoreWorkflowValidatorTests.cs                  — 구조/파라미터/expression의 실행 전 오류 탐지를 검증한다.
 ApplicationEquipmentResponseMessageTests.cs    — response result/properties와 JSON 보조 표현을 검증한다.
 ApplicationLiveImageCoordinateMapperTests.cs   — DPI-independent viewport와 원본 pixel 좌표 매핑을 검증한다.
-ApplicationLiveInteractionSessionTests.cs      — Live session request 구성, 직렬화와 fault 동작을 검증한다.
+ApplicationLiveInteractionSessionTests.cs      — Live/Integration/OM 공유 경로, session request 구성, 직렬화와 fault 동작을 검증한다.
+ApplicationSharedImagePathTests.cs             — Windows/UNC 경로 결합과 설정 fallback·snapshot을 검증한다.
+DesktopWorkflowNodeFactoryTests.cs            — 현재 설정에서 새 image Action의 기본 경로를 생성하는지 검증한다.
+DesktopCommunicationSettingsImageDefaultsTests.cs — 공유 설정 저장·불러오기와 신규/기존 액션의 경로 보존을 검증한다.
 ApplicationRealtimeVideoOptionsTests.cs        — RealtimeVideo clone과 option validation 규칙을 검증한다.
 ApplicationRequestLifecycleOptionsTests.cs     — request/response lifecycle 기본값과 의미를 검증한다.
 ApplicationWorkflowRunnerTests.cs              — 실행 순서, 표현식, 제어 흐름, breakpoint/stop/fault와 결과 기록을 검증한다.

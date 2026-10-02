@@ -50,7 +50,7 @@ SignalR 실시간 영상 설정을 구분한다.
   },
   "EquipmentCommunication": {
     "ExchangeDirectory": "C:\\DrillFlow\\Exchange",
-    "LiveImageDirectory": "C:\\DrillFlow\\Exchange\\.drillflow-live",
+    "LiveImageDirectory": "",
     "RequestFileName": "request.xml",
     "ResponseFileName": "response.xml",
     "ResponseTimeout": "00:00:30"
@@ -184,7 +184,7 @@ userinfo 또는 fragment로 넣을 수 없도록 검증한다.
 | 항목 | 기본값 | 단위 및 검증 | 의미 |
 |---|---:|---|---|
 | `ExchangeDirectory` | `C:\DrillFlow\Exchange` | 절대 local 또는 UNC 폴더 | request/response와 exchange lock 위치 |
-| `LiveImageDirectory` | `C:\DrillFlow\Exchange\.drillflow-live` | 절대 local 또는 UNC 폴더 | `live` request의 correlation별 이미지 경로 기준 |
+| `LiveImageDirectory` | 빈 값: 통신 폴더 아래 `.drillflow-live` | 절대 local 또는 UNC 폴더 | Integration/Live Frame/OM의 기본 이미지 경로와 Live 화면 촬영의 공통 기준 |
 | `RequestFileName` | `request.xml` | 확장자가 있는 leaf 파일명 | request wire 파일명 |
 | `ResponseFileName` | `response.xml` | 확장자가 있는 leaf 파일명 | response wire 파일명 |
 | `EquipmentRequestLifecycle` | `RetainUntilOverwritten` | 정의된 enum 값 | 장비가 request를 읽은 뒤 삭제하는지 여부 |
@@ -201,7 +201,10 @@ userinfo 또는 fragment로 넣을 수 없도록 검증한다.
 추가 규칙은 다음과 같다.
 
 - `/`는 Windows wire contract에 맞춰 `\`로 정규화한다.
-- `LiveImageDirectory`를 비우면 `<ExchangeDirectory>\.drillflow-live`로 해석한다.
+- 설정 화면의 **이미지 공유 폴더**는 `LiveImageDirectory`이며 user 파일에는 기존 키 `LiveImageFolder`로 저장한다. 두 컴퓨터가 같은 위치를 볼 수 있도록 `\\equipment-server\images` 같은 UNC 공유 경로를 지정한다.
+- `LiveImageDirectory`를 비우면 `<ExchangeDirectory>\.drillflow-live`로 해석하며 빈 설정을 그대로 저장한다. 통신 폴더를 바꾸면 새 액션의 기본 이미지 경로도 따라간다.
+- 새 Integration/Live Frame/OM의 기본 파일명은 각각 `integration.bmp`, `live.bmp`, `om.bmp`이다. 이미 저장한 워크플로의 명시 경로는 바꾸지 않는다.
+- Live 화면·새 Integration·새 Live Frame의 기본 HFW는 `5E-6` m(5 µm)이며 저장된 워크플로의 HFW는 유지한다.
 - request와 response 파일명은 서로 달라야 한다.
 - 두 파일명 모두 예약 sidecar인 `.drillflow.exchange.lock`을 사용할 수 없다.
 - drive-relative 경로(`C:Exchange`), current-drive 경로(`\Exchange`), server만 있는 UNC

@@ -89,7 +89,7 @@ public sealed class ApplicationLiveInteractionSessionTests
     }
 
     [Fact]
-    public async Task ConfiguredLiveImageDirectory_IsUsedOnlyForUniqueLiveFramePaths()
+    public async Task ConfiguredImageDirectory_IsSharedByLiveIntegrationAndOmWithUniquePaths()
     {
         using var directory = new LiveSessionTestDirectory();
         var configuredLiveDirectory = Path.Combine(directory.Path, "shared-live-frames");
@@ -113,10 +113,10 @@ public sealed class ApplicationLiveInteractionSessionTests
             secondLive.RequestedImagePath);
         Assert.NotEqual(firstLive.RequestedImagePath, secondLive.RequestedImagePath);
         Assert.Equal(
-            Path.Combine(directory.Path, ".drillflow-live", "integration-3.bmp"),
+            Path.Combine(configuredLiveDirectory, "integration-3.bmp"),
             integration.RequestedImagePath);
         Assert.Equal(
-            Path.Combine(directory.Path, ".drillflow-live", "om-4.bmp"),
+            Path.Combine(configuredLiveDirectory, "om-4.bmp"),
             om.RequestedImagePath);
         Assert.Equal(
             firstLive.RequestedImagePath,
@@ -132,8 +132,11 @@ public sealed class ApplicationLiveInteractionSessionTests
             transport.Requests[3].Parameters["image_path"]);
     }
 
-    [Fact]
-    public async Task LiveImageDirectory_IsCapturedOnceForTheWholeImageExchange()
+    [Theory]
+    [InlineData(EquipmentActionNames.Live)]
+    [InlineData(EquipmentActionNames.Integration)]
+    [InlineData(EquipmentActionNames.Om)]
+    public async Task ImageDirectory_IsCapturedOnceForTheWholeImageExchange(string action)
     {
         using var directory = new LiveSessionTestDirectory();
         var initialImageDirectory = Path.Combine(directory.Path, "initial-live");
@@ -154,7 +157,13 @@ public sealed class ApplicationLiveInteractionSessionTests
             Options.Create(options),
             NullLogger<LiveInteractionSession>.Instance);
 
-        var exchangeTask = session.RequestFrameAsync(1E-3);
+        var exchangeTask = action switch
+        {
+            EquipmentActionNames.Live => session.RequestFrameAsync(1E-3),
+            EquipmentActionNames.Integration => session.IntegrateAsync(1E-3, 4),
+            EquipmentActionNames.Om => session.RequestOmImageAsync(),
+            _ => throw new ArgumentOutOfRangeException(nameof(action)),
+        };
         await correlationIds.Entered.WithTimeoutAsync(TimeSpan.FromSeconds(2));
         options.LiveImageDirectory = changedImageDirectory;
         correlationIds.Release();
@@ -162,8 +171,9 @@ public sealed class ApplicationLiveInteractionSessionTests
         var exchange = await exchangeTask;
 
         Assert.Equal(
-            Path.Combine(initialImageDirectory, "live-1.bmp"),
+            Path.Combine(initialImageDirectory, action + "-1.bmp"),
             exchange.RequestedImagePath);
+        Assert.Equal(exchange.RequestedImagePath, Assert.Single(transport.Requests).Parameters["image_path"]);
         Assert.True(Directory.Exists(initialImageDirectory));
         Assert.False(Directory.Exists(changedImageDirectory));
     }

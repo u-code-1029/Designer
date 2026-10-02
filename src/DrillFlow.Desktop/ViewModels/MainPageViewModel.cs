@@ -11,12 +11,14 @@ using System.Threading.Tasks;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DrillFlow.Application.Communication;
 using DrillFlow.Application.Execution;
 using DrillFlow.Core.Expressions;
 using DrillFlow.Core.Validation;
 using DrillFlow.Core.Workflows;
 using DrillFlow.Desktop.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Wpf.Ui.Controls;
 
 namespace DrillFlow.Desktop.ViewModels;
@@ -37,6 +39,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
     private readonly IDefaultFileLauncher _defaultFileLauncher;
     private readonly IWorkflowValidationPolicy _validationPolicy;
     private readonly WorkflowValidator _workflowValidator;
+    private readonly EquipmentCommunicationOptions _communicationOptions;
     private readonly ExpressionCompletionProvider _expressionCompletions = new();
     private readonly ILogger<MainPageViewModel> _logger;
     private readonly Subject<string> _toolboxSearchChanges = new();
@@ -76,6 +79,7 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         IDefaultFileLauncher defaultFileLauncher,
         IWorkflowValidationPolicy validationPolicy,
         WorkflowValidator workflowValidator,
+        IOptions<EquipmentCommunicationOptions> communicationOptions,
         ILogger<MainPageViewModel> logger)
     {
         _localization = localization;
@@ -90,6 +94,8 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
         _defaultFileLauncher = defaultFileLauncher ?? throw new ArgumentNullException(nameof(defaultFileLauncher));
         _validationPolicy = validationPolicy ?? throw new ArgumentNullException(nameof(validationPolicy));
         _workflowValidator = workflowValidator;
+        _communicationOptions = communicationOptions?.Value
+            ?? throw new ArgumentNullException(nameof(communicationOptions));
         _logger = logger;
 
         Actions = new ObservableCollection<WorkflowActionViewModel>();
@@ -642,8 +648,11 @@ public sealed class MainPageViewModel : ObservableObject, IExpressionCompletionS
             return null;
         }
 
+        var node = WorkflowNodeFactory.Create(
+            kind,
+            EnumerateActions().Select(action => action.Alias),
+            _communicationOptions);
         CaptureUndoCheckpoint();
-        var node = WorkflowNodeFactory.Create(kind, EnumerateActions().Select(action => action.Alias));
         var viewModel = new WorkflowActionViewModel(node, _localization, _imageDecoder);
         AttachAction(viewModel);
         destination.Insert(Math.Max(0, Math.Min(index, destination.Count)), viewModel);

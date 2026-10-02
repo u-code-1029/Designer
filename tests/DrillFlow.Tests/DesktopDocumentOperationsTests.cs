@@ -218,7 +218,8 @@ internal sealed class DesktopDocumentTestContext : IDisposable
     public MainPageViewModel CreateEditor() => _editor = new MainPageViewModel(
         Localization, Documents, Execution, LiveInteraction, _services, Dialogs,
         Dialogs, _services, _services, _services, new WorkflowValidationPolicy(Settings),
-        new WorkflowValidator(), NullLogger<MainPageViewModel>.Instance);
+        new WorkflowValidator(), Options.Create(CommunicationOptions),
+        NullLogger<MainPageViewModel>.Instance);
 
     public SettingsPageViewModel CreateSettings() => new(
         Settings, Localization, new StubTheme(), new WorkflowValidationPolicy(Settings),

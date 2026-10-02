@@ -485,7 +485,7 @@ public sealed class SettingsPageViewModel : ObservableObject
         {
             _logger.LogWarning(
                 exception,
-                "Communication folder test failed for exchange {ExchangeFolder} and Live images {LiveImageFolder}",
+                "Communication folder test failed for exchange {ExchangeFolder} and shared images {LiveImageFolder}",
                 exchangeFolder,
                 liveImageFolder);
             StatusMessage = _localization["ConnectionTestFailed"] + " " + exception.Message;

@@ -104,7 +104,7 @@ public sealed class FileDialogService : IFileDialogService
 
     public string? ShowSelectLiveImageFolderDialog(string initialFolder)
     {
-        return ShowFolderDialog(initialFolder, "SelectLiveImageFolder", "Live image");
+        return ShowFolderDialog(initialFolder, "SelectLiveImageFolder", "Image");
     }
 
     private string? ShowFolderDialog(
